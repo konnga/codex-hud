@@ -57,4 +57,4 @@ Codex HUD reproduces the upstream experience using the data that Codex CLI actua
 - The HUD never reads or renders user prompts, assistant message bodies, tool output bodies, API keys, or access tokens.
 - Session title support degrades quietly when `sqlite3` is unavailable. Prompt-derived default titles are deliberately suppressed; all rollout-backed fields continue working.
 - `showCost` remains accepted so an upstream-style config does not break, but it is intentionally hidden until Codex provides authoritative cost data.
-- A tmux pane consumes terminal rows, unlike Claude Code's native footer. `CODEX_HUD_HEIGHT` and `--hud-height` control the allocation (default 5 rows to avoid runtime resizing during normal interactive use).
+- A tmux pane consumes terminal rows, unlike Claude Code's native footer. It starts at 5 rows, then fits the complete rendered content up to the `CODEX_HUD_HEIGHT` / `--hud-height` maximum (default 30 rows).

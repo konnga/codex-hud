@@ -3,7 +3,10 @@ import { spawnSync } from 'node:child_process'
 
 export type PaneResizeRunner = (args: string[]) => { status: number | null }
 
-export function desiredPaneHeight(lineCount: number, maximum: number, minimum = 5): number {
+export const INITIAL_HUD_PANE_HEIGHT = 5
+export const DEFAULT_HUD_MAX_HEIGHT = 30
+
+export function desiredPaneHeight(lineCount: number, maximum: number, minimum = INITIAL_HUD_PANE_HEIGHT): number {
   const safeMaximum = Math.max(minimum, Math.round(maximum))
   return Math.min(safeMaximum, Math.max(minimum, Math.round(lineCount)))
 }

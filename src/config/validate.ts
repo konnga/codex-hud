@@ -223,6 +223,7 @@ export function validateConfig(value: unknown): HudConfig {
       showCodexVersion: booleanValue(rawDisplay.showCodexVersion, fallback.display.showCodexVersion),
       showEffortLevel: booleanValue(rawDisplay.showEffortLevel, fallback.display.showEffortLevel),
       showApprovalPolicy: booleanValue(rawDisplay.showApprovalPolicy, fallback.display.showApprovalPolicy),
+      showPermissionProfile: booleanValue(rawDisplay.showPermissionProfile, fallback.display.showPermissionProfile),
       showSandboxMode: booleanValue(rawDisplay.showSandboxMode, fallback.display.showSandboxMode),
       showCollaborationMode: booleanValue(rawDisplay.showCollaborationMode, fallback.display.showCollaborationMode),
       showMemoryUsage: booleanValue(rawDisplay.showMemoryUsage, fallback.display.showMemoryUsage),

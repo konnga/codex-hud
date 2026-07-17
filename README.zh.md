@@ -88,14 +88,14 @@ codex-hud configure --preset minimal --yes
 
 常用环境变量：
 
-| 变量                  | 作用                                                     |
-| --------------------- | -------------------------------------------------------- |
-| `CODEX_HOME`          | Codex 数据与配置目录                                     |
-| `CODEX_HUD_CONFIG`    | 覆盖 Hub 配置路径                                        |
-| `CODEX_HUD_CODEX_BIN` | 指定真实 Codex 可执行文件，避免 shim 递归                |
-| `CODEX_HUD_BIN_DIR`   | 安装启动器的目录，默认 `~/.local/bin`                    |
-| `CODEX_HUD_HEIGHT`    | HUD pane 最大高度，默认 5；显式调高后可在 5 到上限间适配 |
-| `NO_COLOR`            | 禁用 ANSI 颜色                                           |
+| 变量                  | 作用                                                             |
+| --------------------- | ---------------------------------------------------------------- |
+| `CODEX_HOME`          | Codex 数据与配置目录                                             |
+| `CODEX_HUD_CONFIG`    | 覆盖 Hub 配置路径                                                |
+| `CODEX_HUD_CODEX_BIN` | 指定真实 Codex 可执行文件，避免 shim 递归                        |
+| `CODEX_HUD_BIN_DIR`   | 安装启动器的目录，默认 `~/.local/bin`                            |
+| `CODEX_HUD_HEIGHT`    | HUD pane 最大高度，默认 30；pane 从 5 行启动并按完整内容自动适配 |
+| `NO_COLOR`            | 禁用 ANSI 颜色                                                   |
 
 Claude HUD 的 `zh` 与 `zh-TW` language 别名也可直接使用，保存时会规范化为 `zh-Hans` 与 `zh-Hant`。完整高级配置项与支持边界见功能对照表。
 

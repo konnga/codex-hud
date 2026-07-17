@@ -7,7 +7,12 @@ import { RolloutParser } from './codex/rollout-parser.js'
 import { findActiveSession } from './codex/session-finder.js'
 import { loadConfig } from './config/load.js'
 import { renderHud } from './render/index.js'
-import { desiredPaneHeight, resizeHudPane } from './runtime/pane-size.js'
+import {
+  DEFAULT_HUD_MAX_HEIGHT,
+  desiredPaneHeight,
+  INITIAL_HUD_PANE_HEIGHT,
+  resizeHudPane,
+} from './runtime/pane-size.js'
 import { readSessionBinding } from './runtime/session-binding.js'
 import { buildHudState } from './runtime/state.js'
 
@@ -29,7 +34,7 @@ function parseOptions(args: string[]): RenderCliOptions {
     sessionPath: null,
     sessionBindingPath: null,
     launchedAfter: null,
-    maxHeight: Number(process.env.CODEX_HUD_HEIGHT) || 5,
+    maxHeight: Number(process.env.CODEX_HUD_HEIGHT) || DEFAULT_HUD_MAX_HEIGHT,
   }
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index]
@@ -53,7 +58,10 @@ function parseOptions(args: string[]): RenderCliOptions {
       options.color = false
     }
     else if (argument === '--max-height' && args[index + 1]) {
-      options.maxHeight = Math.max(5, Math.min(30, Number(args[++index]) || 5))
+      options.maxHeight = Math.max(
+        INITIAL_HUD_PANE_HEIGHT,
+        Math.min(30, Number(args[++index]) || DEFAULT_HUD_MAX_HEIGHT),
+      )
     }
   }
   return options

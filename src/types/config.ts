@@ -93,6 +93,7 @@ export interface DisplayConfig {
   showCodexVersion: boolean
   showEffortLevel: boolean
   showApprovalPolicy: boolean
+  showPermissionProfile: boolean
   showSandboxMode: boolean
   showCollaborationMode: boolean
   showMemoryUsage: boolean
@@ -206,6 +207,7 @@ export const DEFAULT_CONFIG: HudConfig = {
     showCodexVersion: false,
     showEffortLevel: false,
     showApprovalPolicy: false,
+    showPermissionProfile: false,
     showSandboxMode: false,
     showCollaborationMode: false,
     showMemoryUsage: false,

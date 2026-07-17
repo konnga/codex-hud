@@ -1,27 +1,9 @@
 #!/usr/bin/env node
-import { c as renderHud, d as findActiveSession, g as RolloutParser, l as loadConfig, r as readSessionBinding, s as buildHudState } from "./session-binding-BsUFJLlQ.mjs";
+import { a as readSessionBinding, d as loadConfig, l as buildHudState, n as resizeHudPane, p as findActiveSession, t as desiredPaneHeight, u as renderHud, v as RolloutParser } from "./pane-size-DdwqyNcX.mjs";
 import fs from "node:fs";
 import process from "node:process";
-import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 
-//#region src/runtime/pane-size.ts
-function desiredPaneHeight(lineCount, maximum, minimum = 5) {
-	return Math.min(Math.max(minimum, Math.round(maximum)), Math.max(minimum, Math.round(lineCount)));
-}
-function resizeHudPane(paneId, desiredHeight, previousHeight, runner = (args) => spawnSync("tmux", args, { stdio: "ignore" })) {
-	if (!paneId) return null;
-	if (previousHeight === desiredHeight) return previousHeight;
-	return runner([
-		"resize-pane",
-		"-t",
-		paneId,
-		"-y",
-		String(desiredHeight)
-	]).status === 0 ? desiredHeight : previousHeight;
-}
-
-//#endregion
 //#region src/render-cli.ts
 function parseOptions(args) {
 	const options = {
@@ -31,7 +13,7 @@ function parseOptions(args) {
 		sessionPath: null,
 		sessionBindingPath: null,
 		launchedAfter: null,
-		maxHeight: Number(process.env.CODEX_HUD_HEIGHT) || 5
+		maxHeight: Number(process.env.CODEX_HUD_HEIGHT) || 30
 	};
 	for (let index = 0; index < args.length; index += 1) {
 		const argument = args[index];
@@ -43,7 +25,7 @@ function parseOptions(args) {
 			const value = new Date(args[++index]);
 			options.launchedAfter = Number.isNaN(value.getTime()) ? null : value;
 		} else if (argument === "--no-color") options.color = false;
-		else if (argument === "--max-height" && args[index + 1]) options.maxHeight = Math.max(5, Math.min(30, Number(args[++index]) || 5));
+		else if (argument === "--max-height" && args[index + 1]) options.maxHeight = Math.max(5, Math.min(30, Number(args[++index]) || 30));
 	}
 	return options;
 }

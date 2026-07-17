@@ -25,6 +25,9 @@ export function renderEnvironmentLine(ctx: RenderContext): string | null {
   if (ctx.config.display.showApprovalPolicy && session?.approvalPolicy) {
     parts.push(`${message(ctx.config.language, 'approval')}: ${session.approvalPolicy}`)
   }
+  if (ctx.config.display.showPermissionProfile && session?.permissionProfile) {
+    parts.push(`${message(ctx.config.language, 'permissions')}: ${session.permissionProfile}`)
+  }
   if (ctx.config.display.showSandboxMode && session?.sandboxMode) {
     parts.push(`${message(ctx.config.language, 'sandbox')}: ${session.sandboxMode}`)
   }

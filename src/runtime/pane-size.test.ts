@@ -1,7 +1,18 @@
 import { describe, expect, it, vi } from 'vitest'
-import { desiredPaneHeight, resizeHudPane } from './pane-size.js'
+import {
+  DEFAULT_HUD_MAX_HEIGHT,
+  desiredPaneHeight,
+  INITIAL_HUD_PANE_HEIGHT,
+  resizeHudPane,
+} from './pane-size.js'
 
 describe('adaptive HUD pane sizing', () => {
+  it('defaults to a small initial pane with enough headroom for the full HUD', () => {
+    expect(INITIAL_HUD_PANE_HEIGHT).toBe(5)
+    expect(DEFAULT_HUD_MAX_HEIGHT).toBe(30)
+    expect(desiredPaneHeight(10, DEFAULT_HUD_MAX_HEIGHT)).toBe(10)
+  })
+
   it('fits content between the minimum and configured maximum', () => {
     expect(desiredPaneHeight(0, 12)).toBe(5)
     expect(desiredPaneHeight(7, 12)).toBe(7)

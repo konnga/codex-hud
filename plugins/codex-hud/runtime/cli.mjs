@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { a as waitForNewRootSession, c as renderHud, d as findActiveSession, f as getCodexHome, g as RolloutParser, h as getLegacyStateDirectory, i as snapshotRootSessions, l as loadConfig, m as getHudStateDirectory, n as createSessionBindingPath, o as writeSessionBinding, p as getConfigPath, s as buildHudState, t as acquireSessionDiscoveryLock, u as DEFAULT_CONFIG } from "./session-binding-BsUFJLlQ.mjs";
+import { _ as getLegacyStateDirectory, c as writeSessionBinding, d as loadConfig, f as DEFAULT_CONFIG, g as getHudStateDirectory, h as getConfigPath, i as createSessionBindingPath, l as buildHudState, m as getCodexHome, o as snapshotRootSessions, p as findActiveSession, r as acquireSessionDiscoveryLock, s as waitForNewRootSession, u as renderHud, v as RolloutParser } from "./pane-size-DdwqyNcX.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import process$1, { stdin, stdout } from "node:process";
@@ -1075,8 +1075,9 @@ function createPreset(preset) {
 			toolsMaxVisible: 3,
 			showCodexVersion: false,
 			showEffortLevel: true,
-			showApprovalPolicy: false,
-			showSandboxMode: false,
+			showApprovalPolicy: true,
+			showPermissionProfile: true,
+			showSandboxMode: true,
 			showCollaborationMode: false,
 			showMemoryUsage: false,
 			showPromptCache: true,
@@ -1096,6 +1097,7 @@ function createPreset(preset) {
 			showTodos: true,
 			showGoal: true,
 			showEffortLevel: true,
+			showPermissionProfile: true,
 			showUsage: false
 		});
 		return config;
@@ -1703,7 +1705,7 @@ function launchInsideTmux(options, runner = createTmuxRunner(options.env)) {
 		"split-window",
 		"-v",
 		"-l",
-		String(options.height),
+		String(Math.min(5, options.height)),
 		"-d",
 		"-P",
 		"-F",
@@ -1786,7 +1788,7 @@ function launchNewTmuxSession(options, runner = createTmuxRunner(options.env)) {
 		`${sessionName}:0`,
 		"-v",
 		"-l",
-		String(options.height),
+		String(Math.min(5, options.height)),
 		"-d",
 		"-c",
 		options.cwd,
@@ -2061,7 +2063,7 @@ Usage:
 
 HUD options:
   --cwd <path>       Working directory for Codex and the HUD
-  --hud-height <n>   HUD pane maximum height (default: 5)
+  --hud-height <n>   HUD pane maximum height (default: 30, fits content)
   --detach           Start the tmux session without attaching
   --no-hud           Run Codex directly without tmux`);
 }
@@ -2085,7 +2087,7 @@ function installedPluginManifest() {
 }
 function startOptions(args) {
 	let cwd = process$1.cwd();
-	let height = Number(process$1.env.CODEX_HUD_HEIGHT) || 5;
+	let height = Number(process$1.env.CODEX_HUD_HEIGHT) || 30;
 	let detached = false;
 	let noHud = false;
 	const codexArgs = [];
@@ -2097,7 +2099,7 @@ function startOptions(args) {
 		else if ((argument === "--cwd" || argument === "-C") && args[index + 1]) {
 			cwd = args[++index];
 			codexArgs.push("-C", cwd);
-		} else if (argument === "--hud-height" && args[index + 1]) height = Math.max(5, Math.min(30, Number(args[++index]) || 5));
+		} else if (argument === "--hud-height" && args[index + 1]) height = Math.max(5, Math.min(30, Number(args[++index]) || 30));
 		else if (argument === "--detach") detached = true;
 		else if (argument === "--no-hud") noHud = true;
 		else codexArgs.push(argument);

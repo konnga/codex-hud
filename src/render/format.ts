@@ -40,31 +40,34 @@ export function formatTokens(value: number): string {
 }
 
 export function formatDuration(milliseconds: number): string {
-  const seconds = Math.max(0, Math.floor(milliseconds / 1000))
-  if (seconds < 60) {
-    return `${seconds}s`
+  return formatMinuteDuration(milliseconds, 'floor')
+}
+
+export function formatMinuteDuration(milliseconds: number, rounding: 'ceil' | 'floor'): string {
+  const safeMilliseconds = Math.max(0, milliseconds)
+  if (safeMilliseconds < 60_000) {
+    return '<1m'
   }
-  const minutes = Math.floor(seconds / 60)
-  if (minutes < 60) {
-    return `${minutes}m ${seconds % 60}s`
+  const minutes = Math[rounding](safeMilliseconds / 60_000)
+  const days = Math.floor(minutes / 1_440)
+  const hours = Math.floor((minutes % 1_440) / 60)
+  const remainingMinutes = minutes % 60
+  const parts: string[] = []
+  if (days > 0) {
+    parts.push(`${days}d`)
   }
-  const hours = Math.floor(minutes / 60)
-  return `${hours}h ${minutes % 60}m`
+  if (hours > 0) {
+    parts.push(`${hours}h`)
+  }
+  if (remainingMinutes > 0) {
+    parts.push(`${remainingMinutes}m`)
+  }
+  return parts.join(' ')
 }
 
 function relativeTime(resetAt: Date, now: Date): string {
   const milliseconds = Math.max(0, resetAt.getTime() - now.getTime())
-  const minutes = Math.ceil(milliseconds / 60_000)
-  if (minutes < 60) {
-    return `${minutes}m`
-  }
-  const hours = Math.floor(minutes / 60)
-  const remainingMinutes = minutes % 60
-  if (hours < 48) {
-    return remainingMinutes > 0 ? `${hours}h ${remainingMinutes}m` : `${hours}h`
-  }
-  const days = Math.floor(hours / 24)
-  return `${days}d ${hours % 24}h`
+  return formatMinuteDuration(milliseconds, 'ceil')
 }
 
 export function formatResetTime(

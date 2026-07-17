@@ -11,6 +11,7 @@ import { loadConfig } from './config/load.js'
 import { getCodexHome, getConfigPath, getHudStateDirectory } from './config/paths.js'
 import { resolveHubCommand } from './runtime/command.js'
 import { launchCodex, runCodexChild } from './runtime/launcher.js'
+import { DEFAULT_HUD_MAX_HEIGHT, INITIAL_HUD_PANE_HEIGHT } from './runtime/pane-size.js'
 import { shouldBypassHud } from './runtime/passthrough.js'
 import { findExecutable } from './runtime/process.js'
 
@@ -28,7 +29,7 @@ Usage:
 
 HUD options:
   --cwd <path>       Working directory for Codex and the HUD
-  --hud-height <n>   HUD pane maximum height (default: 5)
+  --hud-height <n>   HUD pane maximum height (default: 30, fits content)
   --detach           Start the tmux session without attaching
   --no-hud           Run Codex directly without tmux`)
 }
@@ -64,7 +65,7 @@ function startOptions(args: string[]): {
   codexArgs: string[]
 } {
   let cwd = process.cwd()
-  let height = Number(process.env.CODEX_HUD_HEIGHT) || 5
+  let height = Number(process.env.CODEX_HUD_HEIGHT) || DEFAULT_HUD_MAX_HEIGHT
   let detached = false
   let noHud = false
   const codexArgs: string[] = []
@@ -82,7 +83,7 @@ function startOptions(args: string[]): {
       codexArgs.push('-C', cwd)
     }
     else if (argument === '--hud-height' && args[index + 1]) {
-      height = Math.max(5, Math.min(30, Number(args[++index]) || 5))
+      height = Math.max(INITIAL_HUD_PANE_HEIGHT, Math.min(30, Number(args[++index]) || DEFAULT_HUD_MAX_HEIGHT))
     }
     else if (argument === '--detach') {
       detached = true

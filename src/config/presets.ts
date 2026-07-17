@@ -30,8 +30,9 @@ export function createPreset(preset: ConfigPreset): HudConfig {
       toolsMaxVisible: 3,
       showCodexVersion: false,
       showEffortLevel: true,
-      showApprovalPolicy: false,
-      showSandboxMode: false,
+      showApprovalPolicy: true,
+      showPermissionProfile: true,
+      showSandboxMode: true,
       showCollaborationMode: false,
       showMemoryUsage: false,
       showPromptCache: true,
@@ -52,6 +53,7 @@ export function createPreset(preset: ConfigPreset): HudConfig {
       showTodos: true,
       showGoal: true,
       showEffortLevel: true,
+      showPermissionProfile: true,
       showUsage: false,
     })
     return config

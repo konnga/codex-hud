@@ -147,6 +147,7 @@ describe('configuration presets', () => {
     expect(config.display.showMcp).toBe(true)
     expect(config.display.showAgents).toBe(true)
     expect(config.display.showTodos).toBe(true)
+    expect(config.display.showPermissionProfile).toBe(true)
   })
 
   it('keeps the minimal preset focused on model, project, and context', () => {
@@ -154,5 +155,6 @@ describe('configuration presets', () => {
     expect(config.lineLayout).toBe('compact')
     expect(config.elementOrder).toEqual(['project', 'context'])
     expect(config.display.showUsage).toBe(false)
+    expect(config.display.showPermissionProfile).toBe(false)
   })
 })

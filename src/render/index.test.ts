@@ -18,6 +18,7 @@ function state(): HudState {
       reasoningEffort: 'high',
       modelProvider: 'openai',
       approvalPolicy: 'on-request',
+      permissionProfile: 'workspace-write',
       sandboxMode: 'workspace-write',
       collaborationMode: 'default',
       lastResponseAt: new Date('2026-07-16T08:59:30Z'),
@@ -169,7 +170,7 @@ describe('hud renderer', () => {
     const lines = renderHud({ config, state: state(), options: { width: 220, height: 20, color: false }, now })
     expect(lines.join('\n')).toContain('+shared')
     expect(lines.join('\n')).toContain('!2 +1 ?1')
-    expect(lines.join('\n')).toContain('Prompt cache ⏱ 4m 30s')
+    expect(lines.join('\n')).toContain('Cache TTL ⏱️ 5m')
     expect(lines.join('\n')).toContain('Context ██████████ 100%')
     expect(lines[0]).toContain('HUD fidelity audit')
     expect(lines.join('\n')).toContain('ChatGPT pro (builder)')

@@ -53,6 +53,7 @@
     "eslint-plugin-format": "catalog:dev",
     "tsdown": "catalog:dev",
     "typescript": "catalog:dev",
+    "unrun": "catalog:dev",
     "vitest": "catalog:dev"
   }
 }

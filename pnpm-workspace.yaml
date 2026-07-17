@@ -13,6 +13,7 @@ catalogs:
     eslint-plugin-format: ^2.0.1
     tsdown: ^0.22.8
     typescript: ^6.0.3
+    unrun: ^0.3.1
     vitest: ^4.1.10
   prod:
     '@clack/prompts': ^1.7.0

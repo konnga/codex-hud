@@ -3,13 +3,14 @@
 exports[`hud renderer > renders the full expanded Codex HUD 1`] = `
 [
   "[gpt-5.5 high] │ codex-hud +shared │ git:(main* ↑1) │ HUD fidelity audit │ ChatGPT pro (builder)",
-  "Context ██████░░░░ 59% │ Usage 5h: ███░░░░░░░ 25% (resets in 1h 30m) │ 1w: ████████░░ 82% (resets in 4d 0h) │ $12.50",
-  "Prompt cache ⏱ 4m 30s",
+  "Context ██████░░░░ 59% │ Usage 5h: ███░░░░░░░ 25% (resets in 1h 30m) │ 1w: ████████░░ 82% (resets in 4d) │ $12.50",
+  "Cache TTL ⏱️ 5m",
+  "Approval: on-request │ Permissions: workspace-write │ Sandbox: workspace-write",
   "🛠️ Tools: ◐ exec_command: pnpm test │ ✓ view_image ×1",
   "🧩 ✓ Skills (2): openai-docs, plugin-creator",
   "🔌 ✓ MCPs (1): github",
-  "🤖 ◐ explorer: Inspect protocol (2m 0s)",
+  "🤖 ◐ explorer: Inspect protocol (2m)",
   "📋 ▸ Render HUD (1/3)",
-  "⏱ 1h 0m │ Compactions: 1",
+  "⏱️ 1h │ Compactions: 1",
 ]
 `;

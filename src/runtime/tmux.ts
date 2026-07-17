@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import path from 'node:path'
 import process from 'node:process'
+import { INITIAL_HUD_PANE_HEIGHT } from './pane-size.js'
 import { shellCommand } from './process.js'
 
 export interface TmuxRunner {
@@ -85,7 +86,7 @@ export function launchInsideTmux(
     'split-window',
     '-v',
     '-l',
-    String(options.height),
+    String(Math.min(INITIAL_HUD_PANE_HEIGHT, options.height)),
     '-d',
     '-P',
     '-F',
@@ -148,7 +149,7 @@ export function launchNewTmuxSession(
     `${sessionName}:0`,
     '-v',
     '-l',
-    String(options.height),
+    String(Math.min(INITIAL_HUD_PANE_HEIGHT, options.height)),
     '-d',
     '-c',
     options.cwd,

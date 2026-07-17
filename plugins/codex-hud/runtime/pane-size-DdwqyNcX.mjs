@@ -619,6 +619,7 @@ const DEFAULT_CONFIG = {
 		showCodexVersion: false,
 		showEffortLevel: false,
 		showApprovalPolicy: false,
+		showPermissionProfile: false,
 		showSandboxMode: false,
 		showCollaborationMode: false,
 		showMemoryUsage: false,
@@ -813,6 +814,7 @@ function validateConfig(value) {
 			showCodexVersion: booleanValue(rawDisplay.showCodexVersion, fallback.display.showCodexVersion),
 			showEffortLevel: booleanValue(rawDisplay.showEffortLevel, fallback.display.showEffortLevel),
 			showApprovalPolicy: booleanValue(rawDisplay.showApprovalPolicy, fallback.display.showApprovalPolicy),
+			showPermissionProfile: booleanValue(rawDisplay.showPermissionProfile, fallback.display.showPermissionProfile),
 			showSandboxMode: booleanValue(rawDisplay.showSandboxMode, fallback.display.showSandboxMode),
 			showCollaborationMode: booleanValue(rawDisplay.showCollaborationMode, fallback.display.showCollaborationMode),
 			showMemoryUsage: booleanValue(rawDisplay.showMemoryUsage, fallback.display.showMemoryUsage),
@@ -2623,20 +2625,23 @@ function formatTokens(value) {
 	return String(Math.round(value));
 }
 function formatDuration(milliseconds) {
-	const seconds = Math.max(0, Math.floor(milliseconds / 1e3));
-	if (seconds < 60) return `${seconds}s`;
-	const minutes = Math.floor(seconds / 60);
-	if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
-	return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+	return formatMinuteDuration(milliseconds, "floor");
+}
+function formatMinuteDuration(milliseconds, rounding) {
+	const safeMilliseconds = Math.max(0, milliseconds);
+	if (safeMilliseconds < 6e4) return "<1m";
+	const minutes = Math[rounding](safeMilliseconds / 6e4);
+	const days = Math.floor(minutes / 1440);
+	const hours = Math.floor(minutes % 1440 / 60);
+	const remainingMinutes = minutes % 60;
+	const parts = [];
+	if (days > 0) parts.push(`${days}d`);
+	if (hours > 0) parts.push(`${hours}h`);
+	if (remainingMinutes > 0) parts.push(`${remainingMinutes}m`);
+	return parts.join(" ");
 }
 function relativeTime(resetAt, now) {
-	const milliseconds = Math.max(0, resetAt.getTime() - now.getTime());
-	const minutes = Math.ceil(milliseconds / 6e4);
-	if (minutes < 60) return `${minutes}m`;
-	const hours = Math.floor(minutes / 60);
-	const remainingMinutes = minutes % 60;
-	if (hours < 48) return remainingMinutes > 0 ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
-	return `${Math.floor(hours / 24)}d ${hours % 24}h`;
+	return formatMinuteDuration(Math.max(0, resetAt.getTime() - now.getTime()), "ceil");
 }
 function formatResetTime(resetAt, now, mode, windowMinutes) {
 	if (!resetAt) return null;
@@ -2685,9 +2690,10 @@ const MESSAGES = {
 		tokens: "Tokens",
 		compactions: "Compactions",
 		memory: "Memory",
-		promptCache: "Prompt cache",
+		promptCache: "Cache TTL",
 		addedDirs: "Added dirs",
 		approval: "Approval",
+		permissions: "Permissions",
 		sandbox: "Sandbox",
 		mode: "Mode",
 		started: "Started",
@@ -2713,9 +2719,10 @@ const MESSAGES = {
 		tokens: "Token",
 		compactions: "压缩",
 		memory: "内存",
-		promptCache: "提示缓存",
+		promptCache: "缓存有效期",
 		addedDirs: "附加目录",
 		approval: "审批",
+		permissions: "权限",
 		sandbox: "沙箱",
 		mode: "模式",
 		started: "开始",
@@ -2741,9 +2748,10 @@ const MESSAGES = {
 		tokens: "Token",
 		compactions: "壓縮",
 		memory: "記憶體",
-		promptCache: "提示快取",
+		promptCache: "快取有效期",
 		addedDirs: "附加目錄",
 		approval: "審批",
+		permissions: "權限",
 		sandbox: "沙箱",
 		mode: "模式",
 		started: "開始",
@@ -2875,6 +2883,7 @@ function renderEnvironmentLine(ctx) {
 	}
 	const session = ctx.state.session;
 	if (ctx.config.display.showApprovalPolicy && session?.approvalPolicy) parts.push(`${message(ctx.config.language, "approval")}: ${session.approvalPolicy}`);
+	if (ctx.config.display.showPermissionProfile && session?.permissionProfile) parts.push(`${message(ctx.config.language, "permissions")}: ${session.permissionProfile}`);
 	if (ctx.config.display.showSandboxMode && session?.sandboxMode) parts.push(`${message(ctx.config.language, "sandbox")}: ${session.sandboxMode}`);
 	if (ctx.config.display.showCollaborationMode && session?.collaborationMode) parts.push(`${message(ctx.config.language, "mode")}: ${session.collaborationMode}`);
 	return parts.length > 0 ? parts.join(" │ ") : null;
@@ -2964,11 +2973,7 @@ function renderAddedDirsLine(ctx) {
 //#region src/render/prompt-cache-line.ts
 function formatPromptCacheCountdown(remainingMs) {
 	if (remainingMs <= 0) return "expired";
-	const totalSeconds = Math.ceil(remainingMs / 1e3);
-	const hours = Math.floor(totalSeconds / 3600);
-	const minutes = Math.floor(totalSeconds % 3600 / 60);
-	const seconds = totalSeconds % 60;
-	return hours > 0 ? `${hours}h ${minutes}m ${seconds}s` : `${minutes}m ${seconds}s`;
+	return formatMinuteDuration(remainingMs, "ceil");
 }
 function renderPromptCacheLine(ctx) {
 	const responseAt = ctx.state.session?.lastResponseAt;
@@ -2977,7 +2982,7 @@ function renderPromptCacheLine(ctx) {
 	const remainingMs = responseAt.getTime() + ttlSeconds * 1e3 - ctx.now.getTime();
 	const warningSeconds = Math.min(ttlSeconds, Math.max(60, Math.floor(ttlSeconds / 5)));
 	const selectedColor = remainingMs <= 0 ? ctx.config.colors.label : remainingMs <= warningSeconds * 1e3 ? ctx.config.colors.warning : ctx.config.colors.context;
-	return `${message(ctx.config.language, "promptCache")} ${color(`⏱ ${formatPromptCacheCountdown(remainingMs)}`, selectedColor, ctx.options.color)}`;
+	return `${message(ctx.config.language, "promptCache")} ${color(`⏱️ ${formatPromptCacheCountdown(remainingMs)}`, selectedColor, ctx.options.color)}`;
 }
 
 //#endregion
@@ -2985,7 +2990,7 @@ function renderPromptCacheLine(ctx) {
 function renderSessionLine(ctx) {
 	const session = ctx.state.session;
 	const parts = [];
-	if (ctx.config.display.showDuration) parts.push(`⏱ ${formatDuration(ctx.now.getTime() - ctx.state.sessionStart.getTime())}`);
+	if (ctx.config.display.showDuration) parts.push(`⏱️ ${formatDuration(ctx.now.getTime() - ctx.state.sessionStart.getTime())}`);
 	if (ctx.config.display.showSessionStartDate && session?.startTime) {
 		const locale = ctx.config.language === "en" ? "en" : ctx.config.language === "zh-Hant" ? "zh-TW" : "zh-CN";
 		parts.push(`${message(ctx.config.language, "started")} ${session.startTime.toLocaleString(locale)}`);
@@ -4630,5 +4635,23 @@ async function waitForNewRootSession(cwd, snapshot, codexHome = getCodexHome(), 
 }
 
 //#endregion
-export { waitForNewRootSession as a, renderHud as c, findActiveSession as d, getCodexHome as f, RolloutParser as g, getLegacyStateDirectory as h, snapshotRootSessions as i, loadConfig as l, getHudStateDirectory as m, createSessionBindingPath as n, writeSessionBinding as o, getConfigPath as p, readSessionBinding as r, buildHudState as s, acquireSessionDiscoveryLock as t, DEFAULT_CONFIG as u };
-//# sourceMappingURL=session-binding-BsUFJLlQ.mjs.map
+//#region src/runtime/pane-size.ts
+const INITIAL_HUD_PANE_HEIGHT = 5;
+function desiredPaneHeight(lineCount, maximum, minimum = 5) {
+	return Math.min(Math.max(minimum, Math.round(maximum)), Math.max(minimum, Math.round(lineCount)));
+}
+function resizeHudPane(paneId, desiredHeight, previousHeight, runner = (args) => spawnSync("tmux", args, { stdio: "ignore" })) {
+	if (!paneId) return null;
+	if (previousHeight === desiredHeight) return previousHeight;
+	return runner([
+		"resize-pane",
+		"-t",
+		paneId,
+		"-y",
+		String(desiredHeight)
+	]).status === 0 ? desiredHeight : previousHeight;
+}
+
+//#endregion
+export { getLegacyStateDirectory as _, readSessionBinding as a, writeSessionBinding as c, loadConfig as d, DEFAULT_CONFIG as f, getHudStateDirectory as g, getConfigPath as h, createSessionBindingPath as i, buildHudState as l, getCodexHome as m, resizeHudPane as n, snapshotRootSessions as o, findActiveSession as p, acquireSessionDiscoveryLock as r, waitForNewRootSession as s, desiredPaneHeight as t, renderHud as u, RolloutParser as v };
+//# sourceMappingURL=pane-size-DdwqyNcX.mjs.map

@@ -6,7 +6,7 @@ export function renderSessionLine(ctx: RenderContext): string | null {
   const session = ctx.state.session
   const parts: string[] = []
   if (ctx.config.display.showDuration) {
-    parts.push(`⏱ ${formatDuration(ctx.now.getTime() - ctx.state.sessionStart.getTime())}`)
+    parts.push(`⏱️ ${formatDuration(ctx.now.getTime() - ctx.state.sessionStart.getTime())}`)
   }
   if (ctx.config.display.showSessionStartDate && session?.startTime) {
     const locale = ctx.config.language === 'en' ? 'en' : ctx.config.language === 'zh-Hant' ? 'zh-TW' : 'zh-CN'
