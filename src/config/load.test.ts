@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { runConfigure } from '../commands/configure.js'
 import { DEFAULT_CONFIG } from '../types/config.js'
 import { loadConfig } from './load.js'
@@ -23,6 +23,7 @@ function temporaryConfigEnv(): { directory: string, env: NodeJS.ProcessEnv, conf
 }
 
 afterEach(() => {
+  vi.restoreAllMocks()
   for (const directory of temporaryDirectories.splice(0)) {
     fs.rmSync(directory, { recursive: true, force: true })
   }
@@ -136,6 +137,78 @@ describe('configuration persistence', () => {
     expect(saved.display.timeFormat).toBe('both')
     expect(saved.display.autoCompactWindow).toBe(80_000)
     expect(saved.display.externalUsagePath).toBe('/tmp/usage.json')
+  })
+
+  it('selectively updates named elements without resetting the current config', async () => {
+    const { env, configPath } = temporaryConfigEnv()
+    const previous = process.env.CODEX_HUD_CONFIG
+    process.env.CODEX_HUD_CONFIG = env.CODEX_HUD_CONFIG
+    fs.writeFileSync(configPath, JSON.stringify({
+      language: 'zh-Hans',
+      colors: { context: '#123456' },
+      futureFeature: { enabled: true },
+      display: {
+        showTools: false,
+        showSkills: false,
+        showMemoryUsage: true,
+        showGoal: true,
+        timeFormat: 'both',
+        futureToggle: 'keep-me',
+      },
+    }))
+    try {
+      expect(await runConfigure([
+        '--enable',
+        'tools,skills,agents',
+        '--disable',
+        'memory,goal',
+        '--yes',
+      ])).toBe(0)
+    }
+    finally {
+      if (previous === undefined)
+        delete process.env.CODEX_HUD_CONFIG
+      else process.env.CODEX_HUD_CONFIG = previous
+    }
+
+    const saved = JSON.parse(fs.readFileSync(configPath, 'utf8'))
+    expect(saved.language).toBe('zh-Hans')
+    expect(saved.colors.context).toBe('#123456')
+    expect(saved.futureFeature).toEqual({ enabled: true })
+    expect(saved.display.futureToggle).toBe('keep-me')
+    expect(saved.display.timeFormat).toBe('both')
+    expect(saved.display.showTools).toBe(true)
+    expect(saved.display.showSkills).toBe(true)
+    expect(saved.display.showAgents).toBe(true)
+    expect(saved.display.showMemoryUsage).toBe(false)
+    expect(saved.display.showGoal).toBe(false)
+  })
+
+  it('prints the current guided configuration as JSON without writing', async () => {
+    const { env, configPath } = temporaryConfigEnv()
+    const previous = process.env.CODEX_HUD_CONFIG
+    process.env.CODEX_HUD_CONFIG = env.CODEX_HUD_CONFIG
+    writeConfig(createPreset('full'), {}, env)
+    const before = fs.statSync(configPath).mtimeMs
+    const output = vi.spyOn(process.stdout, 'write').mockImplementation(() => true)
+    try {
+      expect(await runConfigure(['--status', '--json'])).toBe(0)
+    }
+    finally {
+      if (previous === undefined)
+        delete process.env.CODEX_HUD_CONFIG
+      else process.env.CODEX_HUD_CONFIG = previous
+    }
+
+    const report = JSON.parse(String(output.mock.calls[0]?.[0]))
+    expect(report).toMatchObject({
+      configPath,
+      language: 'en',
+      layout: 'expanded',
+    })
+    expect(report.enabled).toContain('tools')
+    expect(report.disabled).toContain('memory')
+    expect(fs.statSync(configPath).mtimeMs).toBe(before)
   })
 })
 

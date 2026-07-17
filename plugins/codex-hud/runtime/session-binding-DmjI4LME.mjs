@@ -3133,6 +3133,24 @@ function renderHud(ctx) {
 }
 
 //#endregion
+//#region src/runtime/pane-size.ts
+const INITIAL_HUD_PANE_HEIGHT = 5;
+function desiredPaneHeight(lineCount, maximum, minimum = 5) {
+	return Math.min(Math.max(minimum, Math.round(maximum)), Math.max(minimum, Math.round(lineCount)));
+}
+function resizeHudPane(paneId, desiredHeight, previousHeight, runner = (args) => spawnSync("tmux", args, { stdio: "ignore" })) {
+	if (!paneId) return null;
+	if (previousHeight === desiredHeight) return previousHeight;
+	return runner([
+		"resize-pane",
+		"-t",
+		paneId,
+		"-y",
+		String(desiredHeight)
+	]).status === 0 ? desiredHeight : previousHeight;
+}
+
+//#endregion
 //#region src/codex/external-usage.ts
 const MAX_BALANCE_LABEL = 80;
 const WRITE_HEARTBEAT_MS = 6e4;
@@ -4635,23 +4653,5 @@ async function waitForNewRootSession(cwd, snapshot, codexHome = getCodexHome(), 
 }
 
 //#endregion
-//#region src/runtime/pane-size.ts
-const INITIAL_HUD_PANE_HEIGHT = 5;
-function desiredPaneHeight(lineCount, maximum, minimum = 5) {
-	return Math.min(Math.max(minimum, Math.round(maximum)), Math.max(minimum, Math.round(lineCount)));
-}
-function resizeHudPane(paneId, desiredHeight, previousHeight, runner = (args) => spawnSync("tmux", args, { stdio: "ignore" })) {
-	if (!paneId) return null;
-	if (previousHeight === desiredHeight) return previousHeight;
-	return runner([
-		"resize-pane",
-		"-t",
-		paneId,
-		"-y",
-		String(desiredHeight)
-	]).status === 0 ? desiredHeight : previousHeight;
-}
-
-//#endregion
-export { getLegacyStateDirectory as _, readSessionBinding as a, writeSessionBinding as c, loadConfig as d, DEFAULT_CONFIG as f, getHudStateDirectory as g, getConfigPath as h, createSessionBindingPath as i, buildHudState as l, getCodexHome as m, resizeHudPane as n, snapshotRootSessions as o, findActiveSession as p, acquireSessionDiscoveryLock as r, waitForNewRootSession as s, desiredPaneHeight as t, renderHud as u, RolloutParser as v };
-//# sourceMappingURL=pane-size-DdwqyNcX.mjs.map
+export { getLegacyStateDirectory as _, waitForNewRootSession as a, desiredPaneHeight as c, loadConfig as d, DEFAULT_CONFIG as f, getHudStateDirectory as g, getConfigPath as h, snapshotRootSessions as i, resizeHudPane as l, getCodexHome as m, createSessionBindingPath as n, writeSessionBinding as o, findActiveSession as p, readSessionBinding as r, buildHudState as s, acquireSessionDiscoveryLock as t, renderHud as u, RolloutParser as v };
+//# sourceMappingURL=session-binding-DmjI4LME.mjs.map

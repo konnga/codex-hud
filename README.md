@@ -9,7 +9,7 @@ Highlights:
 - Primary, secondary, spend-control, reset-time, and credit usage data
 - Live tools, skills, MCP servers, subagents, plan items, and durable goals
 - Compact/expanded layouts, Full/Essential/Minimal presets, and English/Chinese labels
-- Standard Codex plugin skills for unified setup/configuration and diagnostics
+- Standard Codex plugin skills for setup, selective live configuration, and diagnostics
 - Reversible launchers and an optional managed `codex` shim
 - Prompt-cache countdown, output speed, session title/auth, Git file stats, and external usage snapshots
 - Event-driven refresh and launch-scoped isolation for concurrent sessions in the same directory
@@ -49,7 +49,14 @@ node dist/cli.mjs doctor --json
 
 Configuration lives at `${CODEX_HOME:-~/.codex}/codex-hud/config.json`. See [README.zh.md](./README.zh.md) for complete usage and architecture notes.
 
-Inside a Codex session, enter `$codex-hud:setup` to install or customize the HUD. You can also enter `/skills` and select **Set Up Codex HUD**.
+Run `codex-hud configure` for a terminal multiselect that edits the current settings, or use deterministic updates such as:
+
+```bash
+codex-hud configure --status --json
+codex-hud configure --enable tools,skills,agents --disable memory --yes
+```
+
+The running HUD watches the config directory and reloads saved changes in the current Codex session. Inside Codex, use `$codex-hud:setup` for installation and presets, or `$codex-hud:configure` to review and selectively change visible fields. Both are also available through `/skills`.
 
 ## Attribution
 

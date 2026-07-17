@@ -1,0 +1,4 @@
+interface:
+  display_name: Configure Codex HUD
+  short_description: Selectively enable or disable live HUD elements
+  default_prompt: 'Use $codex-hud:configure to review my current HUD settings and apply selected changes.'

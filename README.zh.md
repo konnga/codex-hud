@@ -86,6 +86,15 @@ codex-hud configure --preset essential --yes
 codex-hud configure --preset minimal --yes
 ```
 
+直接运行 `codex-hud configure` 会打开终端多选界面，并默认从当前配置开始编辑。也可以查询或精确更新指定字段：
+
+```bash
+codex-hud configure --status --json
+codex-hud configure --enable tools,skills,agents --disable memory --yes
+```
+
+配置保存后，正在运行的 HUD 会监听配置目录并在当前 Codex 会话中自动刷新，无需重启 Codex。
+
 常用环境变量：
 
 | 变量                  | 作用                                                             |
@@ -110,9 +119,10 @@ plugins/codex-hud/
 技能：
 
 - `$codex-hud:setup`
+- `$codex-hud:configure`
 - `$codex-hud:doctor`
 
-在 Codex 会话中直接输入 `$codex-hud:setup` 可以完成安装或显示配置；也可以输入 `/skills`，然后选择 **Set Up Codex HUD**。底层 `codex-hud configure` CLI 命令仍然保留，由 setup Skill 调用。
+在 Codex 会话中输入 `$codex-hud:setup` 可以完成安装、升级和 preset 设置；输入 `$codex-hud:configure` 可以查看当前开关并选择要启用或关闭的 HUD 字段。也可以输入 `/skills` 后选择对应 Skill。底层 `codex-hud configure` CLI 同时提供终端多选界面和确定性的 `--enable` / `--disable` 更新接口。
 
 插件 runtime 会在 `pnpm build` 后同步到 `plugins/codex-hud/runtime/`。
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { _ as getLegacyStateDirectory, c as writeSessionBinding, d as loadConfig, f as DEFAULT_CONFIG, g as getHudStateDirectory, h as getConfigPath, i as createSessionBindingPath, l as buildHudState, m as getCodexHome, o as snapshotRootSessions, p as findActiveSession, r as acquireSessionDiscoveryLock, s as waitForNewRootSession, u as renderHud, v as RolloutParser } from "./pane-size-DdwqyNcX.mjs";
+import { _ as getLegacyStateDirectory, a as waitForNewRootSession, d as loadConfig, f as DEFAULT_CONFIG, g as getHudStateDirectory, h as getConfigPath, i as snapshotRootSessions, m as getCodexHome, n as createSessionBindingPath, o as writeSessionBinding, p as findActiveSession, s as buildHudState, t as acquireSessionDiscoveryLock, u as renderHud, v as RolloutParser } from "./session-binding-DmjI4LME.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import process$1, { stdin, stdout } from "node:process";
@@ -1049,6 +1049,137 @@ ${b}
 const i = `${styleText("gray", S_BAR)}  `;
 
 //#endregion
+//#region src/config/guided-elements.ts
+const GUIDED_ELEMENTS = [
+	{
+		name: "git",
+		label: "Git status",
+		get: (config) => config.gitStatus.enabled,
+		set: (config, value) => config.gitStatus.enabled = value
+	},
+	{
+		name: "usage",
+		label: "Rate limits and credits",
+		get: (config) => config.display.showUsage,
+		set: (config, value) => config.display.showUsage = value
+	},
+	{
+		name: "tools",
+		label: "Tool activity",
+		get: (config) => config.display.showTools,
+		set: (config, value) => config.display.showTools = value
+	},
+	{
+		name: "skills",
+		label: "Active skills",
+		get: (config) => config.display.showSkills,
+		set: (config, value) => config.display.showSkills = value
+	},
+	{
+		name: "mcp",
+		label: "MCP activity",
+		get: (config) => config.display.showMcp,
+		set: (config, value) => config.display.showMcp = value
+	},
+	{
+		name: "agents",
+		label: "Subagents",
+		get: (config) => config.display.showAgents,
+		set: (config, value) => config.display.showAgents = value
+	},
+	{
+		name: "todos",
+		label: "Plan / todos",
+		get: (config) => config.display.showTodos,
+		set: (config, value) => config.display.showTodos = value
+	},
+	{
+		name: "goal",
+		label: "Durable goal",
+		get: (config) => config.display.showGoal,
+		set: (config, value) => config.display.showGoal = value
+	},
+	{
+		name: "configCounts",
+		label: "Environment counts",
+		get: (config) => config.display.showConfigCounts,
+		set: (config, value) => config.display.showConfigCounts = value
+	},
+	{
+		name: "duration",
+		label: "Session duration",
+		get: (config) => config.display.showDuration,
+		set: (config, value) => config.display.showDuration = value
+	},
+	{
+		name: "speed",
+		label: "Output speed",
+		get: (config) => config.display.showSpeed,
+		set: (config, value) => config.display.showSpeed = value
+	},
+	{
+		name: "promptCache",
+		label: "Prompt-cache countdown",
+		get: (config) => config.display.showPromptCache,
+		set: (config, value) => config.display.showPromptCache = value
+	},
+	{
+		name: "sessionName",
+		label: "Session title",
+		get: (config) => config.display.showSessionName,
+		set: (config, value) => config.display.showSessionName = value
+	},
+	{
+		name: "auth",
+		label: "Authentication method",
+		get: (config) => config.display.showAuth,
+		set: (config, value) => config.display.showAuth = value
+	},
+	{
+		name: "memory",
+		label: "Approximate system memory",
+		get: (config) => config.display.showMemoryUsage,
+		set: (config, value) => config.display.showMemoryUsage = value
+	},
+	{
+		name: "sessionTokens",
+		label: "Session token totals",
+		get: (config) => config.display.showSessionTokens,
+		set: (config, value) => config.display.showSessionTokens = value
+	},
+	{
+		name: "compactions",
+		label: "Compaction count",
+		get: (config) => config.display.showCompactions,
+		set: (config, value) => config.display.showCompactions = value
+	}
+];
+const ELEMENTS_BY_NAME = new Map(GUIDED_ELEMENTS.map((element) => [element.name, element]));
+function parseGuidedElements(value) {
+	if (!value) return [];
+	const result = [];
+	for (const item of value.split(",").map((item) => item.trim()).filter(Boolean)) {
+		if (!ELEMENTS_BY_NAME.has(item)) throw new Error(`Unknown HUD element: ${item}`);
+		const element = item;
+		if (!result.includes(element)) result.push(element);
+	}
+	return result;
+}
+function guidedElementState(config) {
+	const enabled = [];
+	const disabled = [];
+	for (const element of GUIDED_ELEMENTS) (element.get(config) ? enabled : disabled).push(element.name);
+	return {
+		enabled,
+		disabled
+	};
+}
+function applyGuidedElementChanges(config, changes) {
+	for (const name of changes.enable ?? []) ELEMENTS_BY_NAME.get(name)?.set(config, true);
+	for (const name of changes.disable ?? []) ELEMENTS_BY_NAME.get(name)?.set(config, false);
+}
+
+//#endregion
 //#region src/config/presets.ts
 function cloneDefault() {
 	return structuredClone(DEFAULT_CONFIG);
@@ -1152,25 +1283,6 @@ function writeConfig(config, raw = {}, env = process$1.env) {
 
 //#endregion
 //#region src/commands/configure.ts
-const GUIDED_TOGGLES = [
-	"git",
-	"usage",
-	"tools",
-	"skills",
-	"mcp",
-	"agents",
-	"todos",
-	"goal",
-	"configCounts",
-	"duration",
-	"speed",
-	"promptCache",
-	"sessionName",
-	"auth",
-	"memory",
-	"sessionTokens",
-	"compactions"
-];
 function optionValue(args, name) {
 	const index = args.indexOf(name);
 	return index >= 0 ? args[index + 1] ?? null : null;
@@ -1227,49 +1339,6 @@ function preserveAdvancedSettings(target, source) {
 		"promptCacheTtlSeconds"
 	]) target.display[key] = structuredClone(source.display[key]);
 }
-function currentToggles(config) {
-	return GUIDED_TOGGLES.filter((toggle) => {
-		return {
-			git: config.gitStatus.enabled,
-			usage: config.display.showUsage,
-			tools: config.display.showTools,
-			skills: config.display.showSkills,
-			mcp: config.display.showMcp,
-			agents: config.display.showAgents,
-			todos: config.display.showTodos,
-			goal: config.display.showGoal,
-			configCounts: config.display.showConfigCounts,
-			duration: config.display.showDuration,
-			speed: config.display.showSpeed,
-			promptCache: config.display.showPromptCache,
-			sessionName: config.display.showSessionName,
-			auth: config.display.showAuth,
-			memory: config.display.showMemoryUsage,
-			sessionTokens: config.display.showSessionTokens,
-			compactions: config.display.showCompactions
-		}[toggle];
-	});
-}
-function applyToggles(config, selected) {
-	const enabled = new Set(selected);
-	config.gitStatus.enabled = enabled.has("git");
-	config.display.showUsage = enabled.has("usage");
-	config.display.showTools = enabled.has("tools");
-	config.display.showSkills = enabled.has("skills");
-	config.display.showMcp = enabled.has("mcp");
-	config.display.showAgents = enabled.has("agents");
-	config.display.showTodos = enabled.has("todos");
-	config.display.showGoal = enabled.has("goal");
-	config.display.showConfigCounts = enabled.has("configCounts");
-	config.display.showDuration = enabled.has("duration");
-	config.display.showSpeed = enabled.has("speed");
-	config.display.showPromptCache = enabled.has("promptCache");
-	config.display.showSessionName = enabled.has("sessionName");
-	config.display.showAuth = enabled.has("auth");
-	config.display.showMemoryUsage = enabled.has("memory");
-	config.display.showSessionTokens = enabled.has("sessionTokens");
-	config.display.showCompactions = enabled.has("compactions");
-}
 function preview(config) {
 	const parser = new RolloutParser();
 	const candidate = findActiveSession({ cwd: process$1.cwd() });
@@ -1280,7 +1349,7 @@ function preview(config) {
 		state: buildHudState(process$1.cwd(), parser.parse(), now, config, now),
 		options: {
 			width: Math.min(process$1.stdout.columns || 120, 140),
-			height: 8,
+			height: 30,
 			color: process$1.stdout.isTTY && !process$1.env.NO_COLOR
 		},
 		now
@@ -1288,17 +1357,59 @@ function preview(config) {
 }
 async function runConfigure(args) {
 	const loaded = loadConfig();
-	let preset = optionValue(args, "--preset");
+	const preset = optionValue(args, "--preset");
 	let language = optionValue(args, "--language");
 	let layout = optionValue(args, "--layout");
 	const nonInteractive = args.includes("--yes") || !process$1.stdin.isTTY;
-	if (!isPreset(preset)) if (nonInteractive) preset = "essential";
+	const statusOnly = args.includes("--status");
+	const json = args.includes("--json");
+	const hasSelectiveChanges = args.includes("--enable") || args.includes("--disable");
+	if (statusOnly) {
+		const state = guidedElementState(loaded.config);
+		const report = {
+			configPath: loaded.path,
+			language: loaded.config.language,
+			layout: loaded.config.lineLayout,
+			enabled: state.enabled,
+			disabled: state.disabled
+		};
+		if (json) process$1.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+		else process$1.stdout.write(`${[
+			`Config: ${report.configPath}`,
+			`Language: ${report.language}`,
+			`Layout: ${report.layout}`,
+			`Enabled: ${report.enabled.join(", ") || "(none)"}`,
+			`Disabled: ${report.disabled.join(", ") || "(none)"}`
+		].join("\n")}\n`);
+		return 0;
+	}
+	if (hasSelectiveChanges) {
+		const config = isPreset(preset) ? createPreset(preset) : structuredClone(loaded.config);
+		if (isPreset(preset)) preserveAdvancedSettings(config, loaded.config);
+		if (isLanguage(language)) config.language = language;
+		if (isLayout(layout)) config.lineLayout = layout;
+		applyGuidedElementChanges(config, {
+			enable: parseGuidedElements(optionValue(args, "--enable")),
+			disable: parseGuidedElements(optionValue(args, "--disable"))
+		});
+		const configPath = writeConfig(config, loaded.raw);
+		process$1.stdout.write(`${configPath}\n`);
+		return 0;
+	}
+	let base;
+	if (isPreset(preset)) base = preset;
+	else if (nonInteractive) base = "essential";
 	else {
 		intro("Codex HUD configuration");
 		const selected = await select({
-			message: "Choose a display preset",
-			initialValue: "essential",
+			message: "Choose a configuration base",
+			initialValue: "current",
 			options: [
+				{
+					value: "current",
+					label: "Current settings",
+					hint: "Edit only what you choose below"
+				},
 				{
 					value: "full",
 					label: "Full",
@@ -1317,13 +1428,15 @@ async function runConfigure(args) {
 			]
 		});
 		if (cancelled(selected)) return 1;
-		preset = selected;
+		base = selected;
 	}
-	if (!isLanguage(language)) if (nonInteractive) language = loaded.config.language;
+	const config = base === "current" ? structuredClone(loaded.config) : createPreset(base);
+	if (base !== "current") preserveAdvancedSettings(config, loaded.config);
+	if (!isLanguage(language)) if (nonInteractive) language = config.language;
 	else {
 		const selected = await select({
 			message: "Choose label language",
-			initialValue: loaded.config.language,
+			initialValue: config.language,
 			options: [
 				{
 					value: "en",
@@ -1342,10 +1455,7 @@ async function runConfigure(args) {
 		if (cancelled(selected)) return 1;
 		language = selected;
 	}
-	const selectedPreset = isPreset(preset) ? preset : "essential";
-	const selectedLanguage = isLanguage(language) ? language : loaded.config.language;
-	const config = createPreset(selectedPreset);
-	preserveAdvancedSettings(config, loaded.config);
+	const selectedLanguage = isLanguage(language) ? language : config.language;
 	config.language = selectedLanguage;
 	if (!isLayout(layout) && !nonInteractive) {
 		const selected = await select({
@@ -1368,81 +1478,19 @@ async function runConfigure(args) {
 	if (!nonInteractive) {
 		const toggles = await multiselect({
 			message: "Choose visible HUD elements",
-			initialValues: currentToggles(config),
+			initialValues: guidedElementState(config).enabled,
 			required: false,
-			options: [
-				{
-					value: "git",
-					label: "Git status"
-				},
-				{
-					value: "usage",
-					label: "Rate limits and credits"
-				},
-				{
-					value: "tools",
-					label: "Tool activity"
-				},
-				{
-					value: "skills",
-					label: "Active skills"
-				},
-				{
-					value: "mcp",
-					label: "MCP activity"
-				},
-				{
-					value: "agents",
-					label: "Subagents"
-				},
-				{
-					value: "todos",
-					label: "Plan / todos"
-				},
-				{
-					value: "goal",
-					label: "Durable goal"
-				},
-				{
-					value: "configCounts",
-					label: "Environment counts"
-				},
-				{
-					value: "duration",
-					label: "Session duration"
-				},
-				{
-					value: "speed",
-					label: "Output speed"
-				},
-				{
-					value: "promptCache",
-					label: "Prompt-cache countdown"
-				},
-				{
-					value: "sessionName",
-					label: "Session title"
-				},
-				{
-					value: "auth",
-					label: "Authentication method"
-				},
-				{
-					value: "memory",
-					label: "Approximate system memory"
-				},
-				{
-					value: "sessionTokens",
-					label: "Session token totals"
-				},
-				{
-					value: "compactions",
-					label: "Compaction count"
-				}
-			]
+			options: GUIDED_ELEMENTS.map((element) => ({
+				value: element.name,
+				label: element.label
+			}))
 		});
 		if (cancelled(toggles)) return 1;
-		applyToggles(config, toggles);
+		const enabled = toggles;
+		applyGuidedElementChanges(config, {
+			enable: enabled,
+			disable: GUIDED_ELEMENTS.map((element) => element.name).filter((element) => !enabled.includes(element))
+		});
 		const pathLevels = await select({
 			message: "Project path depth",
 			initialValue: config.pathLevels,
@@ -1465,7 +1513,7 @@ async function runConfigure(args) {
 		config.pathLevels = pathLevels;
 		note(preview(config), "HUD preview");
 		const confirmed = await confirm({
-			message: `Save ${selectedPreset} / ${selectedLanguage} / ${config.lineLayout} configuration?`,
+			message: `Save ${base} / ${selectedLanguage} / ${config.lineLayout} configuration?`,
 			initialValue: true
 		});
 		if (cancelled(confirmed) || !confirmed) return 1;
@@ -2057,6 +2105,8 @@ Usage:
   codex-hud render [--once] [--cwd <path>] [--no-color]
   codex-hud doctor [--json]
   codex-hud configure [--preset full|essential|minimal] [--language en|zh-Hans|zh-Hant]
+  codex-hud configure --status [--json]
+  codex-hud configure [--enable <names>] [--disable <names>] --yes
   codex-hud install [--codex-shim] [--dry-run]
   codex-hud uninstall [--dry-run]
   codex-hud --help

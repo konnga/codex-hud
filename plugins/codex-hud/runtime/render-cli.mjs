@@ -1,9 +1,25 @@
 #!/usr/bin/env node
-import { a as readSessionBinding, d as loadConfig, l as buildHudState, n as resizeHudPane, p as findActiveSession, t as desiredPaneHeight, u as renderHud, v as RolloutParser } from "./pane-size-DdwqyNcX.mjs";
+import { c as desiredPaneHeight, d as loadConfig, l as resizeHudPane, p as findActiveSession, r as readSessionBinding, s as buildHudState, u as renderHud, v as RolloutParser } from "./session-binding-DmjI4LME.mjs";
 import fs from "node:fs";
+import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 
+//#region src/runtime/config-watch.ts
+function isConfigPathEvent(configPath, filename) {
+	return filename === null || filename.toString() === path.basename(configPath);
+}
+function watchConfigPath(configPath, onChange) {
+	try {
+		return fs.watch(path.dirname(configPath), (_event, filename) => {
+			if (isConfigPathEvent(configPath, filename)) onChange();
+		});
+	} catch {
+		return null;
+	}
+}
+
+//#endregion
 //#region src/render-cli.ts
 function parseOptions(args) {
 	const options = {
@@ -122,16 +138,11 @@ async function runRenderCli(args = process.argv.slice(2)) {
 			render();
 		}
 	}, 1e4);
-	let configWatcher = null;
-	try {
-		configWatcher = fs.watch(loaded.path, () => {
-			loaded = loadConfig();
-			lastConfigMtime = configMtime();
-			render();
-		});
-	} catch {
-		configWatcher = null;
-	}
+	const configWatcher = watchConfigPath(loaded.path, () => {
+		loaded = loadConfig();
+		lastConfigMtime = configMtime();
+		render();
+	});
 	process.on("SIGWINCH", render);
 	const shutdown = () => {
 		clearInterval(interval);

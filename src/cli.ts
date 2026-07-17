@@ -23,6 +23,8 @@ Usage:
   codex-hud render [--once] [--cwd <path>] [--no-color]
   codex-hud doctor [--json]
   codex-hud configure [--preset full|essential|minimal] [--language en|zh-Hans|zh-Hant]
+  codex-hud configure --status [--json]
+  codex-hud configure [--enable <names>] [--disable <names>] --yes
   codex-hud install [--codex-shim] [--dry-run]
   codex-hud uninstall [--dry-run]
   codex-hud --help

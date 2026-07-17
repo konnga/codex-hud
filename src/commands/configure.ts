@@ -5,33 +5,18 @@ import process from 'node:process'
 import * as prompts from '@clack/prompts'
 import { RolloutParser } from '../codex/rollout-parser.js'
 import { findActiveSession } from '../codex/session-finder.js'
+import {
+  applyGuidedElementChanges,
+  GUIDED_ELEMENTS,
+  guidedElementState,
+  parseGuidedElements,
+} from '../config/guided-elements.js'
 import { loadConfig } from '../config/load.js'
 import { createPreset } from '../config/presets.js'
 import { writeConfig } from '../config/write.js'
 import { renderHud } from '../render/index.js'
+import { DEFAULT_HUD_MAX_HEIGHT } from '../runtime/pane-size.js'
 import { buildHudState } from '../runtime/state.js'
-
-const GUIDED_TOGGLES = [
-  'git',
-  'usage',
-  'tools',
-  'skills',
-  'mcp',
-  'agents',
-  'todos',
-  'goal',
-  'configCounts',
-  'duration',
-  'speed',
-  'promptCache',
-  'sessionName',
-  'auth',
-  'memory',
-  'sessionTokens',
-  'compactions',
-] as const
-
-type GuidedToggle = typeof GUIDED_TOGGLES[number]
 
 function optionValue(args: string[], name: string): string | null {
   const index = args.indexOf(name)
@@ -99,52 +84,6 @@ function preserveAdvancedSettings(target: HudConfig, source: HudConfig): void {
   }
 }
 
-function currentToggles(config: HudConfig): GuidedToggle[] {
-  return GUIDED_TOGGLES.filter((toggle) => {
-    const values: Record<GuidedToggle, boolean> = {
-      git: config.gitStatus.enabled,
-      usage: config.display.showUsage,
-      tools: config.display.showTools,
-      skills: config.display.showSkills,
-      mcp: config.display.showMcp,
-      agents: config.display.showAgents,
-      todos: config.display.showTodos,
-      goal: config.display.showGoal,
-      configCounts: config.display.showConfigCounts,
-      duration: config.display.showDuration,
-      speed: config.display.showSpeed,
-      promptCache: config.display.showPromptCache,
-      sessionName: config.display.showSessionName,
-      auth: config.display.showAuth,
-      memory: config.display.showMemoryUsage,
-      sessionTokens: config.display.showSessionTokens,
-      compactions: config.display.showCompactions,
-    }
-    return values[toggle]
-  })
-}
-
-function applyToggles(config: HudConfig, selected: GuidedToggle[]): void {
-  const enabled = new Set(selected)
-  config.gitStatus.enabled = enabled.has('git')
-  config.display.showUsage = enabled.has('usage')
-  config.display.showTools = enabled.has('tools')
-  config.display.showSkills = enabled.has('skills')
-  config.display.showMcp = enabled.has('mcp')
-  config.display.showAgents = enabled.has('agents')
-  config.display.showTodos = enabled.has('todos')
-  config.display.showGoal = enabled.has('goal')
-  config.display.showConfigCounts = enabled.has('configCounts')
-  config.display.showDuration = enabled.has('duration')
-  config.display.showSpeed = enabled.has('speed')
-  config.display.showPromptCache = enabled.has('promptCache')
-  config.display.showSessionName = enabled.has('sessionName')
-  config.display.showAuth = enabled.has('auth')
-  config.display.showMemoryUsage = enabled.has('memory')
-  config.display.showSessionTokens = enabled.has('sessionTokens')
-  config.display.showCompactions = enabled.has('compactions')
-}
-
 function preview(config: HudConfig): string {
   const parser = new RolloutParser()
   const candidate = findActiveSession({ cwd: process.cwd() })
@@ -154,28 +93,85 @@ function preview(config: HudConfig): string {
   return renderHud({
     config,
     state,
-    options: { width: Math.min(process.stdout.columns || 120, 140), height: 8, color: process.stdout.isTTY && !process.env.NO_COLOR },
+    options: {
+      width: Math.min(process.stdout.columns || 120, 140),
+      height: DEFAULT_HUD_MAX_HEIGHT,
+      color: process.stdout.isTTY && !process.env.NO_COLOR,
+    },
     now,
   }).join('\n') || '(No active Codex session data yet)'
 }
 
 export async function runConfigure(args: string[]): Promise<number> {
   const loaded = loadConfig()
-  let preset = optionValue(args, '--preset')
+  const preset = optionValue(args, '--preset')
   let language = optionValue(args, '--language')
   let layout = optionValue(args, '--layout')
   const nonInteractive = args.includes('--yes') || !process.stdin.isTTY
+  const statusOnly = args.includes('--status')
+  const json = args.includes('--json')
+  const hasSelectiveChanges = args.includes('--enable') || args.includes('--disable')
 
-  if (!isPreset(preset)) {
+  if (statusOnly) {
+    const state = guidedElementState(loaded.config)
+    const report = {
+      configPath: loaded.path,
+      language: loaded.config.language,
+      layout: loaded.config.lineLayout,
+      enabled: state.enabled,
+      disabled: state.disabled,
+    }
+    if (json) {
+      process.stdout.write(`${JSON.stringify(report, null, 2)}\n`)
+    }
+    else {
+      process.stdout.write(`${[
+        `Config: ${report.configPath}`,
+        `Language: ${report.language}`,
+        `Layout: ${report.layout}`,
+        `Enabled: ${report.enabled.join(', ') || '(none)'}`,
+        `Disabled: ${report.disabled.join(', ') || '(none)'}`,
+      ].join('\n')}\n`)
+    }
+    return 0
+  }
+
+  if (hasSelectiveChanges) {
+    const config = isPreset(preset) ? createPreset(preset) : structuredClone(loaded.config)
+    if (isPreset(preset)) {
+      preserveAdvancedSettings(config, loaded.config)
+    }
+    if (isLanguage(language)) {
+      config.language = language
+    }
+    if (isLayout(layout)) {
+      config.lineLayout = layout
+    }
+    applyGuidedElementChanges(config, {
+      enable: parseGuidedElements(optionValue(args, '--enable')),
+      disable: parseGuidedElements(optionValue(args, '--disable')),
+    })
+    const configPath = writeConfig(config, loaded.raw)
+    process.stdout.write(`${configPath}\n`)
+    return 0
+  }
+
+  let base: ConfigPreset | 'current'
+
+  if (isPreset(preset)) {
+    base = preset
+  }
+  else {
     if (nonInteractive) {
-      preset = 'essential'
+      base = 'essential'
     }
     else {
       prompts.intro('Codex HUD configuration')
       const selected = await prompts.select({
-        message: 'Choose a display preset',
-        initialValue: 'essential',
+        message: 'Choose a configuration base',
+        initialValue: 'current',
         options: [
+          { value: 'current', label: 'Current settings', hint: 'Edit only what you choose below' },
           { value: 'full', label: 'Full', hint: 'All telemetry and activity' },
           { value: 'essential', label: 'Essential', hint: 'Context, quota, tools, agents, tasks' },
           { value: 'minimal', label: 'Minimal', hint: 'Model, project, context' },
@@ -184,18 +180,23 @@ export async function runConfigure(args: string[]): Promise<number> {
       if (cancelled(selected)) {
         return 1
       }
-      preset = selected as ConfigPreset
+      base = selected as ConfigPreset | 'current'
     }
+  }
+
+  const config = base === 'current' ? structuredClone(loaded.config) : createPreset(base)
+  if (base !== 'current') {
+    preserveAdvancedSettings(config, loaded.config)
   }
 
   if (!isLanguage(language)) {
     if (nonInteractive) {
-      language = loaded.config.language
+      language = config.language
     }
     else {
       const selected = await prompts.select({
         message: 'Choose label language',
-        initialValue: loaded.config.language,
+        initialValue: config.language,
         options: [
           { value: 'en', label: 'English' },
           { value: 'zh-Hans', label: '简体中文' },
@@ -209,10 +210,7 @@ export async function runConfigure(args: string[]): Promise<number> {
     }
   }
 
-  const selectedPreset = isPreset(preset) ? preset : 'essential'
-  const selectedLanguage = isLanguage(language) ? language : loaded.config.language
-  const config = createPreset(selectedPreset)
-  preserveAdvancedSettings(config, loaded.config)
+  const selectedLanguage = isLanguage(language) ? language : config.language
   config.language = selectedLanguage
 
   if (!isLayout(layout) && !nonInteractive) {
@@ -236,32 +234,18 @@ export async function runConfigure(args: string[]): Promise<number> {
   if (!nonInteractive) {
     const toggles = await prompts.multiselect({
       message: 'Choose visible HUD elements',
-      initialValues: currentToggles(config),
+      initialValues: guidedElementState(config).enabled,
       required: false,
-      options: [
-        { value: 'git', label: 'Git status' },
-        { value: 'usage', label: 'Rate limits and credits' },
-        { value: 'tools', label: 'Tool activity' },
-        { value: 'skills', label: 'Active skills' },
-        { value: 'mcp', label: 'MCP activity' },
-        { value: 'agents', label: 'Subagents' },
-        { value: 'todos', label: 'Plan / todos' },
-        { value: 'goal', label: 'Durable goal' },
-        { value: 'configCounts', label: 'Environment counts' },
-        { value: 'duration', label: 'Session duration' },
-        { value: 'speed', label: 'Output speed' },
-        { value: 'promptCache', label: 'Prompt-cache countdown' },
-        { value: 'sessionName', label: 'Session title' },
-        { value: 'auth', label: 'Authentication method' },
-        { value: 'memory', label: 'Approximate system memory' },
-        { value: 'sessionTokens', label: 'Session token totals' },
-        { value: 'compactions', label: 'Compaction count' },
-      ],
+      options: GUIDED_ELEMENTS.map(element => ({ value: element.name, label: element.label })),
     })
     if (cancelled(toggles)) {
       return 1
     }
-    applyToggles(config, toggles as GuidedToggle[])
+    const enabled = toggles as typeof GUIDED_ELEMENTS[number]['name'][]
+    applyGuidedElementChanges(config, {
+      enable: enabled,
+      disable: GUIDED_ELEMENTS.map(element => element.name).filter(element => !enabled.includes(element)),
+    })
 
     const pathLevels = await prompts.select({
       message: 'Project path depth',
@@ -279,7 +263,7 @@ export async function runConfigure(args: string[]): Promise<number> {
 
     prompts.note(preview(config), 'HUD preview')
     const confirmed = await prompts.confirm({
-      message: `Save ${selectedPreset} / ${selectedLanguage} / ${config.lineLayout} configuration?`,
+      message: `Save ${base} / ${selectedLanguage} / ${config.lineLayout} configuration?`,
       initialValue: true,
     })
     if (cancelled(confirmed) || !confirmed) {

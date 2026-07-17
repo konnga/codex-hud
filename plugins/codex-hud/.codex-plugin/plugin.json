@@ -1,6 +1,6 @@
 {
   "name": "codex-hud",
-  "version": "0.1.0+codex.20260717051132",
+  "version": "0.1.0+codex.20260717082044",
   "description": "Persistent Claude HUD-style telemetry and activity display for Codex CLI.",
   "author": {
     "name": "Codex HUD Contributors"
@@ -20,6 +20,7 @@
     "defaultPrompt": [
       "Set up Codex HUD for this machine.",
       "Set up or customize my Codex HUD display.",
+      "Review my current Codex HUD fields and let me choose what to enable or disable.",
       "Diagnose why Codex HUD is not updating."
     ],
     "brandColor": "#10B981"

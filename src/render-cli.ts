@@ -7,6 +7,7 @@ import { RolloutParser } from './codex/rollout-parser.js'
 import { findActiveSession } from './codex/session-finder.js'
 import { loadConfig } from './config/load.js'
 import { renderHud } from './render/index.js'
+import { watchConfigPath } from './runtime/config-watch.js'
 import {
   DEFAULT_HUD_MAX_HEIGHT,
   desiredPaneHeight,
@@ -167,17 +168,11 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
       render()
     }
   }, 10_000)
-  let configWatcher: fs.FSWatcher | null = null
-  try {
-    configWatcher = fs.watch(loaded.path, () => {
-      loaded = loadConfig()
-      lastConfigMtime = configMtime()
-      render()
-    })
-  }
-  catch {
-    configWatcher = null
-  }
+  const configWatcher = watchConfigPath(loaded.path, () => {
+    loaded = loadConfig()
+    lastConfigMtime = configMtime()
+    render()
+  })
   process.on('SIGWINCH', render)
   const shutdown = (): void => {
     clearInterval(interval)

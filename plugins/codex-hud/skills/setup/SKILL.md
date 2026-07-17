@@ -1,6 +1,6 @@
 ---
 name: setup
-description: Set up and configure Codex HUD, including installation, upgrades, diagnostics, presets, layout, language, visible telemetry, advanced display settings, previews, and smoke tests. Use when the user asks to install, enable, initialize, upgrade, customize, simplify, expand, translate, reset, diagnose, or preview Codex HUD.
+description: Set up Codex HUD, including installation, upgrades, presets, layout, language, advanced display settings, previews, and smoke tests. Use when the user asks to install, initialize, upgrade, reset to a preset, translate, diagnose setup, or change advanced Codex HUD configuration. Use the configure Skill for selective visible-element toggles.
 ---
 
 # Set up Codex HUD
@@ -9,7 +9,7 @@ description: Set up and configure Codex HUD, including installation, upgrades, d
 2. Resolve `../../scripts/codex-hud-plugin.mjs` relative to this `SKILL.md`.
 3. For installation, initialization, or upgrade requests, run `node <resolved-script> setup`, then inspect `codex-hud doctor --json`.
 4. If tmux is missing, install it only when the user authorized machine setup; otherwise report the exact platform command.
-5. For display changes, determine the requested preset, language, layout, and visible elements. Ask concise questions only when the choice materially changes the result.
+5. For setup changes, determine the requested preset, language, and layout. Route selective visible-element changes to `$codex-hud:configure`.
 6. Apply presets with `codex-hud configure --preset <full|essential|minimal> --yes`, adding `--language <en|zh-Hans|zh-Hant>` and `--layout <compact|expanded>` when requested.
 7. For advanced settings, edit the config JSON directly, preserve unrelated keys, and validate with `codex-hud doctor --json`.
 8. Preview with `codex-hud render --once --cwd <current-project> --no-color` and report the resulting configuration path.
