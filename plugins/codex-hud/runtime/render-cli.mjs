@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { c as desiredPaneHeight, d as loadConfig, l as resizeHudPane, p as findActiveSession, r as readSessionBinding, s as buildHudState, u as renderHud, v as RolloutParser } from "./session-binding-DmjI4LME.mjs";
+import { c as desiredPaneHeight, d as loadConfig, l as resizeHudPane, p as findActiveSession, r as readSessionBinding, s as buildHudState, u as renderHud, v as RolloutParser } from "./session-binding-BK9swWAW.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";

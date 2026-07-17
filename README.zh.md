@@ -4,6 +4,25 @@ Codex HUD 是面向 OpenAI Codex CLI 的常驻终端 HUD，目标是完整复刻
 
 它不修改 Codex 二进制。Codex HUD 使用 tmux 在 Codex 输入区下方创建独立 HUD pane，并增量读取 `$CODEX_HOME/sessions/**/rollout-*.jsonl`。上下文百分比采用 Codex 官方的 12,000 token 基线算法，额度窗口直接使用 Codex 写入的 `used_percent`、`window_minutes` 与 `resets_at`。
 
+## 完整展示效果
+
+启用 Full 预设且当前会话存在相应遥测数据时，HUD 会展开显示模型与项目、上下文和额度、运行环境、实时活动及会话状态：
+
+```text
+[gpt-5.5 high] │ codex-hud +shared git:(main* ↑1) │ ChatGPT pro (builder)
+上下文 ██████░░░░ 59% │ 额度 5h: ███░░░░░░░ 25% (重置于 1h 30m) │ 1w: ████████░░ 82% (重置于 4d) │ $12.50
+缓存有效期 ⏱️ 5m
+审批: on-request │ 权限: workspace-write │ 沙箱: workspace-write
+🛠️ 工具: ◐ exec_command: pnpm test │ ✓ view_image ×1
+🧩 ✓ 技能 (2): openai-docs, plugin-creator
+🔌 ✓ MCP (1): github
+🤖 ◐ explorer: 检查协议 (2m)
+📋 ▸ 渲染 HUD (1/3)
+⏱️ 1h │ 压缩: 1
+```
+
+没有可用遥测数据的行会自动隐藏；没有活动计划时，任务行会改为展示持久 Goal。
+
 ## 当前能力
 
 - 模型、provider、reasoning effort、项目路径和 Git 状态
@@ -102,7 +121,7 @@ codex-hud configure --enable tools,skills,agents --disable memory --yes
 | `CODEX_HOME`          | Codex 数据与配置目录                                             |
 | `CODEX_HUD_CONFIG`    | 覆盖 Hub 配置路径                                                |
 | `CODEX_HUD_CODEX_BIN` | 指定真实 Codex 可执行文件，避免 shim 递归                        |
-| `CODEX_HUD_BIN_DIR`   | 安装启动器的目录，默认 `~/.local/bin`                            |
+| `CODEX_HUD_BIN_DIR`   | 安装启动器的目录，默认`~/.local/bin`                             |
 | `CODEX_HUD_HEIGHT`    | HUD pane 最大高度，默认 30；pane 从 5 行启动并按完整内容自动适配 |
 | `NO_COLOR`            | 禁用 ANSI 颜色                                                   |
 

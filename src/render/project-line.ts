@@ -83,13 +83,10 @@ function authSegment(ctx: RenderContext): string | null {
 }
 
 export function renderProjectLine(ctx: RenderContext): string | null {
-  const parts: string[] = []
   const model = modelName(ctx)
-  if (model) {
-    parts.push(model)
-  }
+  let project: string | null = null
   if (ctx.config.display.showProject) {
-    let project = color(
+    project = color(
       projectPath(ctx.state.project.projectRoot, ctx.config.pathLevels),
       ctx.config.colors.project,
       ctx.options.color,
@@ -100,22 +97,19 @@ export function renderProjectLine(ctx: RenderContext): string | null {
         project = `${project} ${added.join(' ')}`
       }
     }
-    parts.push(project)
   }
   const git = gitSegment(ctx)
-  if (git) {
-    parts.push(git)
-  }
-  if (ctx.config.display.showSessionName && ctx.state.session?.sessionName) {
-    parts.push(safeText(ctx.state.session.sessionName))
-  }
-  const auth = authSegment(ctx)
-  if (auth) {
-    parts.push(safeText(auth))
-  }
+  const projectAndGit = [project, git].filter((part): part is string => Boolean(part)).join(' ') || null
+  const sessionName = ctx.config.display.showSessionName && ctx.state.session?.sessionName
+    ? safeText(ctx.state.session.sessionName)
+    : null
+  const rawAuth = authSegment(ctx)
+  const auth = rawAuth ? safeText(rawAuth) : null
+  const parts = [model, projectAndGit, sessionName, auth].filter((part): part is string => Boolean(part))
   const line = parts.length > 0 ? parts.join(' │ ') : null
   if (line && git && ctx.config.gitStatus.branchOverflow === 'wrap' && visibleWidth(line) > ctx.options.width) {
-    return `${parts.filter(part => part !== git).join(' │ ')}\n${git}`
+    const firstLine = [model, project, sessionName, auth].filter((part): part is string => Boolean(part)).join(' │ ')
+    return firstLine ? `${firstLine}\n${git}` : git
   }
   return line
 }

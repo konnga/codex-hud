@@ -2,6 +2,25 @@
 
 Codex HUD is a persistent Claude HUD-style heads-up display for OpenAI Codex CLI. It keeps the official Codex binary unchanged, runs a dedicated tmux pane below the Codex input area, and incrementally reads local rollout JSONL telemetry.
 
+## Full display preview
+
+With the Full preset and active session telemetry, the HUD expands to show identity, context and quota usage, environment policy, live activity, and session timing:
+
+```text
+[gpt-5.5 high] │ codex-hud +shared git:(main* ↑1) │ ChatGPT pro (builder)
+Context ██████░░░░ 59% │ Usage 5h: ███░░░░░░░ 25% (resets in 1h 30m) │ 1w: ████████░░ 82% (resets in 4d) │ $12.50
+Cache TTL ⏱️ 5m
+Approval: on-request │ Permissions: workspace-write │ Sandbox: workspace-write
+🛠️ Tools: ◐ exec_command: pnpm test │ ✓ view_image ×1
+🧩 ✓ Skills (2): openai-docs, plugin-creator
+🔌 ✓ MCPs (1): github
+🤖 ◐ explorer: Inspect protocol (2m)
+📋 ▸ Render HUD (1/3)
+⏱️ 1h │ Compactions: 1
+```
+
+Rows without available telemetry are omitted automatically. When there is no active plan, the task row can instead show the durable goal.
+
 Highlights:
 
 - Model, provider, reasoning effort, project, and Git status

@@ -108,6 +108,10 @@ describe('hud renderer', () => {
     })
 
     expect(lines).toMatchSnapshot()
+    expect(lines[0]).toContain('[gpt-5.5 high]')
+    expect(lines[0]).toContain('codex-hud +shared git:(main* ↑1)')
+    expect(lines[0]).not.toContain('+shared │ git:')
+    expect(lines[0]).not.toContain('HUD fidelity audit')
     expect(lines.join('\n')).not.toContain('Memory')
     expect(lines.join('\n')).not.toContain('configs')
     expect(lines.join('\n')).not.toContain('Started')

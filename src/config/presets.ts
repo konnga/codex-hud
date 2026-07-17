@@ -12,6 +12,7 @@ export function createPreset(preset: ConfigPreset): HudConfig {
 
   if (preset === 'full') {
     Object.assign(config.display, {
+      showModel: true,
       showConfigCounts: false,
       showCost: false,
       showDuration: true,
@@ -23,7 +24,7 @@ export function createPreset(preset: ConfigPreset): HudConfig {
       showAgents: true,
       showTodos: true,
       showGoal: true,
-      showSessionName: true,
+      showSessionName: false,
       showAuth: true,
       showAuthUser: true,
       toolNameMaxLength: 20,

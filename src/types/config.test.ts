@@ -9,6 +9,7 @@ describe('default HUD configuration', () => {
   it('starts in the Claude HUD-compatible expanded layout', () => {
     expect(DEFAULT_CONFIG.lineLayout).toBe('expanded')
     expect(DEFAULT_CONFIG.refreshIntervalMs).toBe(300)
+    expect(DEFAULT_CONFIG.display.showModel).toBe(true)
   })
 
   it('keeps the canonical element order', () => {

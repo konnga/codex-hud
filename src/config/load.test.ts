@@ -215,6 +215,8 @@ describe('configuration persistence', () => {
 describe('configuration presets', () => {
   it('enables all activity in the full preset', () => {
     const config = createPreset('full')
+    expect(config.display.showModel).toBe(true)
+    expect(config.display.showSessionName).toBe(false)
     expect(config.display.showTools).toBe(true)
     expect(config.display.showSkills).toBe(true)
     expect(config.display.showMcp).toBe(true)

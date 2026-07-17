@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { _ as getLegacyStateDirectory, a as waitForNewRootSession, d as loadConfig, f as DEFAULT_CONFIG, g as getHudStateDirectory, h as getConfigPath, i as snapshotRootSessions, m as getCodexHome, n as createSessionBindingPath, o as writeSessionBinding, p as findActiveSession, s as buildHudState, t as acquireSessionDiscoveryLock, u as renderHud, v as RolloutParser } from "./session-binding-DmjI4LME.mjs";
+import { _ as getLegacyStateDirectory, a as waitForNewRootSession, d as loadConfig, f as DEFAULT_CONFIG, g as getHudStateDirectory, h as getConfigPath, i as snapshotRootSessions, m as getCodexHome, n as createSessionBindingPath, o as writeSessionBinding, p as findActiveSession, s as buildHudState, t as acquireSessionDiscoveryLock, u as renderHud, v as RolloutParser } from "./session-binding-BK9swWAW.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import process$1, { stdin, stdout } from "node:process";
@@ -1188,6 +1188,7 @@ function createPreset(preset) {
 	const config = cloneDefault();
 	if (preset === "full") {
 		Object.assign(config.display, {
+			showModel: true,
 			showConfigCounts: false,
 			showCost: false,
 			showDuration: true,
@@ -1199,7 +1200,7 @@ function createPreset(preset) {
 			showAgents: true,
 			showTodos: true,
 			showGoal: true,
-			showSessionName: true,
+			showSessionName: false,
 			showAuth: true,
 			showAuthUser: true,
 			toolNameMaxLength: 20,

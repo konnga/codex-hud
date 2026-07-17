@@ -2,7 +2,7 @@
 
 exports[`hud renderer > renders the full expanded Codex HUD 1`] = `
 [
-  "[gpt-5.5 high] │ codex-hud +shared │ git:(main* ↑1) │ HUD fidelity audit │ ChatGPT pro (builder)",
+  "[gpt-5.5 high] │ codex-hud +shared git:(main* ↑1) │ ChatGPT pro (builder)",
   "Context ██████░░░░ 59% │ Usage 5h: ███░░░░░░░ 25% (resets in 1h 30m) │ 1w: ████████░░ 82% (resets in 4d) │ $12.50",
   "Cache TTL ⏱️ 5m",
   "Approval: on-request │ Permissions: workspace-write │ Sandbox: workspace-write",
