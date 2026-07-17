@@ -1,0 +1,13 @@
+Codex HUD contains original work and adaptations of concepts and rendering
+behavior from Claude HUD:
+
+  Claude HUD
+  Copyright (c) 2026 Jarrod Watts
+  https://github.com/jarrodwatts/claude-hud
+  Licensed under the MIT License.
+
+The adapted portions include the compact/expanded HUD structure, configurable
+element ordering, progress-bar presentation, activity-line conventions,
+threshold colors, and Full/Essential/Minimal configuration concepts. Codex
+rollout parsing, session discovery, tmux lifecycle management, Codex plugin
+integration, and Codex-specific telemetry normalization are Codex HUD work.

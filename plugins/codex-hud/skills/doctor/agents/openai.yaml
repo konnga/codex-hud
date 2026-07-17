@@ -1,0 +1,4 @@
+interface:
+  display_name: Diagnose Codex HUD
+  short_description: Diagnose Codex HUD installation and session issues
+  default_prompt: 'Use $codex-hud:doctor to diagnose why Codex HUD is missing or not updating.'

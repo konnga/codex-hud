@@ -1,0 +1,27 @@
+{
+  "name": "codex-hud",
+  "version": "0.1.0+codex.20260717040512",
+  "description": "Persistent Claude HUD-style telemetry and activity display for Codex CLI.",
+  "author": {
+    "name": "Codex HUD Contributors"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Codex HUD",
+    "shortDescription": "Live context, quota, tools, agents, and task status for Codex CLI.",
+    "longDescription": "Codex HUD adds a persistent terminal HUD, guided configuration, diagnostics, and lifecycle integration for local Codex CLI sessions.",
+    "developerName": "Codex HUD Contributors",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Set up Codex HUD for this machine.",
+      "Set up or customize my Codex HUD display.",
+      "Diagnose why Codex HUD is not updating."
+    ],
+    "brandColor": "#10B981"
+  }
+}

@@ -1,0 +1,4 @@
+interface:
+  display_name: Set Up Codex HUD
+  short_description: 'Install, configure, diagnose, and preview Codex HUD'
+  default_prompt: 'Use $codex-hud:setup to install or customize Codex HUD and preview the result.'

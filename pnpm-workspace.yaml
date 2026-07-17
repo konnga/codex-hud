@@ -1,0 +1,22 @@
+shellEmulator: true
+
+trustPolicy: no-downgrade
+
+packages:
+  - .
+
+catalogs:
+  dev:
+    '@antfu/eslint-config': ^9.1.0
+    '@types/node': ^26.1.1
+    eslint: ^10.7.0
+    eslint-plugin-format: ^2.0.1
+    tsdown: ^0.22.8
+    typescript: ^6.0.3
+    vitest: ^4.1.10
+  prod:
+    '@clack/prompts': ^1.7.0
+    slice-ansi: ^9.0.0
+    smol-toml: ^1.7.0
+    string-width: ^8.2.2
+    strip-ansi: ^7.2.0

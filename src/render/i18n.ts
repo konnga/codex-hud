@@ -1,0 +1,107 @@
+import type { Language } from '../types/config.js'
+
+const MESSAGES = {
+  'en': {
+    context: 'Context',
+    usage: 'Usage',
+    resetsIn: 'resets in',
+    tools: 'Tools',
+    skills: 'Skills',
+    mcps: 'MCPs',
+    agents: 'Agents',
+    goal: 'Goal',
+    allComplete: 'All tasks complete',
+    configs: 'configs',
+    rules: 'rules',
+    hooks: 'hooks',
+    session: 'Session',
+    tokens: 'Tokens',
+    compactions: 'Compactions',
+    memory: 'Memory',
+    promptCache: 'Prompt cache',
+    addedDirs: 'Added dirs',
+    approval: 'Approval',
+    sandbox: 'Sandbox',
+    mode: 'Mode',
+    started: 'Started',
+    lastResponse: 'Last response',
+    input: 'in',
+    cache: 'cache',
+    output: 'out',
+  },
+  'zh-Hans': {
+    context: '上下文',
+    usage: '额度',
+    resetsIn: '重置于',
+    tools: '工具',
+    skills: '技能',
+    mcps: 'MCP',
+    agents: '子代理',
+    goal: '目标',
+    allComplete: '全部任务已完成',
+    configs: '配置',
+    rules: '规则',
+    hooks: '钩子',
+    session: '会话',
+    tokens: 'Token',
+    compactions: '压缩',
+    memory: '内存',
+    promptCache: '提示缓存',
+    addedDirs: '附加目录',
+    approval: '审批',
+    sandbox: '沙箱',
+    mode: '模式',
+    started: '开始',
+    lastResponse: '最近响应',
+    input: '输入',
+    cache: '缓存',
+    output: '输出',
+  },
+  'zh-Hant': {
+    context: '上下文',
+    usage: '額度',
+    resetsIn: '重置於',
+    tools: '工具',
+    skills: '技能',
+    mcps: 'MCP',
+    agents: '子代理',
+    goal: '目標',
+    allComplete: '全部任務已完成',
+    configs: '配置',
+    rules: '規則',
+    hooks: '鉤子',
+    session: '會話',
+    tokens: 'Token',
+    compactions: '壓縮',
+    memory: '記憶體',
+    promptCache: '提示快取',
+    addedDirs: '附加目錄',
+    approval: '審批',
+    sandbox: '沙箱',
+    mode: '模式',
+    started: '開始',
+    lastResponse: '最近回應',
+    input: '輸入',
+    cache: '快取',
+    output: '輸出',
+  },
+} as const
+
+export type MessageKey = keyof typeof MESSAGES.en
+export type IconKey = 'agents' | 'mcps' | 'skills' | 'todos' | 'tools'
+
+const ICONS: Record<IconKey, string> = {
+  agents: '🤖',
+  mcps: '🔌',
+  skills: '🧩',
+  todos: '📋',
+  tools: '🛠️',
+}
+
+export function message(language: Language, key: MessageKey): string {
+  return MESSAGES[language][key]
+}
+
+export function icon(key: IconKey): string {
+  return ICONS[key]
+}
