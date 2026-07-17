@@ -1,6 +1,6 @@
 {
   "name": "codex-hud",
-  "version": "0.1.0+codex.20260717082044",
+  "version": "0.1.0+codex.20260717222500",
   "description": "Persistent Claude HUD-style telemetry and activity display for Codex CLI.",
   "author": {
     "name": "Codex HUD Contributors"

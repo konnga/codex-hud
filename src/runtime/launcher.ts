@@ -1,6 +1,7 @@
 import type { TmuxLaunchResult } from './tmux.js'
 // @env node
 import { spawn, spawnSync } from 'node:child_process'
+import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
@@ -13,6 +14,7 @@ import {
   writeSessionBinding,
 } from './session-binding.js'
 import {
+  createPrivateTmuxSocketPath,
   createTmuxRunner,
   launchInsideTmux,
   launchNewTmuxSession,
@@ -77,7 +79,7 @@ export function launchCodex(options: LaunchOptions): TmuxLaunchResult {
   }
   const runDirect = (): TmuxLaunchResult => {
     const result = spawnSync(codex, options.codexArgs, { cwd: options.cwd, env, stdio: 'inherit' })
-    return { sessionName: null, hudPaneId: null, exitCode: result.status ?? 1 }
+    return { sessionName: null, hudPaneId: null, socketPath: null, exitCode: result.status ?? 1 }
   }
   if (options.noHud) {
     return runDirect()
@@ -90,19 +92,22 @@ export function launchCodex(options: LaunchOptions): TmuxLaunchResult {
   const paths = runtimePaths()
   const launchedAfter = new Date()
   const bindingPath = createSessionBindingPath(options.cwd)
-  const tmuxOptions = {
-    cwd: options.cwd,
-    cliPath: paths.cliPath,
-    renderCliPath: paths.renderCliPath,
-    codexArgs: options.codexArgs,
-    height: options.height,
-    detached: options.detached,
-    launchedAfter,
-    bindingPath,
-    env,
-  }
-  const runner = createTmuxRunner(env)
+  let socketPath: string | null = null
   try {
+    socketPath = env.TMUX ? null : createPrivateTmuxSocketPath(env)
+    const tmuxOptions = {
+      cwd: options.cwd,
+      cliPath: paths.cliPath,
+      renderCliPath: paths.renderCliPath,
+      codexArgs: options.codexArgs,
+      height: options.height,
+      detached: options.detached,
+      launchedAfter,
+      bindingPath,
+      socketPath,
+      env,
+    }
+    const runner = createTmuxRunner(env, socketPath)
     if (env.TMUX) {
       const hud = launchInsideTmux(tmuxOptions, runner)
       const result = spawnSync(process.execPath, [
@@ -118,11 +123,17 @@ export function launchCodex(options: LaunchOptions): TmuxLaunchResult {
       if (hud.hudPaneId) {
         runner.run(['kill-pane', '-t', hud.hudPaneId])
       }
+      fs.rmSync(bindingPath, { force: true })
       return { ...hud, exitCode: result.status ?? 1 }
     }
-    return launchNewTmuxSession(tmuxOptions, runner)
+    const launched = launchNewTmuxSession(tmuxOptions, runner)
+    return launched
   }
   catch (error) {
+    fs.rmSync(bindingPath, { force: true })
+    if (socketPath) {
+      fs.rmSync(socketPath, { force: true })
+    }
     const message = error instanceof Error ? error.message : String(error)
     process.stderr.write(`Codex HUD: HUD startup failed (${message}); starting Codex directly.\n`)
     return runDirect()
@@ -187,6 +198,9 @@ export async function runCodexChild(
     }
   }
   const exitCode = await exitCodePromise
+  if (bindingPath) {
+    fs.rmSync(bindingPath, { force: true })
+  }
   if (sessionName && process.env.TMUX) {
     const cleanup = spawn('tmux', ['kill-session', '-t', sessionName], {
       detached: true,

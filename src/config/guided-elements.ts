@@ -21,29 +21,30 @@ export type GuidedElement
 
 interface GuidedElementDefinition {
   name: GuidedElement
+  category: 'Activity' | 'Environment' | 'Project' | 'Session' | 'Usage'
   label: string
   get: (config: HudConfig) => boolean
   set: (config: HudConfig, value: boolean) => void
 }
 
 export const GUIDED_ELEMENTS: readonly GuidedElementDefinition[] = [
-  { name: 'git', label: 'Git status', get: config => config.gitStatus.enabled, set: (config, value) => config.gitStatus.enabled = value },
-  { name: 'usage', label: 'Rate limits and credits', get: config => config.display.showUsage, set: (config, value) => config.display.showUsage = value },
-  { name: 'tools', label: 'Tool activity', get: config => config.display.showTools, set: (config, value) => config.display.showTools = value },
-  { name: 'skills', label: 'Active skills', get: config => config.display.showSkills, set: (config, value) => config.display.showSkills = value },
-  { name: 'mcp', label: 'MCP activity', get: config => config.display.showMcp, set: (config, value) => config.display.showMcp = value },
-  { name: 'agents', label: 'Subagents', get: config => config.display.showAgents, set: (config, value) => config.display.showAgents = value },
-  { name: 'todos', label: 'Plan / todos', get: config => config.display.showTodos, set: (config, value) => config.display.showTodos = value },
-  { name: 'goal', label: 'Durable goal', get: config => config.display.showGoal, set: (config, value) => config.display.showGoal = value },
-  { name: 'configCounts', label: 'Environment counts', get: config => config.display.showConfigCounts, set: (config, value) => config.display.showConfigCounts = value },
-  { name: 'duration', label: 'Session duration', get: config => config.display.showDuration, set: (config, value) => config.display.showDuration = value },
-  { name: 'speed', label: 'Output speed', get: config => config.display.showSpeed, set: (config, value) => config.display.showSpeed = value },
-  { name: 'promptCache', label: 'Prompt-cache countdown', get: config => config.display.showPromptCache, set: (config, value) => config.display.showPromptCache = value },
-  { name: 'sessionName', label: 'Session title', get: config => config.display.showSessionName, set: (config, value) => config.display.showSessionName = value },
-  { name: 'auth', label: 'Authentication method', get: config => config.display.showAuth, set: (config, value) => config.display.showAuth = value },
-  { name: 'memory', label: 'Approximate system memory', get: config => config.display.showMemoryUsage, set: (config, value) => config.display.showMemoryUsage = value },
-  { name: 'sessionTokens', label: 'Session token totals', get: config => config.display.showSessionTokens, set: (config, value) => config.display.showSessionTokens = value },
-  { name: 'compactions', label: 'Compaction count', get: config => config.display.showCompactions, set: (config, value) => config.display.showCompactions = value },
+  { name: 'git', category: 'Project', label: 'Git status', get: config => config.gitStatus.enabled, set: (config, value) => config.gitStatus.enabled = value },
+  { name: 'usage', category: 'Usage', label: 'Rate limits and credits', get: config => config.display.showUsage, set: (config, value) => config.display.showUsage = value },
+  { name: 'promptCache', category: 'Usage', label: 'Prompt-cache countdown', get: config => config.display.showPromptCache, set: (config, value) => config.display.showPromptCache = value },
+  { name: 'tools', category: 'Activity', label: 'Tool activity', get: config => config.display.showTools, set: (config, value) => config.display.showTools = value },
+  { name: 'skills', category: 'Activity', label: 'Active skills', get: config => config.display.showSkills, set: (config, value) => config.display.showSkills = value },
+  { name: 'mcp', category: 'Activity', label: 'MCP activity', get: config => config.display.showMcp, set: (config, value) => config.display.showMcp = value },
+  { name: 'agents', category: 'Activity', label: 'Subagents', get: config => config.display.showAgents, set: (config, value) => config.display.showAgents = value },
+  { name: 'todos', category: 'Activity', label: 'Plan / todos', get: config => config.display.showTodos, set: (config, value) => config.display.showTodos = value },
+  { name: 'goal', category: 'Activity', label: 'Durable goal', get: config => config.display.showGoal, set: (config, value) => config.display.showGoal = value },
+  { name: 'configCounts', category: 'Environment', label: 'Environment counts', get: config => config.display.showConfigCounts, set: (config, value) => config.display.showConfigCounts = value },
+  { name: 'auth', category: 'Environment', label: 'Authentication method', get: config => config.display.showAuth, set: (config, value) => config.display.showAuth = value },
+  { name: 'memory', category: 'Environment', label: 'Approximate system memory', get: config => config.display.showMemoryUsage, set: (config, value) => config.display.showMemoryUsage = value },
+  { name: 'duration', category: 'Session', label: 'Session duration', get: config => config.display.showDuration, set: (config, value) => config.display.showDuration = value },
+  { name: 'speed', category: 'Session', label: 'Output speed', get: config => config.display.showSpeed, set: (config, value) => config.display.showSpeed = value },
+  { name: 'sessionName', category: 'Session', label: 'Session title', get: config => config.display.showSessionName, set: (config, value) => config.display.showSessionName = value },
+  { name: 'sessionTokens', category: 'Session', label: 'Session token totals', get: config => config.display.showSessionTokens, set: (config, value) => config.display.showSessionTokens = value },
+  { name: 'compactions', category: 'Session', label: 'Compaction count', get: config => config.display.showCompactions, set: (config, value) => config.display.showCompactions = value },
 ]
 
 const ELEMENTS_BY_NAME = new Map(GUIDED_ELEMENTS.map(element => [element.name, element]))

@@ -46,6 +46,15 @@ function fixture(tmuxSource?: string): { cwd: string, env: NodeJS.ProcessEnv, ou
   }
 }
 
+async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (!predicate()) {
+    if (Date.now() >= deadline)
+      throw new Error('Timed out waiting for condition')
+    await new Promise(resolve => setTimeout(resolve, 10))
+  }
+}
+
 describe('non-interfering launcher', () => {
   it('distinguishes resume flows from ordinary new sessions', () => {
     expect(isResumeInvocation(['resume', '--last'])).toBe(true)
@@ -78,6 +87,45 @@ describe('non-interfering launcher', () => {
     expect(fs.readFileSync(output, 'utf8')).toBe('resume\n--last\n')
   })
 
+  it('uses a launch-private tmux socket outside an existing tmux session', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-private-tmux-'))
+    directories.push(root)
+    const log = path.join(root, 'tmux-args.txt')
+    const { cwd, env } = fixture([
+      `printf '%s\\n' "$*" >> '${log}'`,
+      `case " $* " in *" split-window "*) printf '%%2\\n' ;; esac`,
+      'exit 0',
+    ].join('\n'))
+    env.CODEX_HOME = path.join(root, 'codex-home')
+
+    const launched = launchCodex({ cwd, env, codexArgs: [], height: 8, detached: true, noHud: false })
+    const calls = fs.readFileSync(log, 'utf8').trim().split('\n')
+    expect(launched.socketPath).toMatch(/codex-home\/codex-hud\/tmux\/.+\.sock$/)
+    expect(fs.statSync(path.dirname(launched.socketPath!)).mode & 0o777).toBe(0o700)
+    expect(calls.every(call => call.startsWith(`-S ${launched.socketPath} `))).toBe(true)
+    expect(calls.some(call => call.includes(`-f ${os.devNull} new-session`))).toBe(true)
+    expect(calls.some(call => call.includes('has-session'))).toBe(false)
+  })
+
+  it('falls back to official Codex when the private tmux socket cannot be created', () => {
+    const { cwd, env, output } = fixture('exit 0')
+    const blockedHome = path.join(cwd, 'blocked-codex-home')
+    fs.writeFileSync(blockedHome, 'not a directory')
+    env.CODEX_HOME = blockedHome
+
+    const launched = launchCodex({
+      cwd,
+      env,
+      codexArgs: ['resume', '--last'],
+      height: 8,
+      detached: false,
+      noHud: false,
+    })
+
+    expect(launched).toMatchObject({ socketPath: null, exitCode: 23 })
+    expect(fs.readFileSync(output, 'utf8')).toBe('resume\n--last\n')
+  })
+
   it('binds the child to the rollout created by that Codex process', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-child-'))
     directories.push(root)
@@ -90,13 +138,17 @@ describe('non-interfering launcher', () => {
     const codex = executable(root, 'codex', [
       `mkdir -p '${sessions}'`,
       `printf '%s\\n' '{"timestamp":"2026-07-17T02:00:00Z","type":"session_meta","payload":{"id":"owned","timestamp":"2026-07-17T02:00:00Z","cwd":"${cwd}","source":"cli"}}' > '${path.join(sessions, 'rollout-owned.jsonl')}'`,
+      'sleep 0.2',
       'exit 17',
     ].join('\n'))
     process.env.CODEX_HOME = codexHome
     process.env.CODEX_HUD_CODEX_BIN = codex
 
-    expect(await runCodexChild([], null, false, cwd, bindingPath)).toBe(17)
+    const child = runCodexChild([], null, false, cwd, bindingPath)
+    await waitFor(() => readSessionBinding(bindingPath) !== null)
     expect(readSessionBinding(bindingPath)).toBe(path.join(sessions, 'rollout-owned.jsonl'))
+    expect(await child).toBe(17)
+    expect(readSessionBinding(bindingPath)).toBeNull()
   })
 
   it('returns promptly when Codex exits before creating a rollout', async () => {

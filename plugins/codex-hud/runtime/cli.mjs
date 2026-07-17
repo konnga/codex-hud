@@ -8,7 +8,7 @@ import { styleText } from "node:util";
 import l__default from "node:readline";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 //#region \0rolldown/runtime.js
 var __commonJSMin = (cb, mod) => () => (mod || (cb((mod = { exports: {} }).exports, mod), cb = null), mod.exports);
@@ -1053,102 +1053,119 @@ const i = `${styleText("gray", S_BAR)}  `;
 const GUIDED_ELEMENTS = [
 	{
 		name: "git",
+		category: "Project",
 		label: "Git status",
 		get: (config) => config.gitStatus.enabled,
 		set: (config, value) => config.gitStatus.enabled = value
 	},
 	{
 		name: "usage",
+		category: "Usage",
 		label: "Rate limits and credits",
 		get: (config) => config.display.showUsage,
 		set: (config, value) => config.display.showUsage = value
 	},
 	{
+		name: "promptCache",
+		category: "Usage",
+		label: "Prompt-cache countdown",
+		get: (config) => config.display.showPromptCache,
+		set: (config, value) => config.display.showPromptCache = value
+	},
+	{
 		name: "tools",
+		category: "Activity",
 		label: "Tool activity",
 		get: (config) => config.display.showTools,
 		set: (config, value) => config.display.showTools = value
 	},
 	{
 		name: "skills",
+		category: "Activity",
 		label: "Active skills",
 		get: (config) => config.display.showSkills,
 		set: (config, value) => config.display.showSkills = value
 	},
 	{
 		name: "mcp",
+		category: "Activity",
 		label: "MCP activity",
 		get: (config) => config.display.showMcp,
 		set: (config, value) => config.display.showMcp = value
 	},
 	{
 		name: "agents",
+		category: "Activity",
 		label: "Subagents",
 		get: (config) => config.display.showAgents,
 		set: (config, value) => config.display.showAgents = value
 	},
 	{
 		name: "todos",
+		category: "Activity",
 		label: "Plan / todos",
 		get: (config) => config.display.showTodos,
 		set: (config, value) => config.display.showTodos = value
 	},
 	{
 		name: "goal",
+		category: "Activity",
 		label: "Durable goal",
 		get: (config) => config.display.showGoal,
 		set: (config, value) => config.display.showGoal = value
 	},
 	{
 		name: "configCounts",
+		category: "Environment",
 		label: "Environment counts",
 		get: (config) => config.display.showConfigCounts,
 		set: (config, value) => config.display.showConfigCounts = value
 	},
 	{
-		name: "duration",
-		label: "Session duration",
-		get: (config) => config.display.showDuration,
-		set: (config, value) => config.display.showDuration = value
-	},
-	{
-		name: "speed",
-		label: "Output speed",
-		get: (config) => config.display.showSpeed,
-		set: (config, value) => config.display.showSpeed = value
-	},
-	{
-		name: "promptCache",
-		label: "Prompt-cache countdown",
-		get: (config) => config.display.showPromptCache,
-		set: (config, value) => config.display.showPromptCache = value
-	},
-	{
-		name: "sessionName",
-		label: "Session title",
-		get: (config) => config.display.showSessionName,
-		set: (config, value) => config.display.showSessionName = value
-	},
-	{
 		name: "auth",
+		category: "Environment",
 		label: "Authentication method",
 		get: (config) => config.display.showAuth,
 		set: (config, value) => config.display.showAuth = value
 	},
 	{
 		name: "memory",
+		category: "Environment",
 		label: "Approximate system memory",
 		get: (config) => config.display.showMemoryUsage,
 		set: (config, value) => config.display.showMemoryUsage = value
 	},
 	{
+		name: "duration",
+		category: "Session",
+		label: "Session duration",
+		get: (config) => config.display.showDuration,
+		set: (config, value) => config.display.showDuration = value
+	},
+	{
+		name: "speed",
+		category: "Session",
+		label: "Output speed",
+		get: (config) => config.display.showSpeed,
+		set: (config, value) => config.display.showSpeed = value
+	},
+	{
+		name: "sessionName",
+		category: "Session",
+		label: "Session title",
+		get: (config) => config.display.showSessionName,
+		set: (config, value) => config.display.showSessionName = value
+	},
+	{
 		name: "sessionTokens",
+		category: "Session",
 		label: "Session token totals",
 		get: (config) => config.display.showSessionTokens,
 		set: (config, value) => config.display.showSessionTokens = value
 	},
 	{
 		name: "compactions",
+		category: "Session",
 		label: "Compaction count",
 		get: (config) => config.display.showCompactions,
 		set: (config, value) => config.display.showCompactions = value
@@ -1397,11 +1414,11 @@ async function runConfigure(args) {
 		process$1.stdout.write(`${configPath}\n`);
 		return 0;
 	}
+	if (!nonInteractive) intro("Codex HUD display configuration");
 	let base;
 	if (isPreset(preset)) base = preset;
-	else if (nonInteractive) base = "essential";
+	else if (nonInteractive) base = "current";
 	else {
-		intro("Codex HUD configuration");
 		const selected = await select({
 			message: "Choose a configuration base",
 			initialValue: "current",
@@ -1483,7 +1500,7 @@ async function runConfigure(args) {
 			required: false,
 			options: GUIDED_ELEMENTS.map((element) => ({
 				value: element.name,
-				label: element.label
+				label: `${element.category} · ${element.label}`
 			}))
 		});
 		if (cancelled(toggles)) return 1;
@@ -1702,6 +1719,36 @@ function runUninstall(args) {
 }
 
 //#endregion
+//#region src/commands/setup.ts
+const OPTIONS_WITH_VALUES$1 = /* @__PURE__ */ new Set([
+	"--disable",
+	"--enable",
+	"--language",
+	"--layout",
+	"--preset"
+]);
+function configureArgs(args, hasConfig) {
+	const result = [];
+	let hasPreset = false;
+	for (let index = 0; index < args.length; index += 1) {
+		const argument = args[index];
+		if (argument === "--codex-shim" || argument === "--dry-run") continue;
+		if (argument === "--preset") hasPreset = true;
+		result.push(argument);
+		if (OPTIONS_WITH_VALUES$1.has(argument) && args[index + 1]) result.push(args[++index]);
+	}
+	if (!hasConfig && !hasPreset) result.unshift("--preset", "full");
+	return result;
+}
+async function runSetup(args) {
+	const dryRun = args.includes("--dry-run");
+	const hasConfig = fs.existsSync(getConfigPath());
+	const installExitCode = runInstall([...args.includes("--codex-shim") ? ["--codex-shim"] : [], ...dryRun ? ["--dry-run"] : []]);
+	if (installExitCode !== 0 || dryRun) return installExitCode;
+	return runConfigure(configureArgs(args, hasConfig));
+}
+
+//#endregion
 //#region src/runtime/command.ts
 function resolveHubCommand(args) {
 	return args[0] ?? "start";
@@ -1709,9 +1756,13 @@ function resolveHubCommand(args) {
 
 //#endregion
 //#region src/runtime/tmux.ts
-function createTmuxRunner(env = process$1.env) {
+function createTmuxRunner(env = process$1.env, socketPath = null) {
 	return { run(args, stdio = "pipe") {
-		return spawnSync("tmux", args, {
+		return spawnSync("tmux", socketPath ? [
+			"-S",
+			socketPath,
+			...args
+		] : args, {
 			encoding: "utf8",
 			env,
 			stdio: stdio === "inherit" ? "inherit" : [
@@ -1721,6 +1772,14 @@ function createTmuxRunner(env = process$1.env) {
 			]
 		});
 	} };
+}
+function createPrivateTmuxSocketPath(env = process$1.env) {
+	const directory = path.join(getHudStateDirectory(env), "tmux");
+	fs.mkdirSync(directory, {
+		recursive: true,
+		mode: 448
+	});
+	return path.join(directory, `${randomUUID().slice(0, 12)}.sock`);
 }
 function tmuxSessionName(cwd, launchIdentity = "") {
 	const base = path.basename(cwd).replace(/[^\w-]+/g, "-").replace(/^-|-$/g, "") || "project";
@@ -1767,10 +1826,11 @@ function launchInsideTmux(options, runner = createTmuxRunner(options.env)) {
 	return {
 		sessionName: null,
 		hudPaneId: split.stdout.trim() || null,
+		socketPath: null,
 		exitCode: 0
 	};
 }
-function launchNewTmuxSession(options, runner = createTmuxRunner(options.env)) {
+function launchNewTmuxSession(options, runner = createTmuxRunner(options.env, options.socketPath ?? null)) {
 	const sessionName = tmuxSessionName(options.cwd, `${options.launchedAfter.toISOString()}:${process$1.pid}`);
 	const internalCommand = shellCommand(process$1.execPath, [
 		options.cliPath,
@@ -1785,16 +1845,19 @@ function launchNewTmuxSession(options, runner = createTmuxRunner(options.env)) {
 		"--",
 		...options.codexArgs
 	]);
-	if (runner.run([
-		"has-session",
-		"-t",
-		sessionName
-	]).status === 0) runner.run([
-		"kill-session",
-		"-t",
-		sessionName
-	]);
+	if (!options.socketPath) {
+		if (runner.run([
+			"has-session",
+			"-t",
+			sessionName
+		]).status === 0) runner.run([
+			"kill-session",
+			"-t",
+			sessionName
+		]);
+	}
 	ensureSuccess(runner.run([
+		...options.socketPath ? ["-f", os.devNull] : [],
 		"new-session",
 		"-d",
 		"-s",
@@ -1868,12 +1931,14 @@ function launchNewTmuxSession(options, runner = createTmuxRunner(options.env)) {
 		return {
 			sessionName,
 			hudPaneId: split.stdout.trim() || null,
+			socketPath: options.socketPath ?? null,
 			exitCode: attached.status ?? 1
 		};
 	}
 	return {
 		sessionName,
 		hudPaneId: split.stdout.trim() || null,
+		socketPath: options.socketPath ?? null,
 		exitCode: 0
 	};
 }
@@ -1920,6 +1985,7 @@ function launchCodex(options) {
 		return {
 			sessionName: null,
 			hudPaneId: null,
+			socketPath: null,
 			exitCode: spawnSync(codex, options.codexArgs, {
 				cwd: options.cwd,
 				env,
@@ -1935,19 +2001,22 @@ function launchCodex(options) {
 	const paths = runtimePaths();
 	const launchedAfter = /* @__PURE__ */ new Date();
 	const bindingPath = createSessionBindingPath(options.cwd);
-	const tmuxOptions = {
-		cwd: options.cwd,
-		cliPath: paths.cliPath,
-		renderCliPath: paths.renderCliPath,
-		codexArgs: options.codexArgs,
-		height: options.height,
-		detached: options.detached,
-		launchedAfter,
-		bindingPath,
-		env
-	};
-	const runner = createTmuxRunner(env);
+	let socketPath = null;
 	try {
+		socketPath = env.TMUX ? null : createPrivateTmuxSocketPath(env);
+		const tmuxOptions = {
+			cwd: options.cwd,
+			cliPath: paths.cliPath,
+			renderCliPath: paths.renderCliPath,
+			codexArgs: options.codexArgs,
+			height: options.height,
+			detached: options.detached,
+			launchedAfter,
+			bindingPath,
+			socketPath,
+			env
+		};
+		const runner = createTmuxRunner(env, socketPath);
 		if (env.TMUX) {
 			const hud = launchInsideTmux(tmuxOptions, runner);
 			const result = spawnSync(process$1.execPath, [
@@ -1969,6 +2038,7 @@ function launchCodex(options) {
 				"-t",
 				hud.hudPaneId
 			]);
+			fs.rmSync(bindingPath, { force: true });
 			return {
 				...hud,
 				exitCode: result.status ?? 1
@@ -1976,6 +2046,8 @@ function launchCodex(options) {
 		}
 		return launchNewTmuxSession(tmuxOptions, runner);
 	} catch (error) {
+		fs.rmSync(bindingPath, { force: true });
+		if (socketPath) fs.rmSync(socketPath, { force: true });
 		const message = error instanceof Error ? error.message : String(error);
 		process$1.stderr.write(`Codex HUD: HUD startup failed (${message}); starting Codex directly.\n`);
 		return runDirect();
@@ -2012,6 +2084,7 @@ async function runCodexChild(args, sessionName, waitForClient = false, cwd = pro
 		release();
 	}
 	const exitCode = await exitCodePromise;
+	if (bindingPath) fs.rmSync(bindingPath, { force: true });
 	if (sessionName && process$1.env.TMUX) spawn("tmux", [
 		"kill-session",
 		"-t",
@@ -2105,6 +2178,8 @@ Usage:
   codex-hud [start] [HUD options] [--] [codex arguments]
   codex-hud render [--once] [--cwd <path>] [--no-color]
   codex-hud doctor [--json]
+  codex-hud setup [--codex-shim] [--preset full|essential|minimal]
+                  [--language en|zh-Hans|zh-Hant] [--layout compact|expanded] [--yes]
   codex-hud configure [--preset full|essential|minimal] [--language en|zh-Hans|zh-Hant]
   codex-hud configure --status [--json]
   codex-hud configure [--enable <names>] [--disable <names>] --yes
@@ -2227,12 +2302,16 @@ async function main(args = process$1.argv.slice(2)) {
 			console.log(`Session: ${report.activeSession ?? "not found"}`);
 			console.log(`Plugin: ${report.pluginManifest ?? "not installed"}`);
 			console.log(`Session parse: ${report.sessionParsed ? "ok" : "not ready"}`);
-			if (report.shimRecursion) console.log("Warning: Codex executable resolves to the Hub CLI itself.");
+			if (report.shimRecursion) console.log("Warning: Codex executable resolves to the Codex HUD CLI itself.");
 		}
 		return;
 	}
 	if (command === "configure") {
 		process$1.exitCode = await runConfigure(args.slice(1));
+		return;
+	}
+	if (command === "setup") {
+		process$1.exitCode = await runSetup(args.slice(1));
 		return;
 	}
 	if (command === "install") {
@@ -2249,7 +2328,7 @@ async function main(args = process$1.argv.slice(2)) {
 	}
 	const options = startOptions(command === "start" ? args.slice(1) : args);
 	const launched = launchCodex(options);
-	if (options.detached && launched.sessionName) console.log(`Codex HUD started in tmux session ${launched.sessionName}`);
+	if (options.detached && launched.sessionName) console.log("Codex HUD started in the background.");
 	process$1.exitCode = launched.exitCode;
 }
 main().catch((error) => {

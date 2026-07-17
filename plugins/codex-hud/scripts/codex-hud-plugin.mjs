@@ -20,7 +20,7 @@ if (!cli) {
 const action = process.argv[2] ?? 'doctor'
 const extraArgs = process.argv.slice(3)
 const args = action === 'setup'
-  ? ['install', '--codex-shim', ...extraArgs]
+  ? ['setup', '--codex-shim', ...extraArgs]
   : action === 'configure' ? ['configure', ...extraArgs] : ['doctor', ...extraArgs]
 const result = spawnSync(process.execPath, [cli, ...args], { stdio: 'inherit' })
 process.exit(result.status ?? 1)

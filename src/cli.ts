@@ -7,6 +7,7 @@ import { RolloutParser } from './codex/rollout-parser.js'
 import { findActiveSession } from './codex/session-finder.js'
 import { runConfigure } from './commands/configure.js'
 import { runInstall, runUninstall } from './commands/install.js'
+import { runSetup } from './commands/setup.js'
 import { loadConfig } from './config/load.js'
 import { getCodexHome, getConfigPath, getHudStateDirectory } from './config/paths.js'
 import { resolveHubCommand } from './runtime/command.js'
@@ -22,6 +23,8 @@ Usage:
   codex-hud [start] [HUD options] [--] [codex arguments]
   codex-hud render [--once] [--cwd <path>] [--no-color]
   codex-hud doctor [--json]
+  codex-hud setup [--codex-shim] [--preset full|essential|minimal]
+                  [--language en|zh-Hans|zh-Hant] [--layout compact|expanded] [--yes]
   codex-hud configure [--preset full|essential|minimal] [--language en|zh-Hans|zh-Hant]
   codex-hud configure --status [--json]
   codex-hud configure [--enable <names>] [--disable <names>] --yes
@@ -170,12 +173,16 @@ async function main(args = process.argv.slice(2)): Promise<void> {
       console.log(`Plugin: ${report.pluginManifest ?? 'not installed'}`)
       console.log(`Session parse: ${report.sessionParsed ? 'ok' : 'not ready'}`)
       if (report.shimRecursion)
-        console.log('Warning: Codex executable resolves to the Hub CLI itself.')
+        console.log('Warning: Codex executable resolves to the Codex HUD CLI itself.')
     }
     return
   }
   if (command === 'configure') {
     process.exitCode = await runConfigure(args.slice(1))
+    return
+  }
+  if (command === 'setup') {
+    process.exitCode = await runSetup(args.slice(1))
     return
   }
   if (command === 'install') {
@@ -194,7 +201,7 @@ async function main(args = process.argv.slice(2)): Promise<void> {
   const options = startOptions(startArgs)
   const launched = launchCodex(options)
   if (options.detached && launched.sessionName) {
-    console.log(`Codex HUD started in tmux session ${launched.sessionName}`)
+    console.log('Codex HUD started in the background.')
   }
   process.exitCode = launched.exitCode
 }

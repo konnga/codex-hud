@@ -12,6 +12,7 @@ describe('guided HUD elements', () => {
     expect(GUIDED_ELEMENTS.map(element => element.name)).toEqual([
       'git',
       'usage',
+      'promptCache',
       'tools',
       'skills',
       'mcp',
@@ -19,15 +20,22 @@ describe('guided HUD elements', () => {
       'todos',
       'goal',
       'configCounts',
-      'duration',
-      'speed',
-      'promptCache',
-      'sessionName',
       'auth',
       'memory',
+      'duration',
+      'speed',
+      'sessionName',
       'sessionTokens',
       'compactions',
     ])
+
+    expect(new Set(GUIDED_ELEMENTS.map(element => element.category))).toEqual(new Set([
+      'Project',
+      'Usage',
+      'Activity',
+      'Environment',
+      'Session',
+    ]))
 
     const state = guidedElementState(createPreset('essential'))
     expect(state.enabled).toContain('tools')

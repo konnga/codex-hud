@@ -156,6 +156,10 @@ export async function runConfigure(args: string[]): Promise<number> {
     return 0
   }
 
+  if (!nonInteractive) {
+    prompts.intro('Codex HUD display configuration')
+  }
+
   let base: ConfigPreset | 'current'
 
   if (isPreset(preset)) {
@@ -163,10 +167,9 @@ export async function runConfigure(args: string[]): Promise<number> {
   }
   else {
     if (nonInteractive) {
-      base = 'essential'
+      base = 'current'
     }
     else {
-      prompts.intro('Codex HUD configuration')
       const selected = await prompts.select({
         message: 'Choose a configuration base',
         initialValue: 'current',
@@ -236,7 +239,10 @@ export async function runConfigure(args: string[]): Promise<number> {
       message: 'Choose visible HUD elements',
       initialValues: guidedElementState(config).enabled,
       required: false,
-      options: GUIDED_ELEMENTS.map(element => ({ value: element.name, label: element.label })),
+      options: GUIDED_ELEMENTS.map(element => ({
+        value: element.name,
+        label: `${element.category} · ${element.label}`,
+      })),
     })
     if (cancelled(toggles)) {
       return 1

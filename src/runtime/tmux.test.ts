@@ -1,5 +1,6 @@
 import type { SpawnSyncReturns } from 'node:child_process'
 import type { TmuxRunner } from './tmux.js'
+import os from 'node:os'
 import { describe, expect, it } from 'vitest'
 import { launchInsideTmux, launchNewTmuxSession, tmuxSessionName } from './tmux.js'
 
@@ -103,9 +104,32 @@ describe('tmux launcher', () => {
     expect(calls.some(call => call[0] === 'attach-session')).toBe(true)
   })
 
+  it('starts an isolated tmux server without loading the user tmux config', () => {
+    const { runner, calls } = recordingRunner([
+      result(0),
+      result(0),
+      result(0),
+      result(0),
+      result(0),
+      result(0, '%2\n'),
+      result(0),
+    ])
+    const launched = launchNewTmuxSession({
+      ...options,
+      env: {},
+      socketPath: '/tmp/codex-hud-private.sock',
+    }, runner)
+    const create = calls.find(call => call.includes('new-session'))
+    expect(calls.some(call => call.includes('has-session'))).toBe(false)
+    expect(create?.slice(0, 2)).toEqual(['-f', os.devNull])
+    expect(launched.socketPath).toBe('/tmp/codex-hud-private.sock')
+  })
+
   it('does not change mouse settings in a user-owned tmux session', () => {
     const { runner, calls } = recordingRunner([result(0, '%9\n')])
     launchInsideTmux(options, runner)
-    expect(calls.some(call => call.includes('mouse'))).toBe(false)
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.[0]).toBe('split-window')
+    expect(calls.some(call => call[0] === 'set-option')).toBe(false)
   })
 })

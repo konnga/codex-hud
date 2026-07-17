@@ -1,7 +1,7 @@
 {
-  "name": "personal",
+  "name": "codex-hud",
   "interface": {
-    "displayName": "Personal"
+    "displayName": "Codex HUD"
   },
   "plugins": [
     {

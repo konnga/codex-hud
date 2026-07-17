@@ -20,3 +20,6 @@
 - Reduced idle work with opt-in collectors, 30-second metadata caches, per-agent mtime caches, and ten-second config safety checks.
 - Bounded the renderer V8 heap; real macOS smoke RSS dropped from roughly 86 MiB to roughly 64–70 MiB with 0.0% idle CPU.
 - Refined Full defaults and Chinese labels, shortened noisy goals/tools, and suppressed implausible output-speed samples.
+- Added a unified setup flow that starts first-time configuration from Full and opens the guided display-element panel in interactive terminals.
+- Isolated non-nested launches in a per-launch private tmux socket without loading user tmux configuration; existing tmux sessions remain pane-only and option-free.
+- Removed per-launch session bindings after Codex exits and hid tmux implementation details from detached-start output.

@@ -1,9 +1,12 @@
 import type { SpawnSyncReturns } from 'node:child_process'
 import { spawnSync } from 'node:child_process'
 // @env node
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
+import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
+import { getHudStateDirectory } from '../config/paths.js'
 import { INITIAL_HUD_PANE_HEIGHT } from './pane-size.js'
 import { shellCommand } from './process.js'
 
@@ -20,6 +23,7 @@ export interface TmuxLaunchOptions {
   detached: boolean
   launchedAfter: Date
   bindingPath: string
+  socketPath?: string | null
   sessionPath?: string | null
   env?: NodeJS.ProcessEnv
 }
@@ -27,19 +31,29 @@ export interface TmuxLaunchOptions {
 export interface TmuxLaunchResult {
   sessionName: string | null
   hudPaneId: string | null
+  socketPath: string | null
   exitCode: number
 }
 
-export function createTmuxRunner(env: NodeJS.ProcessEnv = process.env): TmuxRunner {
+export function createTmuxRunner(
+  env: NodeJS.ProcessEnv = process.env,
+  socketPath: string | null = null,
+): TmuxRunner {
   return {
     run(args, stdio = 'pipe') {
-      return spawnSync('tmux', args, {
+      return spawnSync('tmux', socketPath ? ['-S', socketPath, ...args] : args, {
         encoding: 'utf8',
         env,
         stdio: stdio === 'inherit' ? 'inherit' : ['ignore', 'pipe', 'pipe'],
       })
     },
   }
+}
+
+export function createPrivateTmuxSocketPath(env: NodeJS.ProcessEnv = process.env): string {
+  const directory = path.join(getHudStateDirectory(env), 'tmux')
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 })
+  return path.join(directory, `${randomUUID().slice(0, 12)}.sock`)
 }
 
 export function tmuxSessionName(cwd: string, launchIdentity = ''): string {
@@ -101,13 +115,14 @@ export function launchInsideTmux(
   return {
     sessionName: null,
     hudPaneId: split.stdout.trim() || null,
+    socketPath: null,
     exitCode: 0,
   }
 }
 
 export function launchNewTmuxSession(
   options: TmuxLaunchOptions,
-  runner: TmuxRunner = createTmuxRunner(options.env),
+  runner: TmuxRunner = createTmuxRunner(options.env, options.socketPath ?? null),
 ): TmuxLaunchResult {
   const sessionName = tmuxSessionName(options.cwd, `${options.launchedAfter.toISOString()}:${process.pid}`)
   const internalCommand = shellCommand(process.execPath, [
@@ -123,12 +138,15 @@ export function launchNewTmuxSession(
     '--',
     ...options.codexArgs,
   ])
-  const existing = runner.run(['has-session', '-t', sessionName])
-  if (existing.status === 0) {
-    runner.run(['kill-session', '-t', sessionName])
+  if (!options.socketPath) {
+    const existing = runner.run(['has-session', '-t', sessionName])
+    if (existing.status === 0) {
+      runner.run(['kill-session', '-t', sessionName])
+    }
   }
 
   const created = runner.run([
+    ...(options.socketPath ? ['-f', os.devNull] : []),
     'new-session',
     '-d',
     '-s',
@@ -169,6 +187,7 @@ export function launchNewTmuxSession(
     return {
       sessionName,
       hudPaneId: split.stdout.trim() || null,
+      socketPath: options.socketPath ?? null,
       exitCode: attached.status ?? 1,
     }
   }
@@ -176,6 +195,7 @@ export function launchNewTmuxSession(
   return {
     sessionName,
     hudPaneId: split.stdout.trim() || null,
+    socketPath: options.socketPath ?? null,
     exitCode: 0,
   }
 }
