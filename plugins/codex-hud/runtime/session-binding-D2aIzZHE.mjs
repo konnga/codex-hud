@@ -3148,6 +3148,11 @@ function renderHud(ctx) {
 //#endregion
 //#region src/runtime/pane-size.ts
 const INITIAL_HUD_PANE_HEIGHT = 5;
+function viewportRenderHeight(maximum, rows) {
+	const safeMaximum = Math.max(1, Math.round(maximum));
+	if (!rows || !Number.isFinite(rows)) return safeMaximum;
+	return Math.min(safeMaximum, Math.max(1, Math.floor(rows)));
+}
 function desiredPaneHeight(lineCount, maximum, minimum = 5) {
 	return Math.min(Math.max(minimum, Math.round(maximum)), Math.max(minimum, Math.round(lineCount)));
 }
@@ -4677,5 +4682,5 @@ async function waitForNewRootSession(cwd, snapshot, codexHome = getCodexHome(), 
 }
 
 //#endregion
-export { getHudStateDirectory as _, waitForNewRootSession as a, desiredPaneHeight as c, renderHud as d, loadConfig as f, getConfigPath as g, getCodexHome as h, snapshotRootSessions as i, resizeCmuxPane as l, findActiveSession as m, createSessionBindingPath as n, writeSessionBinding as o, DEFAULT_CONFIG as p, readSessionBinding as r, buildHudState as s, acquireSessionDiscoveryLock as t, resizeHudPane as u, getLegacyStateDirectory as v, RolloutParser as y };
-//# sourceMappingURL=session-binding-DNwLo8J8.mjs.map
+export { getConfigPath as _, waitForNewRootSession as a, RolloutParser as b, desiredPaneHeight as c, viewportRenderHeight as d, renderHud as f, getCodexHome as g, findActiveSession as h, snapshotRootSessions as i, resizeCmuxPane as l, DEFAULT_CONFIG as m, createSessionBindingPath as n, writeSessionBinding as o, loadConfig as p, readSessionBinding as r, buildHudState as s, acquireSessionDiscoveryLock as t, resizeHudPane as u, getHudStateDirectory as v, getLegacyStateDirectory as y };
+//# sourceMappingURL=session-binding-D2aIzZHE.mjs.map

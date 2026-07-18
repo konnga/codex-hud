@@ -5,6 +5,7 @@ import {
   INITIAL_HUD_PANE_HEIGHT,
   resizeCmuxPane,
   resizeHudPane,
+  viewportRenderHeight,
 } from './pane-size.js'
 
 describe('adaptive HUD pane sizing', () => {
@@ -18,6 +19,13 @@ describe('adaptive HUD pane sizing', () => {
     expect(desiredPaneHeight(0, 12)).toBe(5)
     expect(desiredPaneHeight(7, 12)).toBe(7)
     expect(desiredPaneHeight(20, 12)).toBe(12)
+  })
+
+  it('limits rendering to the visible terminal viewport', () => {
+    expect(viewportRenderHeight(30, 8)).toBe(8)
+    expect(viewportRenderHeight(12, 20)).toBe(12)
+    expect(viewportRenderHeight(12, undefined)).toBe(12)
+    expect(viewportRenderHeight(12, 0)).toBe(12)
   })
 
   it('resizes only a tmux HUD pane and suppresses unchanged requests', () => {

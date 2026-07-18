@@ -2,7 +2,7 @@
 
 > 🌐 [English](./README.md) | 中文文档
 
-Codex HUD 是面向 OpenAI Codex CLI 的常驻终端 HUD，目标是完整复刻 [Claude HUD](https://github.com/jarrodwatts/claude-hud) 的信息密度与使用体验。
+Codex HUD 是面向 OpenAI Codex CLI 的常驻终端 HUD，集中展示上下文、额度、Git 状态、工具活动、Agent、任务与会话信息。
 
 它不修改 Codex 二进制。Codex HUD 在 Codex 输入区下方创建独立 HUD pane，并增量读取 `$CODEX_HOME/sessions/**/rollout-*.jsonl`。在 cmux 中使用原生 split，使 Codex 保留原生滚动与复制；其他终端保留 tmux 兼容 backend。上下文百分比采用 Codex 官方的 12,000 token 基线算法，额度窗口直接使用 Codex 写入的 `used_percent`、`window_minutes` 与 `resets_at`。
 
@@ -43,7 +43,7 @@ Codex HUD 是面向 OpenAI Codex CLI 的常驻终端 HUD，目标是完整复刻
 - HUD backend 启动失败时自动降级为原生 Codex，不阻断任何 Codex 命令
 - 项目/认证/Git/Agent 元数据缓存和受限 V8 heap，降低空闲资源占用
 
-逐项兼容审计见 [Claude HUD 功能对照表](./docs/claude-hud-parity.md)。其中 Claude 专属且 Codex 没有权威数据源的项目（例如 billed cost、advisor）会明确标注，不会用猜测值冒充官方遥测。
+逐项功能与遥测审计见 [支持矩阵](./docs/claude-hud-parity.md)。Codex 没有权威数据源的项目会明确标注，不会用猜测值冒充官方遥测。
 
 ## 使用前准备
 
@@ -69,9 +69,23 @@ sudo pacman -S tmux
 
 在 cmux 中不需要安装 tmux。其他终端使用 tmux 兼容 backend；没有可用 backend 时，Codex HUD 会运行原生 Codex，不会阻断命令，但不会显示 HUD。
 
+### Windows 支持
+
+原生 Windows shell 目前不能使用完整 HUD。PowerShell、CMD 和原生 Windows Terminal 会话没有受支持的 cmux/tmux backend，而且当前受管安装器生成的是 POSIX shell launcher，不是 `.cmd` 或 PowerShell wrapper。Codex 仍会安全启动，但不会显示 HUD。
+
+WSL2 可以作为 Linux 环境使用。Node.js、Codex CLI、tmux 和 Codex HUD 必须安装在同一个 WSL distribution 中：
+
+```bash
+sudo apt update
+sudo apt install tmux
+tmux -V
+```
+
+不要混用 Windows 版 Codex 与 WSL 中的 tmux 或 launcher。Git Bash 和 MSYS2 尚未测试，也不属于当前支持范围。
+
 ## 推荐安装（Codex 插件）
 
-安装方式与 Claude HUD 类似，只是 Codex CLI 使用 shell 中的 `codex plugin` 命令管理 marketplace 和插件。
+Codex CLI 使用 shell 中的 `codex plugin` 命令管理 marketplace 和插件。
 
 第一步，添加 Codex HUD marketplace：
 
@@ -128,7 +142,7 @@ tmux -V
 codex
 ```
 
-完整流程对应 Claude HUD 的安装方式：
+完整安装流程：
 
 ```text
 添加 marketplace → 安装 plugin → 运行 setup Skill → 重启 Codex
@@ -144,6 +158,16 @@ codex plugin marketplace remove personal
 codex plugin marketplace add konnga/codex-hud
 codex plugin add codex-hud@codex-hud
 ```
+
+### 插件 Skills
+
+插件提供三个 Skill，可以直接输入名称，也可以从 `/skills` 中选择：
+
+- `$codex-hud:setup`：安装或升级受管 launcher，并启动首次显示配置。
+- `$codex-hud:configure`：打开显示项选择器，同时保留高级配置覆盖。
+- `$codex-hud:doctor`：检查 launcher、backend、配置、插件和当前 session。
+
+底层 `codex-hud configure` CLI 提供相同的交互式选择器，以及确定性的 `--enable` 和 `--disable` 更新方式。
 
 ## 从源码安装（开发者）
 
@@ -317,9 +341,9 @@ cmux backend 让 Codex 保持在原 surface，只在下方创建不抢焦点的 
 | `CODEX_HUD_HEIGHT`    | HUD pane 最大高度，默认 30；pane 从 5 行启动并按完整内容自动适配 |
 | `NO_COLOR`            | 禁用 ANSI 颜色                                                   |
 
-Claude HUD 的 `zh` 与 `zh-TW` language 别名也可直接使用，保存时会规范化为 `zh-Hans` 与 `zh-Hant`。完整高级配置项与支持边界见功能对照表。
+`zh` 与 `zh-TW` language 别名也可直接使用，保存时会规范化为 `zh-Hans` 与 `zh-Hant`。完整高级配置项与支持边界见功能对照表。
 
-## 诊断与卸载
+## 诊断
 
 检查 Codex、tmux、配置、插件和当前 session：
 
@@ -342,6 +366,8 @@ codex-hud render --once --cwd "$PWD" --no-color
 - 安装后命令仍指向旧路径：运行 `hash -r` 或打开新终端。
 - 需要临时恢复原生行为：使用 `codex --no-hud`。
 
+## 卸载
+
 卸载只删除 `install.json` 中登记且仍带有 Codex HUD 标记的启动器：
 
 ```bash
@@ -359,26 +385,6 @@ codex plugin marketplace remove codex-hud
 ```
 
 插件移除不会自动删除 setup 创建的启动器，因此建议先运行 `codex-hud uninstall`。
-
-## Codex 插件
-
-仓库包含标准插件：
-
-```text
-plugins/codex-hud/
-```
-
-技能：
-
-- `$codex-hud:setup`
-- `$codex-hud:configure`
-- `$codex-hud:doctor`
-
-在 Codex 会话中输入 `$codex-hud:setup` 可以完成安装、升级和 preset 设置；输入 `$codex-hud:configure` 可以查看当前开关并选择要启用或关闭的 HUD 字段。也可以输入 `/skills` 后选择对应 Skill。底层 `codex-hud configure` CLI 同时提供终端多选界面和确定性的 `--enable` / `--disable` 更新接口。
-
-插件 runtime 会在 `pnpm build` 后同步到 `plugins/codex-hud/runtime/`。
-
-在 cmux 中，Codex HUD 通过 control socket 只创建、调整和关闭 HUD surface。普通非 cmux 终端使用私有 tmux socket，并且不加载用户 tmux 配置。已经位于 tmux 中时，只创建并在退出时删除 HUD pane，不修改用户选项。
 
 ## 为什么使用独立 pane
 

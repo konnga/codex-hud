@@ -2,7 +2,7 @@
 
 > 🌐 English | [中文文档](./README.zh.md)
 
-Codex HUD is a persistent Claude HUD-style heads-up display for OpenAI Codex CLI. It keeps the official Codex binary unchanged, runs a dedicated terminal pane below the Codex input area, and incrementally reads local rollout JSONL telemetry. In cmux it uses a native split so Codex keeps native scrolling and copying; tmux remains the compatibility backend elsewhere.
+Codex HUD is a persistent heads-up display for OpenAI Codex CLI. It keeps the official Codex binary unchanged, runs a dedicated terminal pane below the Codex input area, and incrementally reads local rollout JSONL telemetry. In cmux it uses a native split so Codex keeps native scrolling and copying; tmux remains the compatibility backend elsewhere.
 
 ## Full display preview
 
@@ -38,7 +38,7 @@ Highlights:
 - Fail-open startup: HUD backend failures fall back to untouched official Codex execution
 - Cached collectors and a bounded renderer heap for lower idle resource usage
 
-See the audited [Claude HUD parity matrix](./docs/claude-hud-parity.md) for every upstream capability and the exact fallback used when Codex has no equivalent telemetry.
+See the audited [feature and telemetry support matrix](./docs/claude-hud-parity.md) for implementation coverage and the exact fallback used when Codex has no equivalent telemetry.
 
 ## Requirements
 
@@ -49,9 +49,23 @@ See the audited [Claude HUD parity matrix](./docs/claude-hud-parity.md) for ever
 
 Inside cmux, no tmux installation is required. Outside cmux, install tmux with `brew install tmux` on macOS, `sudo apt install tmux` on Debian/Ubuntu, or the equivalent command for your platform. If no usable backend is available, Codex HUD safely runs official Codex without the HUD.
 
+### Windows support
+
+Native Windows shells are not currently supported for the full HUD. PowerShell, Command Prompt, and native Windows Terminal sessions do not provide a supported cmux/tmux backend, and the managed installer currently creates POSIX shell launchers rather than `.cmd` or PowerShell wrappers. Codex still starts safely, but without the HUD.
+
+WSL2 is supported as a Linux environment. Install Node.js, Codex CLI, tmux, and Codex HUD inside the same WSL distribution:
+
+```bash
+sudo apt update
+sudo apt install tmux
+tmux -V
+```
+
+Do not mix a Windows Codex executable with WSL tmux or WSL launchers. Git Bash and MSYS2 are not tested or supported.
+
 ## Recommended plugin installation
 
-The flow mirrors Claude HUD, using Codex CLI's marketplace commands:
+Install the plugin using Codex CLI's marketplace commands:
 
 ```bash
 codex plugin marketplace add konnga/codex-hud
@@ -96,6 +110,16 @@ codex plugin marketplace remove personal
 codex plugin marketplace add konnga/codex-hud
 codex plugin add codex-hud@codex-hud
 ```
+
+### Plugin Skills
+
+The plugin provides three Skills, available by typing their names or selecting them from `/skills`:
+
+- `$codex-hud:setup` installs or upgrades the managed launchers and starts initial display configuration.
+- `$codex-hud:configure` opens the visible-element selector and preserves advanced overrides.
+- `$codex-hud:doctor` checks the launcher, backend, configuration, plugin, and active session.
+
+The underlying `codex-hud configure` CLI provides the same interactive selector plus deterministic `--enable` and `--disable` updates.
 
 ## Install from source
 
@@ -164,7 +188,29 @@ codex-hud configure --status --json
 codex-hud configure --enable tools,skills,agents --disable memory,speed --yes
 ```
 
-Selectable names are `git`, `usage`, `promptCache`, `tools`, `skills`, `mcp`, `agents`, `todos`, `goal`, `configCounts`, `auth`, `memory`, `duration`, `speed`, `sessionName`, `sessionTokens`, and `compactions`. Saved changes are reloaded by sessions that already have a HUD pane. Hot reload cannot add a HUD pane to an existing Codex process that was started without the Codex HUD launcher.
+Selectable names:
+
+| Name | Display content |
+| --- | --- |
+| `git` | Git branch and working-tree status |
+| `usage` | Usage windows, reset times, and credits |
+| `promptCache` | Prompt-cache countdown |
+| `tools` | Tool-call activity |
+| `skills` | Skill activity |
+| `mcp` | MCP server activity |
+| `agents` | Sub-agent status |
+| `todos` | Plan and task progress |
+| `goal` | Durable goal |
+| `configCounts` | Config, rule, Skill, and MCP counts |
+| `auth` | Authentication method |
+| `memory` | Approximate system memory |
+| `duration` | Session duration |
+| `speed` | Previous response output speed |
+| `sessionName` | Explicitly named session title |
+| `sessionTokens` | Cumulative session tokens |
+| `compactions` | Context compaction count |
+
+Saved changes are reloaded by sessions that already have a HUD pane. Hot reload cannot add a HUD pane to an existing Codex process that was started without the Codex HUD launcher.
 
 Configuration lives at `${CODEX_HOME:-~/.codex}/codex-hud/config.json`.
 
@@ -172,11 +218,21 @@ Backend selection defaults to `auto`: native cmux split when an interactive cmux
 
 The cmux backend leaves Codex in the original surface and creates only the HUD as a new unfocused bottom split, preserving native scrollback, selection, and copying. The tmux backend cannot provide identical terminal-native semantics. Inside a user-owned tmux session, Codex HUD does not change that session's tmux options.
 
-## Diagnostics and uninstall
+## Diagnostics
 
 ```bash
 codex-hud doctor
 codex-hud doctor --json --cwd "$PWD"
+codex-hud render --once --cwd "$PWD" --no-color
+```
+
+Doctor checks the Codex executable, selected backend, configuration, plugin installation, and active session discovery. The one-shot renderer helps distinguish session discovery problems from terminal pane problems.
+
+## Uninstall
+
+Preview or remove only the launchers recorded in the managed installation state:
+
+```bash
 codex-hud uninstall --dry-run
 codex-hud uninstall
 ```

@@ -14,6 +14,7 @@ import {
   INITIAL_HUD_PANE_HEIGHT,
   resizeCmuxPane,
   resizeHudPane,
+  viewportRenderHeight,
 } from './runtime/pane-size.js'
 import { readSessionBinding } from './runtime/session-binding.js'
 import { buildHudState } from './runtime/state.js'
@@ -90,6 +91,7 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
   parser.setFile(currentSessionPath)
   const startedAt = new Date()
   let lastFrame = ''
+  let lastViewport = ''
   let paneHeight: number | null = null
   const paneId = process.env.TMUX_PANE ?? null
   const configMtime = (): number => {
@@ -144,12 +146,14 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
     }
     const rollout = parser.parse()
     const state = buildHudState(options.cwd, rollout, startedAt, loaded.config, new Date())
+    const width = process.stdout.columns || Number(process.env.COLUMNS) || loaded.config.maxWidth || 120
+    const height = viewportRenderHeight(options.maxHeight, process.stdout.rows)
     const lines = renderHud({
       config: loaded.config,
       state,
       options: {
-        width: process.stdout.columns || Number(process.env.COLUMNS) || loaded.config.maxWidth || 120,
-        height: options.maxHeight,
+        width,
+        height,
         color: options.color,
       },
       now: new Date(),
@@ -163,9 +167,13 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
     paneHeight = options.cmuxPaneId
       ? resizeCmuxPane(options.cmuxPaneId, desiredHeight, paneHeight)
       : resizeHudPane(paneId, desiredHeight, paneHeight)
-    if (frame !== lastFrame) {
+    const viewport = `${width}x${String(process.stdout.rows ?? '')}`
+    const viewportChanged = viewport !== lastViewport
+    if (frame !== lastFrame || viewportChanged) {
       lastFrame = frame
-      process.stdout.write(`\u001B[?25l\u001B[H${lines.map(line => `\u001B[2K${line}`).join('\n')}\u001B[J`)
+      lastViewport = viewport
+      const clear = viewportChanged ? '\u001B[2J\u001B[H' : '\u001B[H'
+      process.stdout.write(`\u001B[?25l${clear}${lines.map(line => `\u001B[2K${line}`).join('\n')}\u001B[J`)
     }
   }
 

@@ -6,6 +6,14 @@ export type PaneResizeRunner = (args: string[]) => { status: number | null }
 export const INITIAL_HUD_PANE_HEIGHT = 5
 export const DEFAULT_HUD_MAX_HEIGHT = 30
 
+export function viewportRenderHeight(maximum: number, rows: number | null | undefined): number {
+  const safeMaximum = Math.max(1, Math.round(maximum))
+  if (!rows || !Number.isFinite(rows)) {
+    return safeMaximum
+  }
+  return Math.min(safeMaximum, Math.max(1, Math.floor(rows)))
+}
+
 export function desiredPaneHeight(lineCount: number, maximum: number, minimum = INITIAL_HUD_PANE_HEIGHT): number {
   const safeMaximum = Math.max(minimum, Math.round(maximum))
   return Math.min(safeMaximum, Math.max(minimum, Math.round(lineCount)))

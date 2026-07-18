@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { c as desiredPaneHeight, d as renderHud, f as loadConfig, l as resizeCmuxPane, m as findActiveSession, r as readSessionBinding, s as buildHudState, u as resizeHudPane, y as RolloutParser } from "./session-binding-DNwLo8J8.mjs";
+import { b as RolloutParser, c as desiredPaneHeight, d as viewportRenderHeight, f as renderHud, h as findActiveSession, l as resizeCmuxPane, p as loadConfig, r as readSessionBinding, s as buildHudState, u as resizeHudPane } from "./session-binding-D2aIzZHE.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -60,6 +60,7 @@ async function runRenderCli(args = process.argv.slice(2)) {
 	parser.setFile(currentSessionPath);
 	const startedAt = /* @__PURE__ */ new Date();
 	let lastFrame = "";
+	let lastViewport = "";
 	let paneHeight = null;
 	const paneId = process.env.TMUX_PANE ?? null;
 	const configMtime = () => {
@@ -103,12 +104,14 @@ async function runRenderCli(args = process.argv.slice(2)) {
 		}
 		const rollout = parser.parse();
 		const state = buildHudState(options.cwd, rollout, startedAt, loaded.config, /* @__PURE__ */ new Date());
+		const width = process.stdout.columns || Number(process.env.COLUMNS) || loaded.config.maxWidth || 120;
+		const height = viewportRenderHeight(options.maxHeight, process.stdout.rows);
 		const lines = renderHud({
 			config: loaded.config,
 			state,
 			options: {
-				width: process.stdout.columns || Number(process.env.COLUMNS) || loaded.config.maxWidth || 120,
-				height: options.maxHeight,
+				width,
+				height,
 				color: options.color
 			},
 			now: /* @__PURE__ */ new Date()
@@ -120,9 +123,13 @@ async function runRenderCli(args = process.argv.slice(2)) {
 		}
 		const desiredHeight = desiredPaneHeight(lines.length, options.maxHeight);
 		paneHeight = options.cmuxPaneId ? resizeCmuxPane(options.cmuxPaneId, desiredHeight, paneHeight) : resizeHudPane(paneId, desiredHeight, paneHeight);
-		if (frame !== lastFrame) {
+		const viewport = `${width}x${String(process.stdout.rows ?? "")}`;
+		const viewportChanged = viewport !== lastViewport;
+		if (frame !== lastFrame || viewportChanged) {
 			lastFrame = frame;
-			process.stdout.write(`\u001B[?25l\u001B[H${lines.map((line) => `\u001B[2K${line}`).join("\n")}\u001B[J`);
+			lastViewport = viewport;
+			const clear = viewportChanged ? "\x1B[2J\x1B[H" : "\x1B[H";
+			process.stdout.write(`\u001B[?25l${clear}${lines.map((line) => `\u001B[2K${line}`).join("\n")}\u001B[J`);
 		}
 	};
 	render();
