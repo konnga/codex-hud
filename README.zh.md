@@ -1,5 +1,7 @@
 # Codex HUD
 
+> 🌐 [English](./README.md) | 中文文档
+
 Codex HUD 是面向 OpenAI Codex CLI 的常驻终端 HUD，目标是完整复刻 [Claude HUD](https://github.com/jarrodwatts/claude-hud) 的信息密度与使用体验。
 
 它不修改 Codex 二进制。Codex HUD 在 Codex 输入区下方创建独立 HUD pane，并增量读取 `$CODEX_HOME/sessions/**/rollout-*.jsonl`。在 cmux 中使用原生 split，使 Codex 保留原生滚动与复制；其他终端保留 tmux 兼容 backend。上下文百分比采用 Codex 官方的 12,000 token 基线算法，额度窗口直接使用 Codex 写入的 `used_percent`、`window_minutes` 与 `resets_at`。
@@ -404,7 +406,3 @@ node dist/render-cli.mjs --once --cwd "$PWD" --no-color
 node dist/cli.mjs doctor --json
 node dist/cli.mjs start --detach -- "Reply with exactly HUD-OK"
 ```
-
-## 致谢
-
-布局、配置模型和部分渲染行为基于 Jarrod Watts 的 MIT 许可项目 [claude-hud](https://github.com/jarrodwatts/claude-hud) 进行 Codex 适配。详见 [NOTICE](./NOTICE)。

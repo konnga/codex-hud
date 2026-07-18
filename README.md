@@ -1,5 +1,7 @@
 # Codex HUD
 
+> 🌐 English | [中文文档](./README.zh.md)
+
 Codex HUD is a persistent Claude HUD-style heads-up display for OpenAI Codex CLI. It keeps the official Codex binary unchanged, runs a dedicated terminal pane below the Codex input area, and incrementally reads local rollout JSONL telemetry. In cmux it uses a native split so Codex keeps native scrolling and copying; tmux remains the compatibility backend elsewhere.
 
 ## Full display preview
@@ -203,7 +205,3 @@ node dist/cli.mjs doctor --json
 See [README.zh.md](./README.zh.md) for complete Chinese usage and architecture notes. Inside Codex, use `$codex-hud:setup`, `$codex-hud:configure`, or `$codex-hud:doctor`; all three are also available through `/skills`.
 
 Inside cmux, Codex HUD uses the cmux control socket to create, resize, and close only the HUD surface. Outside an existing tmux client, the compatibility backend creates a private per-launch tmux socket and does not load the user's tmux configuration. Inside tmux, it only creates and later removes the HUD pane without changing user-owned options.
-
-## Attribution
-
-The layout, configuration model, and portions of the rendering behavior are adapted from Jarrod Watts' MIT-licensed [claude-hud](https://github.com/jarrodwatts/claude-hud). See [NOTICE](./NOTICE).
