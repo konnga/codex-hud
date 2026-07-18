@@ -12,6 +12,7 @@ import {
   DEFAULT_HUD_MAX_HEIGHT,
   desiredPaneHeight,
   INITIAL_HUD_PANE_HEIGHT,
+  resizeCmuxPane,
   resizeHudPane,
 } from './runtime/pane-size.js'
 import { readSessionBinding } from './runtime/session-binding.js'
@@ -24,6 +25,8 @@ interface RenderCliOptions {
   sessionPath: string | null
   sessionBindingPath: string | null
   launchedAfter: Date | null
+  allowModifiedSession: boolean
+  cmuxPaneId: string | null
   maxHeight: number
 }
 
@@ -35,6 +38,8 @@ function parseOptions(args: string[]): RenderCliOptions {
     sessionPath: null,
     sessionBindingPath: null,
     launchedAfter: null,
+    allowModifiedSession: false,
+    cmuxPaneId: null,
     maxHeight: Number(process.env.CODEX_HUD_HEIGHT) || DEFAULT_HUD_MAX_HEIGHT,
   }
   for (let index = 0; index < args.length; index += 1) {
@@ -57,6 +62,12 @@ function parseOptions(args: string[]): RenderCliOptions {
     }
     else if (argument === '--no-color') {
       options.color = false
+    }
+    else if (argument === '--allow-modified-session') {
+      options.allowModifiedSession = true
+    }
+    else if (argument === '--cmux-pane' && args[index + 1]) {
+      options.cmuxPaneId = args[++index]
     }
     else if (argument === '--max-height' && args[index + 1]) {
       options.maxHeight = Math.max(
@@ -99,17 +110,18 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
       sessionWatcher?.close()
       sessionWatcher = null
     }
-    if (options.sessionBindingPath && !currentSessionPath && nowMs - lastDiscoveryAt >= 100) {
+    if (!options.sessionPath && !currentSessionPath && nowMs - lastDiscoveryAt >= 250) {
       lastDiscoveryAt = nowMs
-      const bound = readSessionBinding(options.sessionBindingPath)
-      if (bound) {
-        currentSessionPath = bound
-        parser.setFile(currentSessionPath)
-      }
-    }
-    if (!options.sessionPath && !options.sessionBindingPath && !currentSessionPath && nowMs - lastDiscoveryAt >= 250) {
-      lastDiscoveryAt = nowMs
-      const discovered = findActiveSession({ cwd: options.cwd, launchedAfter: options.launchedAfter })
+      const bound = options.sessionBindingPath
+        ? readSessionBinding(options.sessionBindingPath)
+        : null
+      const discovered = bound
+        ? { path: bound }
+        : findActiveSession({
+            cwd: options.cwd,
+            launchedAfter: options.launchedAfter,
+            allowModifiedBeforeLaunch: options.allowModifiedSession,
+          })
       if (discovered?.path !== currentSessionPath) {
         currentSessionPath = discovered?.path ?? null
         parser.setFile(currentSessionPath)
@@ -148,7 +160,9 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
       return
     }
     const desiredHeight = desiredPaneHeight(lines.length, options.maxHeight)
-    paneHeight = resizeHudPane(paneId, desiredHeight, paneHeight)
+    paneHeight = options.cmuxPaneId
+      ? resizeCmuxPane(options.cmuxPaneId, desiredHeight, paneHeight)
+      : resizeHudPane(paneId, desiredHeight, paneHeight)
     if (frame !== lastFrame) {
       lastFrame = frame
       process.stdout.write(`\u001B[?25l\u001B[H${lines.map(line => `\u001B[2K${line}`).join('\n')}\u001B[J`)

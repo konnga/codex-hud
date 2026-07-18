@@ -29,6 +29,16 @@ function recordingRunner(outputs: SpawnSyncReturns<string>[] = []): { runner: Tm
   }
 }
 
+function newSessionOutputs(options: { attached?: boolean, privateSocket?: boolean } = {}): SpawnSyncReturns<string>[] {
+  return [
+    ...(!options.privateSocket ? [result(1)] : []),
+    ...Array.from({ length: 11 }, () => result()),
+    result(0, '%2\n'),
+    result(),
+    ...(options.attached ? [result()] : []),
+  ]
+}
+
 const options = {
   cwd: '/work/my project',
   cliPath: '/opt/codex hud/cli.mjs',
@@ -64,17 +74,14 @@ describe('tmux launcher', () => {
     expect(calls[0].at(-1)).toContain('--max-old-space-size=64')
   })
 
+  it('tells the renderer when a resumed session may modify an older rollout', () => {
+    const { runner, calls } = recordingRunner([result(0, '%9\n')])
+    launchInsideTmux({ ...options, allowModifiedSession: true }, runner)
+    expect(calls[0].at(-1)).toContain('--allow-modified-session')
+  })
+
   it('creates a detached session with Codex and HUD panes', () => {
-    const { runner, calls } = recordingRunner([
-      result(1),
-      result(0),
-      result(0),
-      result(0),
-      result(0),
-      result(0),
-      result(0, '%2\n'),
-      result(0),
-    ])
+    const { runner, calls } = recordingRunner(newSessionOutputs())
     const launched = launchNewTmuxSession({ ...options, env: {} }, runner)
     expect(launched.sessionName).toMatch(/^codex-hud-my-project-/)
     expect(launched.hudPaneId).toBe('%2')
@@ -82,38 +89,32 @@ describe('tmux launcher', () => {
     expect(calls.some(call => call[0] === 'split-window')).toBe(true)
     expect(calls.find(call => call[0] === 'split-window')).toContain('5')
     expect(calls.some(call => call.includes('status') && call.includes('off'))).toBe(true)
-    expect(calls.some(call => call.includes('mouse') && call.includes('on'))).toBe(true)
+    expect(calls).toContainEqual(['set-option', '-t', launched.sessionName!, 'mouse', 'on'])
+    expect(calls).toContainEqual(['set-option', '-t', launched.sessionName!, 'prefix', 'None'])
+    expect(calls).toContainEqual(['set-option', '-t', launched.sessionName!, 'prefix2', 'None'])
+    expect(calls).toContainEqual(['set-option', '-s', 'focus-events', 'on'])
+    expect(calls).toContainEqual(['set-option', '-s', 'extended-keys', 'on'])
+    expect(calls).toContainEqual(['set-option', '-s', 'set-clipboard', 'external'])
+    expect(calls).toContainEqual([
+      'set-window-option',
+      '-t',
+      `${launched.sessionName}:0`,
+      'allow-passthrough',
+      'on',
+    ])
     expect(calls.find(call => call[0] === 'new-session')?.at(-1)).not.toContain('--wait-for-client')
     expect(calls.find(call => call[0] === 'new-session')?.at(-1)).toContain('/tmp/codex-hud-binding.json')
   })
 
   it('attaches the terminal before interactive Codex performs terminal detection', () => {
-    const { runner, calls } = recordingRunner([
-      result(1),
-      result(0),
-      result(0),
-      result(0),
-      result(0),
-      result(0),
-      result(0, '%2\n'),
-      result(0),
-      result(0),
-    ])
+    const { runner, calls } = recordingRunner(newSessionOutputs({ attached: true }))
     launchNewTmuxSession({ ...options, detached: false, sessionPath: undefined, env: {} }, runner)
     expect(calls.find(call => call[0] === 'new-session')?.at(-1)).toContain('--wait-for-client')
     expect(calls.some(call => call[0] === 'attach-session')).toBe(true)
   })
 
   it('starts an isolated tmux server without loading the user tmux config', () => {
-    const { runner, calls } = recordingRunner([
-      result(0),
-      result(0),
-      result(0),
-      result(0),
-      result(0),
-      result(0, '%2\n'),
-      result(0),
-    ])
+    const { runner, calls } = recordingRunner(newSessionOutputs({ privateSocket: true }))
     const launched = launchNewTmuxSession({
       ...options,
       env: {},

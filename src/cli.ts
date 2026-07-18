@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import type { HudBackendPreference } from './runtime/launcher.js'
 import fs from 'node:fs'
 import path from 'node:path'
 // @env node
@@ -10,6 +11,7 @@ import { runInstall, runUninstall } from './commands/install.js'
 import { runSetup } from './commands/setup.js'
 import { loadConfig } from './config/load.js'
 import { getCodexHome, getConfigPath, getHudStateDirectory } from './config/paths.js'
+import { cmuxAvailable, createCmuxRunner, isCmuxEnvironment } from './runtime/cmux.js'
 import { resolveHubCommand } from './runtime/command.js'
 import { launchCodex, runCodexChild } from './runtime/launcher.js'
 import { DEFAULT_HUD_MAX_HEIGHT, INITIAL_HUD_PANE_HEIGHT } from './runtime/pane-size.js'
@@ -35,8 +37,9 @@ Usage:
 HUD options:
   --cwd <path>       Working directory for Codex and the HUD
   --hud-height <n>   HUD pane maximum height (default: 30, fits content)
-  --detach           Start the tmux session without attaching
-  --no-hud           Run Codex directly without tmux`)
+  --detach           Start a background tmux compatibility session
+  --backend <name>   Layout backend: auto, cmux, tmux, or none
+  --no-hud           Run Codex directly without a HUD backend`)
 }
 
 function installedPluginManifest(): string | null {
@@ -67,12 +70,14 @@ function startOptions(args: string[]): {
   height: number
   detached: boolean
   noHud: boolean
+  backend: HudBackendPreference
   codexArgs: string[]
 } {
   let cwd = process.cwd()
   let height = Number(process.env.CODEX_HUD_HEIGHT) || DEFAULT_HUD_MAX_HEIGHT
   let detached = false
   let noHud = false
+  let backend: HudBackendPreference = 'auto'
   const codexArgs: string[] = []
   let passthrough = false
   for (let index = 0; index < args.length; index += 1) {
@@ -96,6 +101,15 @@ function startOptions(args: string[]): {
     else if (argument === '--no-hud') {
       noHud = true
     }
+    else if (argument === '--backend' && args[index + 1]) {
+      const value = args[++index]
+      if (value === 'auto' || value === 'cmux' || value === 'tmux' || value === 'none') {
+        backend = value
+      }
+      else {
+        throw new Error(`Invalid HUD backend: ${value}`)
+      }
+    }
     else {
       codexArgs.push(argument)
     }
@@ -103,7 +117,7 @@ function startOptions(args: string[]): {
   if (shouldBypassHud(args)) {
     noHud = true
   }
-  return { cwd, height, detached, noHud, codexArgs }
+  return { cwd, height, detached, noHud, backend, codexArgs }
 }
 
 async function main(args = process.argv.slice(2)): Promise<void> {
@@ -137,11 +151,24 @@ async function main(args = process.argv.slice(2)): Promise<void> {
     const pluginManifest = installedPluginManifest()
     const installState = path.join(getHudStateDirectory(), 'install.json')
     const codex = findExecutable('codex')
+    const cmux = findExecutable('cmux')
+    const tmux = findExecutable('tmux')
+    const cmuxContext = isCmuxEnvironment()
+    const cmuxHealthy = Boolean(cmux && cmuxContext && cmuxAvailable(createCmuxRunner(cmux)))
+    const backend = process.env.TMUX
+      ? 'tmux'
+      : cmuxContext
+        ? cmuxHealthy ? 'cmux' : 'none'
+        : tmux ? 'tmux' : 'none'
     const cliPath = path.resolve(process.argv[1])
     const report = {
       node: process.version,
       codex,
-      tmux: findExecutable('tmux'),
+      cmux,
+      cmuxContext,
+      cmuxHealthy,
+      tmux,
+      backend,
       cwd,
       configPath: getConfigPath(),
       configValid: config.error === null,
@@ -167,7 +194,9 @@ async function main(args = process.argv.slice(2)): Promise<void> {
     else {
       console.log(`Node: ${report.node}`)
       console.log(`Codex: ${report.codex ?? 'not found'}`)
+      console.log(`cmux: ${report.cmux ?? 'not found'}${report.cmuxContext ? report.cmuxHealthy ? ' (ready)' : ' (socket unavailable)' : ''}`)
       console.log(`tmux: ${report.tmux ?? 'not found'}`)
+      console.log(`Backend: ${report.backend}`)
       console.log(`Config: ${report.configPath}`)
       console.log(`Session: ${report.activeSession ?? 'not found'}`)
       console.log(`Plugin: ${report.pluginManifest ?? 'not installed'}`)
@@ -199,7 +228,7 @@ async function main(args = process.argv.slice(2)): Promise<void> {
   }
   const startArgs = command === 'start' ? args.slice(1) : args
   const options = startOptions(startArgs)
-  const launched = launchCodex(options)
+  const launched = await launchCodex(options)
   if (options.detached && launched.sessionName) {
     console.log('Codex HUD started in the background.')
   }

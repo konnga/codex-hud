@@ -1,5 +1,6 @@
 // @env node
 import fs from 'node:fs'
+import process from 'node:process'
 import { getConfigPath } from '../config/paths.js'
 import { runConfigure } from './configure.js'
 import { runInstall } from './install.js'
@@ -45,5 +46,12 @@ export async function runSetup(args: string[]): Promise<number> {
   if (installExitCode !== 0 || dryRun) {
     return installExitCode
   }
-  return runConfigure(configureArgs(args, hasConfig))
+  const configureExitCode = await runConfigure(configureArgs(args, hasConfig))
+  if (configureExitCode === 0) {
+    process.stdout.write(
+      'Setup complete. The current Codex session cannot gain a HUD pane. '
+      + 'Exit it, run `hash -r` if needed, then start a new `codex` session.\n',
+    )
+  }
+  return configureExitCode
 }

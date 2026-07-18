@@ -52,9 +52,9 @@ export function findNewRootSession(
     })[0] ?? null
 }
 
-export function createSessionBindingPath(cwd: string): string {
+export function createSessionBindingPath(cwd: string, env: NodeJS.ProcessEnv = process.env): string {
   const digest = createHash('sha1').update(normalizedPath(cwd)).digest('hex').slice(0, 12)
-  return path.join(getHudStateDirectory(), 'bindings', `${digest}-${randomUUID()}.json`)
+  return path.join(getHudStateDirectory(env), 'bindings', `${digest}-${randomUUID()}.json`)
 }
 
 export function writeSessionBinding(bindingPath: string, rolloutPath: string): void {
@@ -76,9 +76,9 @@ export function readSessionBinding(bindingPath: string): string | null {
   }
 }
 
-function lockPath(cwd: string): string {
+function lockPath(cwd: string, env: NodeJS.ProcessEnv = process.env): string {
   const digest = createHash('sha1').update(normalizedPath(cwd)).digest('hex')
-  return path.join(getHudStateDirectory(), 'bindings', 'locks', digest)
+  return path.join(getHudStateDirectory(env), 'bindings', 'locks', digest)
 }
 
 function delay(milliseconds: number, signal?: AbortSignal): Promise<void> {
@@ -97,8 +97,11 @@ function delay(milliseconds: number, signal?: AbortSignal): Promise<void> {
   })
 }
 
-export async function acquireSessionDiscoveryLock(cwd: string): Promise<() => void> {
-  const target = lockPath(cwd)
+export async function acquireSessionDiscoveryLock(
+  cwd: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<() => void> {
+  const target = lockPath(cwd, env)
   fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 })
   while (true) {
     try {

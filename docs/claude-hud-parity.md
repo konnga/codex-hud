@@ -2,7 +2,7 @@
 
 Audit baseline: `jarrodwatts/claude-hud` 0.5.0, commit `1a73dd7c1835864e4040781f8c824bbd64d6dc66` (2026-07-16).
 
-Codex HUD reproduces the upstream experience using the data that Codex CLI actually records. Claude Code has a native arbitrary statusline process; Codex currently does not, so the equivalent persistent surface is a managed tmux pane. Codex HUD never invents values for telemetry that Codex does not expose.
+Codex HUD reproduces the upstream experience using the data that Codex CLI actually records. Claude Code has a native arbitrary statusline process; Codex currently does not, so the equivalent persistent surface is a managed terminal pane: a native cmux split when available, with tmux as the compatibility backend. Codex HUD never invents values for telemetry that Codex does not expose.
 
 | Claude HUD capability                   | Codex HUD status                  | Codex behavior                                                                                                                                                                                    |
 | --------------------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -44,7 +44,7 @@ Codex HUD reproduces the upstream experience using the data that Codex CLI actua
 | Ordering, merge groups, colors and bars | Supported                         | Validated ANSI/256/truecolor, safe single-grapheme bars and ANSI-aware clipping.                                                                                                                  |
 | Event-driven refresh and resize         | Supported                         | Watches rollout/config changes, handles `SIGWINCH`, and retains a one-second safety poll.                                                                                                         |
 | Multiple sessions in one cwd            | Supported                         | Each HUD filters by launch timestamp and locks to its first matched root rollout.                                                                                                                 |
-| Native statusline API                   | Adapted                           | Codex has no arbitrary multi-line statusline plugin API; tmux supplies the persistent pane without patching Codex.                                                                                |
+| Native statusline API                   | Adapted                           | Codex has no arbitrary multi-line statusline plugin API; cmux native split or the tmux compatibility backend supplies the persistent pane without patching Codex.                                 |
 | Native session cost                     | Unavailable from Codex            | Codex rollout 0.144.1 exposes tokens and limits but no trustworthy billed cost. `showCost` is retained for config compatibility and renders nothing rather than an invented estimate.             |
 | Routed-provider cost                    | Unavailable from Codex            | Same limitation as native cost.                                                                                                                                                                   |
 | Claude output style                     | Adapted                           | Codex approval, sandbox and collaboration mode are the nearest operational equivalents.                                                                                                           |
@@ -57,4 +57,4 @@ Codex HUD reproduces the upstream experience using the data that Codex CLI actua
 - The HUD never reads or renders user prompts, assistant message bodies, tool output bodies, API keys, or access tokens.
 - Session title support degrades quietly when `sqlite3` is unavailable. Prompt-derived default titles are deliberately suppressed; all rollout-backed fields continue working.
 - `showCost` remains accepted so an upstream-style config does not break, but it is intentionally hidden until Codex provides authoritative cost data.
-- A tmux pane consumes terminal rows, unlike Claude Code's native footer. It starts at 5 rows, then fits the complete rendered content up to the `CODEX_HUD_HEIGHT` / `--hud-height` maximum (default 30 rows).
+- The dedicated pane consumes terminal rows, unlike Claude Code's native footer. It starts at 5 rows, then fits the complete rendered content up to the `CODEX_HUD_HEIGHT` / `--hud-height` maximum (default 30 rows).

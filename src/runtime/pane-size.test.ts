@@ -3,6 +3,7 @@ import {
   DEFAULT_HUD_MAX_HEIGHT,
   desiredPaneHeight,
   INITIAL_HUD_PANE_HEIGHT,
+  resizeCmuxPane,
   resizeHudPane,
 } from './pane-size.js'
 
@@ -26,5 +27,14 @@ describe('adaptive HUD pane sizing', () => {
     expect(run).not.toHaveBeenCalled()
     expect(resizeHudPane('%2', 7, 12, run)).toBe(7)
     expect(run).toHaveBeenCalledWith(['resize-pane', '-t', '%2', '-y', '7'])
+  })
+
+  it('resizes only a cmux HUD pane and suppresses unchanged requests', () => {
+    const run = vi.fn(() => ({ status: 0 }))
+    expect(resizeCmuxPane(null, 7, null, run)).toBeNull()
+    expect(resizeCmuxPane('pane-id', 7, 7, run)).toBe(7)
+    expect(run).not.toHaveBeenCalled()
+    expect(resizeCmuxPane('pane-id', 7, 12, run)).toBe(7)
+    expect(run).toHaveBeenCalledWith(['resize-pane', '-t', 'pane-id', '-y', '7'])
   })
 })

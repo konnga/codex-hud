@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { getConfigPath } from '../config/paths.js'
 import { runSetup } from './setup.js'
 
@@ -32,8 +32,12 @@ function environment(): void {
 describe('codex HUD setup', () => {
   it('uses Full as the first-run configuration in non-interactive setup', async () => {
     environment()
+    const output = vi.spyOn(process.stdout, 'write').mockImplementation(() => true)
 
     expect(await runSetup(['--codex-shim', '--yes'])).toBe(0)
+    expect(output).toHaveBeenCalledWith(expect.stringContaining(
+      'The current Codex session cannot gain a HUD pane',
+    ))
 
     const config = JSON.parse(fs.readFileSync(getConfigPath(), 'utf8'))
     expect(config.display.showTools).toBe(true)

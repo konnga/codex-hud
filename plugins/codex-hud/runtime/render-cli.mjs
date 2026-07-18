@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { c as desiredPaneHeight, d as loadConfig, l as resizeHudPane, p as findActiveSession, r as readSessionBinding, s as buildHudState, u as renderHud, v as RolloutParser } from "./session-binding-BK9swWAW.mjs";
+import { c as desiredPaneHeight, d as renderHud, f as loadConfig, l as resizeCmuxPane, m as findActiveSession, r as readSessionBinding, s as buildHudState, u as resizeHudPane, y as RolloutParser } from "./session-binding-DNwLo8J8.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -29,6 +29,8 @@ function parseOptions(args) {
 		sessionPath: null,
 		sessionBindingPath: null,
 		launchedAfter: null,
+		allowModifiedSession: false,
+		cmuxPaneId: null,
 		maxHeight: Number(process.env.CODEX_HUD_HEIGHT) || 30
 	};
 	for (let index = 0; index < args.length; index += 1) {
@@ -41,6 +43,8 @@ function parseOptions(args) {
 			const value = new Date(args[++index]);
 			options.launchedAfter = Number.isNaN(value.getTime()) ? null : value;
 		} else if (argument === "--no-color") options.color = false;
+		else if (argument === "--allow-modified-session") options.allowModifiedSession = true;
+		else if (argument === "--cmux-pane" && args[index + 1]) options.cmuxPaneId = args[++index];
 		else if (argument === "--max-height" && args[index + 1]) options.maxHeight = Math.max(5, Math.min(30, Number(args[++index]) || 30));
 	}
 	return options;
@@ -74,19 +78,13 @@ async function runRenderCli(args = process.argv.slice(2)) {
 			sessionWatcher?.close();
 			sessionWatcher = null;
 		}
-		if (options.sessionBindingPath && !currentSessionPath && nowMs - lastDiscoveryAt >= 100) {
+		if (!options.sessionPath && !currentSessionPath && nowMs - lastDiscoveryAt >= 250) {
 			lastDiscoveryAt = nowMs;
-			const bound = readSessionBinding(options.sessionBindingPath);
-			if (bound) {
-				currentSessionPath = bound;
-				parser.setFile(currentSessionPath);
-			}
-		}
-		if (!options.sessionPath && !options.sessionBindingPath && !currentSessionPath && nowMs - lastDiscoveryAt >= 250) {
-			lastDiscoveryAt = nowMs;
-			const discovered = findActiveSession({
+			const bound = options.sessionBindingPath ? readSessionBinding(options.sessionBindingPath) : null;
+			const discovered = bound ? { path: bound } : findActiveSession({
 				cwd: options.cwd,
-				launchedAfter: options.launchedAfter
+				launchedAfter: options.launchedAfter,
+				allowModifiedBeforeLaunch: options.allowModifiedSession
 			});
 			if (discovered?.path !== currentSessionPath) {
 				currentSessionPath = discovered?.path ?? null;
@@ -121,7 +119,7 @@ async function runRenderCli(args = process.argv.slice(2)) {
 			return;
 		}
 		const desiredHeight = desiredPaneHeight(lines.length, options.maxHeight);
-		paneHeight = resizeHudPane(paneId, desiredHeight, paneHeight);
+		paneHeight = options.cmuxPaneId ? resizeCmuxPane(options.cmuxPaneId, desiredHeight, paneHeight) : resizeHudPane(paneId, desiredHeight, paneHeight);
 		if (frame !== lastFrame) {
 			lastFrame = frame;
 			process.stdout.write(`\u001B[?25l\u001B[H${lines.map((line) => `\u001B[2K${line}`).join("\n")}\u001B[J`);

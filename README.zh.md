@@ -2,7 +2,7 @@
 
 Codex HUD 是面向 OpenAI Codex CLI 的常驻终端 HUD，目标是完整复刻 [Claude HUD](https://github.com/jarrodwatts/claude-hud) 的信息密度与使用体验。
 
-它不修改 Codex 二进制。Codex HUD 使用 tmux 在 Codex 输入区下方创建独立 HUD pane，并增量读取 `$CODEX_HOME/sessions/**/rollout-*.jsonl`。上下文百分比采用 Codex 官方的 12,000 token 基线算法，额度窗口直接使用 Codex 写入的 `used_percent`、`window_minutes` 与 `resets_at`。
+它不修改 Codex 二进制。Codex HUD 在 Codex 输入区下方创建独立 HUD pane，并增量读取 `$CODEX_HOME/sessions/**/rollout-*.jsonl`。在 cmux 中使用原生 split，使 Codex 保留原生滚动与复制；其他终端保留 tmux 兼容 backend。上下文百分比采用 Codex 官方的 12,000 token 基线算法，额度窗口直接使用 Codex 写入的 `used_percent`、`window_minutes` 与 `resets_at`。
 
 ## 完整展示效果
 
@@ -38,7 +38,7 @@ Codex HUD 是面向 OpenAI Codex CLI 的常驻终端 HUD，目标是完整复刻
 - prompt-cache 倒计时、输出速度、session title/auth、Git 文件统计
 - 外部额度快照读写、事件驱动刷新和同目录多会话隔离
 - HUD pane 根据实际内容自动收缩/增长，不再保留空白行
-- tmux 或 HUD 启动失败时自动降级为原生 Codex，不阻断任何 Codex 命令
+- HUD backend 启动失败时自动降级为原生 Codex，不阻断任何 Codex 命令
 - 项目/认证/Git/Agent 元数据缓存和受限 V8 heap，降低空闲资源占用
 
 逐项兼容审计见 [Claude HUD 功能对照表](./docs/claude-hud-parity.md)。其中 Claude 专属且 Codex 没有权威数据源的项目（例如 billed cost、advisor）会明确标注，不会用猜测值冒充官方遥测。
@@ -49,7 +49,7 @@ Codex HUD 是面向 OpenAI Codex CLI 的常驻终端 HUD，目标是完整复刻
 
 - Node.js 20 或更高版本
 - OpenAI Codex CLI，并确保官方 `codex` 命令可以正常运行
-- tmux
+- cmux 0.64 或更高版本，或者作为兼容 backend 的 tmux
 - 从源码构建时需要 pnpm 10
 
 常见系统可以这样安装 tmux：
@@ -65,7 +65,7 @@ sudo apt install tmux
 sudo pacman -S tmux
 ```
 
-tmux 不可用时，Codex HUD 会自动运行原生 Codex，不会阻断命令，但不会显示 HUD。
+在 cmux 中不需要安装 tmux。其他终端使用 tmux 兼容 backend；没有可用 backend 时，Codex HUD 会运行原生 Codex，不会阻断命令，但不会显示 HUD。
 
 ## 推荐安装（Codex 插件）
 
@@ -108,10 +108,21 @@ $codex-hud:setup
 
 也可以输入 `/skills`，然后选择 Codex HUD 的 setup Skill。setup 会安装受管启动器，以 Full 为首次配置基线，并引导选择需要显示的字段。
 
+> **当前会话不会立即出现 HUD。** setup 只负责安装启动器和写入配置，无法把 cmux/tmux HUD pane 注入已经运行的 Codex TUI。必须退出当前 Codex，并通过新的 `codex` 或 `codex-hud` 进程启动 HUD。
+
 setup 完成后退出并重新启动 Codex：
 
 ```bash
 hash -r
+codex
+```
+
+`hash -r` 只刷新当前 shell 缓存的命令路径，不会重新加载正在运行的 Codex 会话。cmux 用户不需要安装 tmux；其他终端可以安装 tmux 兼容 backend：
+
+```bash
+brew install tmux
+hash -r
+tmux -V
 codex
 ```
 
@@ -217,6 +228,8 @@ codex-hud --no-hud -- --model gpt-5.5
 
 ```bash
 codex-hud --cwd /path/to/project --hud-height 12
+codex-hud --backend cmux
+codex-hud --backend tmux
 ```
 
 单次查看当前 HUD 的纯文本渲染：
@@ -285,7 +298,11 @@ codex-hud configure --layout compact --language zh-Hans
 codex-hud configure --preset full
 ```
 
-配置保存后，正在运行的 HUD 会监听配置目录并在当前 Codex 会话中自动刷新，无需重启 Codex。
+配置保存后，**已经存在 HUD pane** 的会话会监听配置目录并自动刷新，无需重启 Codex。配置热更新不能为未经过 Codex HUD launcher 启动的现有会话创建 HUD pane；这种情况仍然需要退出并重新启动 Codex。
+
+默认 `auto` backend 选择顺序是：交互式 cmux surface 且 control socket 健康时使用 cmux 原生 split；已经位于用户 tmux 中时使用该 tmux；其他终端使用私有 tmux 兼容 backend。cmux socket 异常时会直接运行原生 Codex，不会静默回退到 tmux。可以使用 `--backend cmux|tmux|none` 显式覆盖。
+
+cmux backend 让 Codex 保持在原 surface，只在下方创建不抢焦点的 HUD split，因此保留原生 scrollback、选择和复制。tmux backend 无法提供完全一致的终端原生语义；在用户自己的 tmux 中启动时，Codex HUD 不修改其 tmux 选项。
 
 常用环境变量：
 
@@ -318,6 +335,7 @@ codex-hud render --once --cwd "$PWD" --no-color
 常见情况：
 
 - `tmux: not found`：安装 tmux 后重新启动 Codex。
+- setup 成功但当前会话没有 HUD：这是正常行为；退出当前 Codex，再运行 `codex` 或 `codex-hud`。
 - `Session: not found`：确保 Codex 与 doctor 使用相同的真实项目目录。
 - 安装后命令仍指向旧路径：运行 `hash -r` 或打开新终端。
 - 需要临时恢复原生行为：使用 `codex --no-hud`。
@@ -358,13 +376,13 @@ plugins/codex-hud/
 
 插件 runtime 会在 `pnpm build` 后同步到 `plugins/codex-hud/runtime/`。
 
-在普通终端启动时，Codex HUD 会为每次运行创建独立的私有 tmux socket，并且不加载用户的 tmux 配置。已经位于 tmux 中时，只创建并在退出时删除 HUD pane，不修改用户 session、server、mouse、status 或快捷键设置。
+在 cmux 中，Codex HUD 通过 control socket 只创建、调整和关闭 HUD surface。普通非 cmux 终端使用私有 tmux socket，并且不加载用户 tmux 配置。已经位于 tmux 中时，只创建并在退出时删除 HUD pane，不修改用户选项。
 
-## 为什么使用 tmux
+## 为什么使用独立 pane
 
-Claude Code 提供可执行自定义 statusline renderer；Codex CLI 当前只提供固定字段的 `tui.status_line`，插件不能直接注入任意多行 TUI footer。Codex HUD 因此使用独立 tmux pane，保持官方 Codex 二进制不变，同时支持工具、Agent 和任务活动等多行信息。
+Claude Code 提供可执行自定义 statusline renderer；Codex CLI 当前只提供固定字段的 `tui.status_line`，插件不能直接注入任意多行 TUI footer。Codex HUD 因此使用独立 pane：cmux 中使用原生 split，其他环境使用 tmux 兼容 backend，同时保持官方 Codex 二进制不变。
 
-HUD 是纯附加层：tmux 不可用、pane 创建失败或 renderer 异常时，启动器会直接运行官方 Codex 并保留原始参数与退出码。Full 预设默认聚焦日常信息；系统内存、配置计数、Session ID、开始日期和详细 Token 等诊断字段仍可在配置中单独开启。
+HUD 是纯附加层：backend 不可用、pane 创建失败或 renderer 异常时，启动器会直接运行官方 Codex 并保留原始参数与退出码。Full 预设默认聚焦日常信息；系统内存、配置计数、Session ID、开始日期和详细 Token 等诊断字段仍可在配置中单独开启。
 
 ## 隐私与安全
 

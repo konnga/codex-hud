@@ -1,6 +1,6 @@
 # Codex HUD
 
-Codex HUD is a persistent Claude HUD-style heads-up display for OpenAI Codex CLI. It keeps the official Codex binary unchanged, runs a dedicated tmux pane below the Codex input area, and incrementally reads local rollout JSONL telemetry.
+Codex HUD is a persistent Claude HUD-style heads-up display for OpenAI Codex CLI. It keeps the official Codex binary unchanged, runs a dedicated terminal pane below the Codex input area, and incrementally reads local rollout JSONL telemetry. In cmux it uses a native split so Codex keeps native scrolling and copying; tmux remains the compatibility backend elsewhere.
 
 ## Full display preview
 
@@ -32,8 +32,8 @@ Highlights:
 - Reversible launchers and an optional managed `codex` shim
 - Prompt-cache countdown, output speed, session title/auth, Git file stats, and external usage snapshots
 - Event-driven refresh and launch-scoped isolation for concurrent sessions in the same directory
-- Content-fitted tmux pane height with no reserved blank rows
-- Fail-open startup: HUD/tmux failures fall back to untouched official Codex execution
+- Content-fitted cmux/tmux pane height with no reserved blank rows
+- Fail-open startup: HUD backend failures fall back to untouched official Codex execution
 - Cached collectors and a bounded renderer heap for lower idle resource usage
 
 See the audited [Claude HUD parity matrix](./docs/claude-hud-parity.md) for every upstream capability and the exact fallback used when Codex has no equivalent telemetry.
@@ -42,10 +42,10 @@ See the audited [Claude HUD parity matrix](./docs/claude-hud-parity.md) for ever
 
 - Node.js 20 or newer
 - A working official OpenAI Codex CLI installation
-- tmux
+- cmux 0.64 or newer for native scrolling/copying, or tmux as a compatibility backend
 - pnpm 10 when building from source
 
-Install tmux with `brew install tmux` on macOS, `sudo apt install tmux` on Debian/Ubuntu, or the equivalent command for your platform. If tmux is unavailable, Codex HUD safely runs official Codex without the HUD.
+Inside cmux, no tmux installation is required. Outside cmux, install tmux with `brew install tmux` on macOS, `sudo apt install tmux` on Debian/Ubuntu, or the equivalent command for your platform. If no usable backend is available, Codex HUD safely runs official Codex without the HUD.
 
 ## Recommended plugin installation
 
@@ -73,10 +73,14 @@ $codex-hud:setup
 
 You can also open `/skills` and select the Codex HUD setup Skill. Setup installs the managed launchers, starts first-time configuration from Full, and guides you through the visible fields. Then restart Codex:
 
+> **The current Codex session will not gain a HUD immediately.** Setup installs launchers and writes configuration, but it cannot inject a cmux/tmux pane into an already-running Codex TUI. Exit the current session and start a new `codex` or `codex-hud` process.
+
 ```bash
 hash -r
 codex
 ```
+
+`hash -r` only refreshes command-path caching in the shell; it does not reload an active Codex process. cmux users do not need tmux; other terminals need tmux for the compatibility backend.
 
 In short: add the marketplace, install the plugin, run the setup Skill, and restart Codex.
 
@@ -111,7 +115,7 @@ Use `node dist/cli.mjs setup` without `--codex-shim` if you do not want to repla
 
 The managed shim transparently passes non-interactive commands such as `codex plugin`, `exec`, `login`, `mcp`, `completion`, and `--version` to the official binary; only interactive TUI sessions receive a HUD pane.
 
-The HUD is an optional decoration layer. If tmux or HUD startup fails, Codex HUD runs the official Codex binary directly with the same arguments and propagates its exit code. The pane starts at five rows and then fits the rendered content up to the configured maximum height.
+The HUD is an optional decoration layer. If the selected backend or HUD startup fails, Codex HUD runs the official Codex binary directly with the same arguments and propagates its exit code. The pane starts at five rows and then fits the rendered content up to the configured maximum height.
 
 ## Daily usage
 
@@ -129,6 +133,8 @@ Without the shim:
 ```bash
 codex-hud
 codex-hud -- --model gpt-5.5
+codex-hud --backend cmux
+codex-hud --backend tmux
 ```
 
 Temporarily bypass the HUD or inspect a single rendered frame:
@@ -156,9 +162,13 @@ codex-hud configure --status --json
 codex-hud configure --enable tools,skills,agents --disable memory,speed --yes
 ```
 
-Selectable names are `git`, `usage`, `promptCache`, `tools`, `skills`, `mcp`, `agents`, `todos`, `goal`, `configCounts`, `auth`, `memory`, `duration`, `speed`, `sessionName`, `sessionTokens`, and `compactions`. Saved changes are reloaded by the running HUD without restarting Codex.
+Selectable names are `git`, `usage`, `promptCache`, `tools`, `skills`, `mcp`, `agents`, `todos`, `goal`, `configCounts`, `auth`, `memory`, `duration`, `speed`, `sessionName`, `sessionTokens`, and `compactions`. Saved changes are reloaded by sessions that already have a HUD pane. Hot reload cannot add a HUD pane to an existing Codex process that was started without the Codex HUD launcher.
 
 Configuration lives at `${CODEX_HOME:-~/.codex}/codex-hud/config.json`.
+
+Backend selection defaults to `auto`: native cmux split when an interactive cmux surface and healthy control socket are available; the user's existing tmux session when already inside tmux; otherwise a private tmux compatibility session. A broken cmux socket falls back to native Codex without a HUD instead of silently wrapping Codex in tmux. Use `--backend cmux|tmux|none` to override the automatic choice.
+
+The cmux backend leaves Codex in the original surface and creates only the HUD as a new unfocused bottom split, preserving native scrollback, selection, and copying. The tmux backend cannot provide identical terminal-native semantics. Inside a user-owned tmux session, Codex HUD does not change that session's tmux options.
 
 ## Diagnostics and uninstall
 
@@ -192,7 +202,7 @@ node dist/cli.mjs doctor --json
 
 See [README.zh.md](./README.zh.md) for complete Chinese usage and architecture notes. Inside Codex, use `$codex-hud:setup`, `$codex-hud:configure`, or `$codex-hud:doctor`; all three are also available through `/skills`.
 
-Outside an existing tmux client, Codex HUD creates a private per-launch tmux socket and does not load the user's tmux configuration. Inside tmux, it only creates and later removes the HUD pane without changing session, server, mouse, status, or key-binding options.
+Inside cmux, Codex HUD uses the cmux control socket to create, resize, and close only the HUD surface. Outside an existing tmux client, the compatibility backend creates a private per-launch tmux socket and does not load the user's tmux configuration. Inside tmux, it only creates and later removes the HUD pane without changing user-owned options.
 
 ## Attribution
 

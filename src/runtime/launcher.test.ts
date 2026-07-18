@@ -42,6 +42,10 @@ function fixture(tmuxSource?: string): { cwd: string, env: NodeJS.ProcessEnv, ou
       PATH: bin,
       CODEX_HOME: path.join(root, 'codex-home'),
       CODEX_HUD_CODEX_BIN: codex,
+      CMUX_SURFACE_ID: '',
+      CMUX_WORKSPACE_ID: '',
+      TMUX: '',
+      TMUX_PANE: '',
     },
   }
 }
@@ -70,24 +74,24 @@ describe('non-interfering launcher', () => {
     expect(pauses).toEqual([50, 50])
   })
 
-  it('runs official Codex directly when tmux is unavailable', () => {
+  it('runs official Codex directly when tmux is unavailable', async () => {
     const { cwd, env, output } = fixture()
-    const result = launchCodex({ cwd, env, codexArgs: ['--model', 'gpt-test'], height: 8, detached: false, noHud: false })
+    const result = await launchCodex({ cwd, env, codexArgs: ['--model', 'gpt-test'], height: 8, detached: false, noHud: false })
     expect(result).toMatchObject({ hudPaneId: null, sessionName: null, exitCode: 23 })
     expect(fs.readFileSync(output, 'utf8')).toBe('--model\ngpt-test\n')
   })
 
-  it('runs official Codex directly when tmux cannot create the HUD pane', () => {
+  it('runs official Codex directly when tmux cannot create the HUD pane', async () => {
     const { cwd, env, output } = fixture('exit 1')
     env.TMUX = '/tmp/tmux'
     env.TMUX_PANE = '%1'
-    const result = launchCodex({ cwd, env, codexArgs: ['resume', '--last'], height: 8, detached: false, noHud: false })
+    const result = await launchCodex({ cwd, env, codexArgs: ['resume', '--last'], height: 8, detached: false, noHud: false })
     expect(result.exitCode).toBe(23)
     expect(result.hudPaneId).toBeNull()
     expect(fs.readFileSync(output, 'utf8')).toBe('resume\n--last\n')
   })
 
-  it('uses a launch-private tmux socket outside an existing tmux session', () => {
+  it('uses a launch-private tmux socket outside an existing tmux session', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-private-tmux-'))
     directories.push(root)
     const log = path.join(root, 'tmux-args.txt')
@@ -98,7 +102,7 @@ describe('non-interfering launcher', () => {
     ].join('\n'))
     env.CODEX_HOME = path.join(root, 'codex-home')
 
-    const launched = launchCodex({ cwd, env, codexArgs: [], height: 8, detached: true, noHud: false })
+    const launched = await launchCodex({ cwd, env, codexArgs: [], height: 8, detached: true, noHud: false })
     const calls = fs.readFileSync(log, 'utf8').trim().split('\n')
     expect(launched.socketPath).toMatch(/codex-home\/codex-hud\/tmux\/.+\.sock$/)
     expect(fs.statSync(path.dirname(launched.socketPath!)).mode & 0o777).toBe(0o700)
@@ -107,13 +111,66 @@ describe('non-interfering launcher', () => {
     expect(calls.some(call => call.includes('has-session'))).toBe(false)
   })
 
-  it('falls back to official Codex when the private tmux socket cannot be created', () => {
+  it('uses a native cmux split without wrapping Codex in tmux', async () => {
+    const { cwd, env, output } = fixture()
+    const log = path.join(cwd, 'cmux-args.txt')
+    executable(path.join(cwd, 'bin'), 'cmux', [
+      `printf '%s\n' "$*" >> '${log}'`,
+      `case " $* " in *" new-split "*) printf '%s\n' '{"workspace_id":"workspace-id","pane_id":"pane-id","surface_id":"surface-id"}' ;; esac`,
+      'exit 0',
+    ].join('\n'))
+    env.CMUX_WORKSPACE_ID = 'workspace-id'
+    env.CMUX_SURFACE_ID = 'source-surface-id'
+
+    const launched = await launchCodex({
+      cwd,
+      env,
+      codexArgs: [],
+      height: 8,
+      detached: false,
+      noHud: false,
+    })
+
+    expect(launched).toMatchObject({ backend: 'cmux', cmuxSurfaceId: 'surface-id', exitCode: 23 })
+    expect(fs.readFileSync(output, 'utf8')).toBe('\n')
+    const calls = fs.readFileSync(log, 'utf8')
+    expect(calls).toContain('ping')
+    expect(calls).toContain('new-split down')
+    expect(calls).toContain('send --workspace workspace-id --surface surface-id')
+    expect(calls).toContain('close-surface --workspace workspace-id --surface surface-id')
+    expect(calls).not.toContain('tmux')
+  })
+
+  it('keeps Codex native when the cmux control socket is unavailable', async () => {
+    const { cwd, env, output } = fixture()
+    const tmuxMarker = path.join(cwd, 'tmux-used.txt')
+    executable(path.join(cwd, 'bin'), 'tmux', `printf 'tmux-used\n' >> '${tmuxMarker}'`)
+    executable(path.join(cwd, 'bin'), 'cmux', 'exit 1')
+    env.CMUX_WORKSPACE_ID = 'workspace-id'
+    env.CMUX_SURFACE_ID = 'surface-id'
+
+    const launched = await launchCodex({
+      cwd,
+      env,
+      codexArgs: [],
+      height: 8,
+      detached: false,
+      noHud: false,
+    })
+
+    expect(launched.backend).toBe('none')
+    expect(launched.exitCode).toBe(23)
+    expect(fs.readFileSync(output, 'utf8')).toBe('\n')
+    expect(fs.existsSync(tmuxMarker)).toBe(false)
+  })
+
+  it('falls back to official Codex when the private tmux socket cannot be created', async () => {
     const { cwd, env, output } = fixture('exit 0')
     const blockedHome = path.join(cwd, 'blocked-codex-home')
     fs.writeFileSync(blockedHome, 'not a directory')
     env.CODEX_HOME = blockedHome
 
-    const launched = launchCodex({
+    const launched = await launchCodex({
       cwd,
       env,
       codexArgs: ['resume', '--last'],

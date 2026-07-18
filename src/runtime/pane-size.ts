@@ -26,3 +26,19 @@ export function resizeHudPane(
   const result = runner(['resize-pane', '-t', paneId, '-y', String(desiredHeight)])
   return result.status === 0 ? desiredHeight : previousHeight
 }
+
+export function resizeCmuxPane(
+  paneId: string | null,
+  desiredHeight: number,
+  previousHeight: number | null,
+  runner: PaneResizeRunner = args => spawnSync('cmux', args, { stdio: 'ignore' }),
+): number | null {
+  if (!paneId) {
+    return null
+  }
+  if (previousHeight === desiredHeight) {
+    return previousHeight
+  }
+  const result = runner(['resize-pane', '-t', paneId, '-y', String(desiredHeight)])
+  return result.status === 0 ? desiredHeight : previousHeight
+}

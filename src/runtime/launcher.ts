@@ -5,6 +5,14 @@ import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
+import { getCodexHome } from '../config/paths.js'
+import {
+  closeCmuxHud,
+  cmuxAvailable,
+  createCmuxRunner,
+  isCmuxEnvironment,
+  launchCmuxHud,
+} from './cmux.js'
 import { findExecutable } from './process.js'
 import {
   acquireSessionDiscoveryLock,
@@ -34,6 +42,15 @@ const CODEX_OPTIONS_WITH_VALUES = new Set([
   '--sandbox',
 ])
 
+function removeFile(filePath: string): void {
+  try {
+    fs.rmSync(filePath, { force: true })
+  }
+  catch {
+    // The parent path may have become unavailable during fallback cleanup.
+  }
+}
+
 export function isResumeInvocation(args: string[]): boolean {
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index]
@@ -57,7 +74,16 @@ export interface LaunchOptions {
   height: number
   detached: boolean
   noHud: boolean
+  backend?: HudBackendPreference
   env?: NodeJS.ProcessEnv
+}
+
+export type HudBackendPreference = 'auto' | 'cmux' | 'tmux' | 'none'
+export type HudBackend = Exclude<HudBackendPreference, 'auto'>
+
+export interface LaunchResult extends TmuxLaunchResult {
+  backend: HudBackend
+  cmuxSurfaceId?: string | null
 }
 
 export function runtimePaths(): { cliPath: string, renderCliPath: string } {
@@ -71,27 +97,94 @@ export function runtimePaths(): { cliPath: string, renderCliPath: string } {
   }
 }
 
-export function launchCodex(options: LaunchOptions): TmuxLaunchResult {
+export async function launchCodex(options: LaunchOptions): Promise<LaunchResult> {
   const env = options.env ?? process.env
+  const backend = options.backend ?? 'auto'
   const codex = findExecutable('codex', env)
   if (!codex) {
     throw new Error('Codex executable not found. Install @openai/codex or set CODEX_HUD_CODEX_BIN.')
   }
-  const runDirect = (): TmuxLaunchResult => {
+  const runDirect = (): LaunchResult => {
     const result = spawnSync(codex, options.codexArgs, { cwd: options.cwd, env, stdio: 'inherit' })
-    return { sessionName: null, hudPaneId: null, socketPath: null, exitCode: result.status ?? 1 }
+    return {
+      backend: 'none',
+      sessionName: null,
+      hudPaneId: null,
+      socketPath: null,
+      exitCode: result.status ?? 1,
+    }
   }
-  if (options.noHud) {
+  if (options.noHud || backend === 'none') {
     return runDirect()
   }
+  const paths = runtimePaths()
+  const launchedAfter = new Date()
+  const bindingPath = createSessionBindingPath(options.cwd, env)
+  const allowModifiedSession = isResumeInvocation(options.codexArgs)
+
+  if (!env.TMUX && !options.detached && (backend === 'auto' || backend === 'cmux') && isCmuxEnvironment(env)) {
+    const cmux = findExecutable('cmux', env)
+    if (!cmux) {
+      process.stderr.write('Codex HUD: cmux is unavailable; starting Codex without the HUD.\n')
+      return runDirect()
+    }
+    const runner = createCmuxRunner(cmux, env)
+    if (!cmuxAvailable(runner)) {
+      process.stderr.write('Codex HUD: cmux control socket is unavailable; starting Codex without the HUD.\n')
+      return runDirect()
+    }
+    let hud
+    try {
+      hud = launchCmuxHud({
+        cwd: options.cwd,
+        renderCliPath: paths.renderCliPath,
+        launchedAfter,
+        bindingPath,
+        maximumHeight: options.height,
+        allowModifiedSession,
+        env,
+      }, runner)
+    }
+    catch (error) {
+      removeFile(bindingPath)
+      const message = error instanceof Error ? error.message : String(error)
+      process.stderr.write(`Codex HUD: cmux HUD startup failed (${message}); starting Codex without the HUD.\n`)
+      return runDirect()
+    }
+    try {
+      const exitCode = await runCodexChild(
+        options.codexArgs,
+        null,
+        false,
+        options.cwd,
+        bindingPath,
+        env,
+      )
+      return {
+        backend: 'cmux',
+        sessionName: null,
+        hudPaneId: null,
+        socketPath: null,
+        cmuxSurfaceId: hud.surfaceId,
+        exitCode,
+      }
+    }
+    finally {
+      closeCmuxHud(hud, runner)
+      removeFile(bindingPath)
+    }
+  }
+
+  if (backend === 'cmux') {
+    process.stderr.write('Codex HUD: cmux backend requires an interactive cmux surface; starting Codex without the HUD.\n')
+    return runDirect()
+  }
+
   const tmux = findExecutable('tmux', env)
   if (!tmux) {
     process.stderr.write('Codex HUD: tmux is unavailable; starting Codex without the HUD.\n')
     return runDirect()
   }
-  const paths = runtimePaths()
-  const launchedAfter = new Date()
-  const bindingPath = createSessionBindingPath(options.cwd)
   let socketPath: string | null = null
   try {
     socketPath = env.TMUX ? null : createPrivateTmuxSocketPath(env)
@@ -104,6 +197,7 @@ export function launchCodex(options: LaunchOptions): TmuxLaunchResult {
       detached: options.detached,
       launchedAfter,
       bindingPath,
+      allowModifiedSession,
       socketPath,
       env,
     }
@@ -123,16 +217,16 @@ export function launchCodex(options: LaunchOptions): TmuxLaunchResult {
       if (hud.hudPaneId) {
         runner.run(['kill-pane', '-t', hud.hudPaneId])
       }
-      fs.rmSync(bindingPath, { force: true })
-      return { ...hud, exitCode: result.status ?? 1 }
+      removeFile(bindingPath)
+      return { ...hud, backend: 'tmux', exitCode: result.status ?? 1 }
     }
     const launched = launchNewTmuxSession(tmuxOptions, runner)
-    return launched
+    return { ...launched, backend: 'tmux' }
   }
   catch (error) {
-    fs.rmSync(bindingPath, { force: true })
+    removeFile(bindingPath)
     if (socketPath) {
-      fs.rmSync(socketPath, { force: true })
+      removeFile(socketPath)
     }
     const message = error instanceof Error ? error.message : String(error)
     process.stderr.write(`Codex HUD: HUD startup failed (${message}); starting Codex directly.\n`)
@@ -146,18 +240,20 @@ export async function runCodexChild(
   waitForClient = false,
   cwd = process.cwd(),
   bindingPath: string | null = null,
+  env: NodeJS.ProcessEnv = process.env,
 ): Promise<number> {
-  const codex = findExecutable('codex')
+  const codex = findExecutable('codex', env)
   if (!codex) {
     return 127
   }
   if (waitForClient && sessionName && process.env.TMUX) {
     waitForTmuxClient(sessionName)
   }
-  const release = bindingPath ? await acquireSessionDiscoveryLock(cwd) : null
-  const snapshot = bindingPath ? snapshotRootSessions(cwd) : null
+  const codexHome = getCodexHome(env)
+  const release = bindingPath ? await acquireSessionDiscoveryLock(cwd, env) : null
+  const snapshot = bindingPath ? snapshotRootSessions(cwd, codexHome) : null
   const allowModifiedSession = isResumeInvocation(args)
-  const child = spawn(codex, args, { cwd, stdio: 'inherit', env: process.env })
+  const child = spawn(codex, args, { cwd, stdio: 'inherit', env })
   const discoveryController = new AbortController()
   let childExited = false
   const exitCodePromise = new Promise<number>((resolve) => {
@@ -174,8 +270,8 @@ export async function runCodexChild(
       let rolloutPath = await waitForNewRootSession(
         cwd,
         snapshot,
-        undefined,
-        undefined,
+        codexHome,
+        allowModifiedSession ? 10_000 : 1_000,
         discoveryController.signal,
         allowModifiedSession,
       )
@@ -183,7 +279,7 @@ export async function runCodexChild(
         rolloutPath = await waitForNewRootSession(
           cwd,
           snapshot,
-          undefined,
+          codexHome,
           250,
           undefined,
           allowModifiedSession,

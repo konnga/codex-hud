@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { _ as getLegacyStateDirectory, a as waitForNewRootSession, d as loadConfig, f as DEFAULT_CONFIG, g as getHudStateDirectory, h as getConfigPath, i as snapshotRootSessions, m as getCodexHome, n as createSessionBindingPath, o as writeSessionBinding, p as findActiveSession, s as buildHudState, t as acquireSessionDiscoveryLock, u as renderHud, v as RolloutParser } from "./session-binding-BK9swWAW.mjs";
+import { _ as getHudStateDirectory, a as waitForNewRootSession, d as renderHud, f as loadConfig, g as getConfigPath, h as getCodexHome, i as snapshotRootSessions, m as findActiveSession, n as createSessionBindingPath, o as writeSessionBinding, p as DEFAULT_CONFIG, s as buildHudState, t as acquireSessionDiscoveryLock, v as getLegacyStateDirectory, y as RolloutParser } from "./session-binding-DNwLo8J8.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import process$1, { stdin, stdout } from "node:process";
@@ -1745,7 +1745,122 @@ async function runSetup(args) {
 	const hasConfig = fs.existsSync(getConfigPath());
 	const installExitCode = runInstall([...args.includes("--codex-shim") ? ["--codex-shim"] : [], ...dryRun ? ["--dry-run"] : []]);
 	if (installExitCode !== 0 || dryRun) return installExitCode;
-	return runConfigure(configureArgs(args, hasConfig));
+	const configureExitCode = await runConfigure(configureArgs(args, hasConfig));
+	if (configureExitCode === 0) process$1.stdout.write("Setup complete. The current Codex session cannot gain a HUD pane. Exit it, run `hash -r` if needed, then start a new `codex` session.\n");
+	return configureExitCode;
+}
+
+//#endregion
+//#region src/runtime/cmux.ts
+function isCmuxEnvironment(env = process$1.env) {
+	return Boolean(env.CMUX_WORKSPACE_ID && env.CMUX_SURFACE_ID);
+}
+function createCmuxRunner(executable, env = process$1.env) {
+	return { run(args) {
+		return spawnSync(executable, args, {
+			encoding: "utf8",
+			env,
+			stdio: [
+				"ignore",
+				"pipe",
+				"pipe"
+			],
+			timeout: 1500
+		});
+	} };
+}
+function cmuxAvailable(runner) {
+	return runner.run(["ping"]).status === 0;
+}
+function ensureSuccess$1(result, action) {
+	if (result.status !== 0) throw new Error(`${action} failed: ${result.stderr || `exit ${String(result.status)}`}`);
+}
+function creationPayload(result) {
+	try {
+		return JSON.parse(result.stdout);
+	} catch {
+		throw new Error("cmux split returned invalid JSON");
+	}
+}
+function requiredId(payload, key) {
+	const value = payload[key];
+	if (typeof value !== "string" || !value) throw new Error(`cmux split did not return ${key}`);
+	return value;
+}
+function rendererCommand(options, paneId) {
+	const args = [
+		"--max-old-space-size=64",
+		"--max-semi-space-size=2",
+		options.renderCliPath,
+		"--cwd",
+		options.cwd,
+		"--launched-after",
+		options.launchedAfter.toISOString(),
+		"--session-binding",
+		options.bindingPath,
+		"--max-height",
+		String(options.maximumHeight),
+		"--cmux-pane",
+		paneId
+	];
+	if (options.allowModifiedSession) args.push("--allow-modified-session");
+	return `exec ${shellCommand(process$1.execPath, args)}\n`;
+}
+function launchCmuxHud(options, runner) {
+	const workspaceId = options.env?.CMUX_WORKSPACE_ID ?? process$1.env.CMUX_WORKSPACE_ID;
+	const sourceSurfaceId = options.env?.CMUX_SURFACE_ID ?? process$1.env.CMUX_SURFACE_ID;
+	if (!workspaceId || !sourceSurfaceId) throw new Error("cmux workspace or surface context is unavailable");
+	const split = runner.run([
+		"--json",
+		"--id-format",
+		"uuids",
+		"new-split",
+		"down",
+		"--workspace",
+		workspaceId,
+		"--surface",
+		sourceSurfaceId,
+		"--focus",
+		"false"
+	]);
+	ensureSuccess$1(split, "cmux new-split");
+	const payload = creationPayload(split);
+	const handle = {
+		workspaceId: typeof payload.workspace_id === "string" && payload.workspace_id ? payload.workspace_id : workspaceId,
+		paneId: requiredId(payload, "pane_id"),
+		surfaceId: requiredId(payload, "surface_id")
+	};
+	try {
+		ensureSuccess$1(runner.run([
+			"resize-pane",
+			"-t",
+			handle.paneId,
+			"-y",
+			String(Math.min(5, options.maximumHeight))
+		]), "cmux resize-pane");
+		ensureSuccess$1(runner.run([
+			"send",
+			"--workspace",
+			handle.workspaceId,
+			"--surface",
+			handle.surfaceId,
+			"--",
+			rendererCommand(options, handle.paneId)
+		]), "cmux send");
+		return handle;
+	} catch (error) {
+		closeCmuxHud(handle, runner);
+		throw error;
+	}
+}
+function closeCmuxHud(handle, runner) {
+	runner.run([
+		"close-surface",
+		"--workspace",
+		handle.workspaceId,
+		"--surface",
+		handle.surfaceId
+	]);
 }
 
 //#endregion
@@ -1805,6 +1920,7 @@ function renderCommand(options) {
 		String(options.height)
 	];
 	if (options.sessionPath) args.push("--session", options.sessionPath);
+	if (options.allowModifiedSession) args.push("--allow-modified-session");
 	return shellCommand(process$1.execPath, args);
 }
 function launchInsideTmux(options, runner = createTmuxRunner(options.env)) {
@@ -1894,6 +2010,45 @@ function launchNewTmuxSession(options, runner = createTmuxRunner(options.env, op
 		"mouse",
 		"on"
 	]);
+	runner.run([
+		"set-option",
+		"-t",
+		sessionName,
+		"prefix",
+		"None"
+	]);
+	runner.run([
+		"set-option",
+		"-t",
+		sessionName,
+		"prefix2",
+		"None"
+	]);
+	runner.run([
+		"set-option",
+		"-s",
+		"focus-events",
+		"on"
+	]);
+	runner.run([
+		"set-option",
+		"-s",
+		"extended-keys",
+		"on"
+	]);
+	runner.run([
+		"set-option",
+		"-s",
+		"set-clipboard",
+		"external"
+	]);
+	runner.run([
+		"set-window-option",
+		"-t",
+		`${sessionName}:0`,
+		"allow-passthrough",
+		"on"
+	]);
 	const split = runner.run([
 		"split-window",
 		"-t",
@@ -1957,6 +2112,11 @@ const CODEX_OPTIONS_WITH_VALUES = /* @__PURE__ */ new Set([
 	"--profile",
 	"--sandbox"
 ]);
+function removeFile(filePath) {
+	try {
+		fs.rmSync(filePath, { force: true });
+	} catch {}
+}
 function isResumeInvocation(args) {
 	for (let index = 0; index < args.length; index += 1) {
 		const argument = args[index];
@@ -1977,12 +2137,14 @@ function runtimePaths() {
 		renderCliPath: path.join(path.dirname(cliPath), "render-cli.mjs")
 	};
 }
-function launchCodex(options) {
+async function launchCodex(options) {
 	const env = options.env ?? process$1.env;
+	const backend = options.backend ?? "auto";
 	const codex = findExecutable("codex", env);
 	if (!codex) throw new Error("Codex executable not found. Install @openai/codex or set CODEX_HUD_CODEX_BIN.");
 	const runDirect = () => {
 		return {
+			backend: "none",
 			sessionName: null,
 			hudPaneId: null,
 			socketPath: null,
@@ -1993,14 +2155,62 @@ function launchCodex(options) {
 			}).status ?? 1
 		};
 	};
-	if (options.noHud) return runDirect();
+	if (options.noHud || backend === "none") return runDirect();
+	const paths = runtimePaths();
+	const launchedAfter = /* @__PURE__ */ new Date();
+	const bindingPath = createSessionBindingPath(options.cwd, env);
+	const allowModifiedSession = isResumeInvocation(options.codexArgs);
+	if (!env.TMUX && !options.detached && (backend === "auto" || backend === "cmux") && isCmuxEnvironment(env)) {
+		const cmux = findExecutable("cmux", env);
+		if (!cmux) {
+			process$1.stderr.write("Codex HUD: cmux is unavailable; starting Codex without the HUD.\n");
+			return runDirect();
+		}
+		const runner = createCmuxRunner(cmux, env);
+		if (!cmuxAvailable(runner)) {
+			process$1.stderr.write("Codex HUD: cmux control socket is unavailable; starting Codex without the HUD.\n");
+			return runDirect();
+		}
+		let hud;
+		try {
+			hud = launchCmuxHud({
+				cwd: options.cwd,
+				renderCliPath: paths.renderCliPath,
+				launchedAfter,
+				bindingPath,
+				maximumHeight: options.height,
+				allowModifiedSession,
+				env
+			}, runner);
+		} catch (error) {
+			removeFile(bindingPath);
+			const message = error instanceof Error ? error.message : String(error);
+			process$1.stderr.write(`Codex HUD: cmux HUD startup failed (${message}); starting Codex without the HUD.\n`);
+			return runDirect();
+		}
+		try {
+			const exitCode = await runCodexChild(options.codexArgs, null, false, options.cwd, bindingPath, env);
+			return {
+				backend: "cmux",
+				sessionName: null,
+				hudPaneId: null,
+				socketPath: null,
+				cmuxSurfaceId: hud.surfaceId,
+				exitCode
+			};
+		} finally {
+			closeCmuxHud(hud, runner);
+			removeFile(bindingPath);
+		}
+	}
+	if (backend === "cmux") {
+		process$1.stderr.write("Codex HUD: cmux backend requires an interactive cmux surface; starting Codex without the HUD.\n");
+		return runDirect();
+	}
 	if (!findExecutable("tmux", env)) {
 		process$1.stderr.write("Codex HUD: tmux is unavailable; starting Codex without the HUD.\n");
 		return runDirect();
 	}
-	const paths = runtimePaths();
-	const launchedAfter = /* @__PURE__ */ new Date();
-	const bindingPath = createSessionBindingPath(options.cwd);
 	let socketPath = null;
 	try {
 		socketPath = env.TMUX ? null : createPrivateTmuxSocketPath(env);
@@ -2013,6 +2223,7 @@ function launchCodex(options) {
 			detached: options.detached,
 			launchedAfter,
 			bindingPath,
+			allowModifiedSession,
 			socketPath,
 			env
 		};
@@ -2038,32 +2249,37 @@ function launchCodex(options) {
 				"-t",
 				hud.hudPaneId
 			]);
-			fs.rmSync(bindingPath, { force: true });
+			removeFile(bindingPath);
 			return {
 				...hud,
+				backend: "tmux",
 				exitCode: result.status ?? 1
 			};
 		}
-		return launchNewTmuxSession(tmuxOptions, runner);
+		return {
+			...launchNewTmuxSession(tmuxOptions, runner),
+			backend: "tmux"
+		};
 	} catch (error) {
-		fs.rmSync(bindingPath, { force: true });
-		if (socketPath) fs.rmSync(socketPath, { force: true });
+		removeFile(bindingPath);
+		if (socketPath) removeFile(socketPath);
 		const message = error instanceof Error ? error.message : String(error);
 		process$1.stderr.write(`Codex HUD: HUD startup failed (${message}); starting Codex directly.\n`);
 		return runDirect();
 	}
 }
-async function runCodexChild(args, sessionName, waitForClient = false, cwd = process$1.cwd(), bindingPath = null) {
-	const codex = findExecutable("codex");
+async function runCodexChild(args, sessionName, waitForClient = false, cwd = process$1.cwd(), bindingPath = null, env = process$1.env) {
+	const codex = findExecutable("codex", env);
 	if (!codex) return 127;
 	if (waitForClient && sessionName && process$1.env.TMUX) waitForTmuxClient(sessionName);
-	const release = bindingPath ? await acquireSessionDiscoveryLock(cwd) : null;
-	const snapshot = bindingPath ? snapshotRootSessions(cwd) : null;
+	const codexHome = getCodexHome(env);
+	const release = bindingPath ? await acquireSessionDiscoveryLock(cwd, env) : null;
+	const snapshot = bindingPath ? snapshotRootSessions(cwd, codexHome) : null;
 	const allowModifiedSession = isResumeInvocation(args);
 	const child = spawn(codex, args, {
 		cwd,
 		stdio: "inherit",
-		env: process$1.env
+		env
 	});
 	const discoveryController = new AbortController();
 	let childExited = false;
@@ -2077,8 +2293,8 @@ async function runCodexChild(args, sessionName, waitForClient = false, cwd = pro
 		child.once("exit", (code) => finish(code ?? 1));
 	});
 	if (bindingPath && snapshot && release) try {
-		let rolloutPath = await waitForNewRootSession(cwd, snapshot, void 0, void 0, discoveryController.signal, allowModifiedSession);
-		if (!rolloutPath && childExited) rolloutPath = await waitForNewRootSession(cwd, snapshot, void 0, 250, void 0, allowModifiedSession);
+		let rolloutPath = await waitForNewRootSession(cwd, snapshot, codexHome, allowModifiedSession ? 1e4 : 1e3, discoveryController.signal, allowModifiedSession);
+		if (!rolloutPath && childExited) rolloutPath = await waitForNewRootSession(cwd, snapshot, codexHome, 250, void 0, allowModifiedSession);
 		if (rolloutPath) writeSessionBinding(bindingPath, rolloutPath);
 	} finally {
 		release();
@@ -2190,8 +2406,9 @@ Usage:
 HUD options:
   --cwd <path>       Working directory for Codex and the HUD
   --hud-height <n>   HUD pane maximum height (default: 30, fits content)
-  --detach           Start the tmux session without attaching
-  --no-hud           Run Codex directly without tmux`);
+  --detach           Start a background tmux compatibility session
+  --backend <name>   Layout backend: auto, cmux, tmux, or none
+  --no-hud           Run Codex directly without a HUD backend`);
 }
 function installedPluginManifest() {
 	const root = path.join(getCodexHome(), "plugins", "cache");
@@ -2216,6 +2433,7 @@ function startOptions(args) {
 	let height = Number(process$1.env.CODEX_HUD_HEIGHT) || 30;
 	let detached = false;
 	let noHud = false;
+	let backend = "auto";
 	const codexArgs = [];
 	let passthrough = false;
 	for (let index = 0; index < args.length; index += 1) {
@@ -2228,7 +2446,11 @@ function startOptions(args) {
 		} else if (argument === "--hud-height" && args[index + 1]) height = Math.max(5, Math.min(30, Number(args[++index]) || 30));
 		else if (argument === "--detach") detached = true;
 		else if (argument === "--no-hud") noHud = true;
-		else codexArgs.push(argument);
+		else if (argument === "--backend" && args[index + 1]) {
+			const value = args[++index];
+			if (value === "auto" || value === "cmux" || value === "tmux" || value === "none") backend = value;
+			else throw new Error(`Invalid HUD backend: ${value}`);
+		} else codexArgs.push(argument);
 	}
 	if (shouldBypassHud(args)) noHud = true;
 	return {
@@ -2236,6 +2458,7 @@ function startOptions(args) {
 		height,
 		detached,
 		noHud,
+		backend,
 		codexArgs
 	};
 }
@@ -2269,11 +2492,20 @@ async function main(args = process$1.argv.slice(2)) {
 		const pluginManifest = installedPluginManifest();
 		const installState = path.join(getHudStateDirectory(), "install.json");
 		const codex = findExecutable("codex");
+		const cmux = findExecutable("cmux");
+		const tmux = findExecutable("tmux");
+		const cmuxContext = isCmuxEnvironment();
+		const cmuxHealthy = Boolean(cmux && cmuxContext && cmuxAvailable(createCmuxRunner(cmux)));
+		const backend = process$1.env.TMUX ? "tmux" : cmuxContext ? cmuxHealthy ? "cmux" : "none" : tmux ? "tmux" : "none";
 		const cliPath = path.resolve(process$1.argv[1]);
 		const report = {
 			node: process$1.version,
 			codex,
-			tmux: findExecutable("tmux"),
+			cmux,
+			cmuxContext,
+			cmuxHealthy,
+			tmux,
+			backend,
 			cwd,
 			configPath: getConfigPath(),
 			configValid: config.error === null,
@@ -2297,7 +2529,9 @@ async function main(args = process$1.argv.slice(2)) {
 		else {
 			console.log(`Node: ${report.node}`);
 			console.log(`Codex: ${report.codex ?? "not found"}`);
+			console.log(`cmux: ${report.cmux ?? "not found"}${report.cmuxContext ? report.cmuxHealthy ? " (ready)" : " (socket unavailable)" : ""}`);
 			console.log(`tmux: ${report.tmux ?? "not found"}`);
+			console.log(`Backend: ${report.backend}`);
 			console.log(`Config: ${report.configPath}`);
 			console.log(`Session: ${report.activeSession ?? "not found"}`);
 			console.log(`Plugin: ${report.pluginManifest ?? "not installed"}`);
@@ -2327,7 +2561,7 @@ async function main(args = process$1.argv.slice(2)) {
 		return;
 	}
 	const options = startOptions(command === "start" ? args.slice(1) : args);
-	const launched = launchCodex(options);
+	const launched = await launchCodex(options);
 	if (options.detached && launched.sessionName) console.log("Codex HUD started in the background.");
 	process$1.exitCode = launched.exitCode;
 }

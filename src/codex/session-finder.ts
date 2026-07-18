@@ -26,6 +26,7 @@ export interface FindSessionOptions {
   cwd: string
   codexHome?: string
   launchedAfter?: Date | null
+  allowModifiedBeforeLaunch?: boolean
   maxAgeMs?: number
   now?: Date
 }
@@ -186,11 +187,13 @@ export function findActiveSession(options: FindSessionOptions): SessionCandidate
   const now = options.now ?? new Date()
   const maxAgeMs = options.maxAgeMs ?? DEFAULT_MAX_AGE_MS
   const launchedAfterMs = options.launchedAfter?.getTime() ?? 0
+  const allowModifiedBeforeLaunch = options.allowModifiedBeforeLaunch ?? true
   const candidates = listSessionCandidates(options.codexHome)
     .filter(candidate => !isSubagentSource(candidate.source))
     .filter(candidate => isWithinProject(candidate.cwd, options.cwd))
     .filter(candidate => candidate.mtimeMs >= now.getTime() - maxAgeMs)
-    .filter(candidate => Math.max(candidate.startTime.getTime(), candidate.mtimeMs) >= launchedAfterMs)
+    .filter(candidate => candidate.startTime.getTime() >= launchedAfterMs
+      || (allowModifiedBeforeLaunch && candidate.mtimeMs >= launchedAfterMs))
     .sort((left, right) => right.mtimeMs - left.mtimeMs)
   return candidates[0] ?? null
 }

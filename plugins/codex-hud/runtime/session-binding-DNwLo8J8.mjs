@@ -548,7 +548,8 @@ function findActiveSession(options) {
 	const now = options.now ?? /* @__PURE__ */ new Date();
 	const maxAgeMs = options.maxAgeMs ?? DEFAULT_MAX_AGE_MS;
 	const launchedAfterMs = options.launchedAfter?.getTime() ?? 0;
-	return listSessionCandidates(options.codexHome).filter((candidate) => !isSubagentSource(candidate.source)).filter((candidate) => isWithinProject(candidate.cwd, options.cwd)).filter((candidate) => candidate.mtimeMs >= now.getTime() - maxAgeMs).filter((candidate) => Math.max(candidate.startTime.getTime(), candidate.mtimeMs) >= launchedAfterMs).sort((left, right) => right.mtimeMs - left.mtimeMs)[0] ?? null;
+	const allowModifiedBeforeLaunch = options.allowModifiedBeforeLaunch ?? true;
+	return listSessionCandidates(options.codexHome).filter((candidate) => !isSubagentSource(candidate.source)).filter((candidate) => isWithinProject(candidate.cwd, options.cwd)).filter((candidate) => candidate.mtimeMs >= now.getTime() - maxAgeMs).filter((candidate) => candidate.startTime.getTime() >= launchedAfterMs || allowModifiedBeforeLaunch && candidate.mtimeMs >= launchedAfterMs).sort((left, right) => right.mtimeMs - left.mtimeMs)[0] ?? null;
 }
 
 //#endregion
@@ -3161,6 +3162,17 @@ function resizeHudPane(paneId, desiredHeight, previousHeight, runner = (args) =>
 		String(desiredHeight)
 	]).status === 0 ? desiredHeight : previousHeight;
 }
+function resizeCmuxPane(paneId, desiredHeight, previousHeight, runner = (args) => spawnSync("cmux", args, { stdio: "ignore" })) {
+	if (!paneId) return null;
+	if (previousHeight === desiredHeight) return previousHeight;
+	return runner([
+		"resize-pane",
+		"-t",
+		paneId,
+		"-y",
+		String(desiredHeight)
+	]).status === 0 ? desiredHeight : previousHeight;
+}
 
 //#endregion
 //#region src/codex/external-usage.ts
@@ -4587,9 +4599,9 @@ function findNewRootSession(cwd, snapshot, codexHome = getCodexHome(), allowModi
 		return left.startTime.getTime() - right.startTime.getTime();
 	})[0] ?? null;
 }
-function createSessionBindingPath(cwd) {
+function createSessionBindingPath(cwd, env = process.env) {
 	const digest = createHash("sha1").update(normalizedPath(cwd)).digest("hex").slice(0, 12);
-	return path.join(getHudStateDirectory(), "bindings", `${digest}-${randomUUID()}.json`);
+	return path.join(getHudStateDirectory(env), "bindings", `${digest}-${randomUUID()}.json`);
 }
 function writeSessionBinding(bindingPath, rolloutPath) {
 	fs.mkdirSync(path.dirname(bindingPath), {
@@ -4608,9 +4620,9 @@ function readSessionBinding(bindingPath) {
 		return null;
 	}
 }
-function lockPath(cwd) {
+function lockPath(cwd, env = process.env) {
 	const digest = createHash("sha1").update(normalizedPath(cwd)).digest("hex");
-	return path.join(getHudStateDirectory(), "bindings", "locks", digest);
+	return path.join(getHudStateDirectory(env), "bindings", "locks", digest);
 }
 function delay(milliseconds, signal) {
 	if (signal?.aborted) return Promise.resolve();
@@ -4625,8 +4637,8 @@ function delay(milliseconds, signal) {
 		signal?.addEventListener("abort", finish, { once: true });
 	});
 }
-async function acquireSessionDiscoveryLock(cwd) {
-	const target = lockPath(cwd);
+async function acquireSessionDiscoveryLock(cwd, env = process.env) {
+	const target = lockPath(cwd, env);
 	fs.mkdirSync(path.dirname(target), {
 		recursive: true,
 		mode: 448
@@ -4665,5 +4677,5 @@ async function waitForNewRootSession(cwd, snapshot, codexHome = getCodexHome(), 
 }
 
 //#endregion
-export { getLegacyStateDirectory as _, waitForNewRootSession as a, desiredPaneHeight as c, loadConfig as d, DEFAULT_CONFIG as f, getHudStateDirectory as g, getConfigPath as h, snapshotRootSessions as i, resizeHudPane as l, getCodexHome as m, createSessionBindingPath as n, writeSessionBinding as o, findActiveSession as p, readSessionBinding as r, buildHudState as s, acquireSessionDiscoveryLock as t, renderHud as u, RolloutParser as v };
-//# sourceMappingURL=session-binding-BK9swWAW.mjs.map
+export { getHudStateDirectory as _, waitForNewRootSession as a, desiredPaneHeight as c, renderHud as d, loadConfig as f, getConfigPath as g, getCodexHome as h, snapshotRootSessions as i, resizeCmuxPane as l, findActiveSession as m, createSessionBindingPath as n, writeSessionBinding as o, DEFAULT_CONFIG as p, readSessionBinding as r, buildHudState as s, acquireSessionDiscoveryLock as t, resizeHudPane as u, getLegacyStateDirectory as v, RolloutParser as y };
+//# sourceMappingURL=session-binding-DNwLo8J8.mjs.map

@@ -77,6 +77,33 @@ describe('session discovery', () => {
       now: new Date('2026-07-16T08:06:00Z'),
     })?.sessionId).toBe('new')
   })
+
+  it('can ignore an older session that was only modified after launch', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-session-'))
+    temporaryDirectories.push(directory)
+    const project = path.join(directory, 'project')
+    fs.mkdirSync(project)
+    writeSession(directory, 'existing', {
+      id: 'existing',
+      timestamp: '2026-07-16T08:00:00Z',
+      cwd: project,
+      source: 'cli',
+    }, new Date('2026-07-16T09:05:00Z'))
+    writeSession(directory, 'launched', {
+      id: 'launched',
+      timestamp: '2026-07-16T09:01:00Z',
+      cwd: project,
+      source: 'cli',
+    }, new Date('2026-07-16T09:02:00Z'))
+
+    expect(findActiveSession({
+      cwd: project,
+      codexHome: directory,
+      launchedAfter: new Date('2026-07-16T09:00:00Z'),
+      allowModifiedBeforeLaunch: false,
+      now: new Date('2026-07-16T09:06:00Z'),
+    })?.sessionId).toBe('launched')
+  })
 })
 
 describe('subagent detection', () => {
