@@ -16,6 +16,7 @@ export const KNOWN_ELEMENTS = new Set<HudElement>([
   'mcp',
   'agents',
   'todos',
+  'turns',
   'sessionTime',
 ])
 

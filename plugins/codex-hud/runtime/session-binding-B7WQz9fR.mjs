@@ -144,6 +144,7 @@ function initialState() {
 		mcpServers: [],
 		todos: [],
 		goal: null,
+		conversationTurns: [],
 		compactCount: 0
 	};
 }
@@ -350,6 +351,33 @@ var RolloutParser = class {
 		if (payload.type === "message" && payload.role === "assistant" && this.state.session) this.state.session.lastResponseAt = timestamp;
 	}
 	onEvent(payload, timestamp) {
+		if (payload.type === "user_message" && typeof payload.message === "string") {
+			const userMessage = payload.message.trim();
+			if (userMessage) {
+				const turnId = payload.turn_id ?? this.state.session?.turnId;
+				this.state.conversationTurns.push({
+					id: turnId ?? `turn-${String(this.state.conversationTurns.length + 1)}`,
+					turnId,
+					startedAt: timestamp,
+					userMessage,
+					assistantMessage: ""
+				});
+			}
+			return;
+		}
+		if (payload.type === "agent_message" && typeof payload.message === "string") {
+			const turn = this.state.conversationTurns.at(-1);
+			const message = payload.message.trim();
+			if (!turn || !message) return;
+			if (payload.phase === "final_answer") {
+				turn.assistantMessage = message;
+				turn.assistantPhase = payload.phase;
+			} else if (turn.assistantPhase !== "final_answer") {
+				turn.assistantMessage = turn.assistantMessage ? `${turn.assistantMessage}\n\n${message}` : message;
+				turn.assistantPhase = payload.phase;
+			}
+			return;
+		}
 		if (payload.type === "token_count") {
 			this.latestTokenUsage = payload.info ?? this.latestTokenUsage;
 			this.state.context = calculateContextUsage(this.latestTokenUsage?.last_token_usage, this.latestTokenUsage?.model_context_window);
@@ -409,6 +437,7 @@ const KNOWN_ELEMENTS = /* @__PURE__ */ new Set([
 	"mcp",
 	"agents",
 	"todos",
+	"turns",
 	"sessionTime"
 ]);
 const MAX_REFRESH_INTERVAL_MS = 6e4;
@@ -567,6 +596,7 @@ const DEFAULT_ELEMENT_ORDER = [
 	"mcp",
 	"agents",
 	"todos",
+	"turns",
 	"sessionTime"
 ];
 const DEFAULT_MERGE_GROUPS = [["context", "usage"]];
@@ -613,6 +643,7 @@ const DEFAULT_CONFIG = {
 		showAgents: false,
 		showTodos: false,
 		showGoal: true,
+		showTurns: true,
 		showSessionName: false,
 		showAuth: false,
 		showAuthUser: false,
@@ -732,6 +763,10 @@ function elementOrder(value) {
 			result.push(element);
 		}
 	}
+	if (result.length > 0 && !seen.has("turns")) {
+		const sessionIndex = result.indexOf("sessionTime");
+		result.splice(sessionIndex >= 0 ? sessionIndex : result.length, 0, "turns");
+	}
 	return result.length > 0 ? result : [...DEFAULT_ELEMENT_ORDER];
 }
 function mergeGroups(value) {
@@ -808,6 +843,7 @@ function validateConfig(value) {
 			showAgents: booleanValue(rawDisplay.showAgents, fallback.display.showAgents),
 			showTodos: booleanValue(rawDisplay.showTodos, fallback.display.showTodos),
 			showGoal: booleanValue(rawDisplay.showGoal, fallback.display.showGoal),
+			showTurns: booleanValue(rawDisplay.showTurns, fallback.display.showTurns),
 			showSessionName: booleanValue(rawDisplay.showSessionName, fallback.display.showSessionName),
 			showAuth: booleanValue(rawDisplay.showAuth, fallback.display.showAuth),
 			showAuthUser: booleanValue(rawDisplay.showAuthUser, fallback.display.showAuthUser),
@@ -2701,7 +2737,9 @@ const MESSAGES = {
 		lastResponse: "Last response",
 		input: "in",
 		cache: "cache",
-		output: "out"
+		output: "out",
+		turns: "Turns",
+		navigate: "click HUD and press n"
 	},
 	"zh-Hans": {
 		context: "上下文",
@@ -2730,7 +2768,9 @@ const MESSAGES = {
 		lastResponse: "最近响应",
 		input: "输入",
 		cache: "缓存",
-		output: "输出"
+		output: "输出",
+		turns: "轮次",
+		navigate: "点击 HUD 后按 n 导航"
 	},
 	"zh-Hant": {
 		context: "上下文",
@@ -2759,7 +2799,9 @@ const MESSAGES = {
 		lastResponse: "最近回應",
 		input: "輸入",
 		cache: "快取",
-		output: "輸出"
+		output: "輸出",
+		turns: "輪次",
+		navigate: "點擊 HUD 後按 n 導航"
 	}
 };
 const ICONS = {
@@ -3021,6 +3063,14 @@ function renderSessionLine(ctx) {
 }
 
 //#endregion
+//#region src/render/turns-line.ts
+function renderTurnsLine(ctx) {
+	if (!ctx.config.display.showTurns || ctx.state.conversationTurns.length === 0) return null;
+	const count = ctx.state.conversationTurns.length;
+	return `${color(`↕ ${message(ctx.config.language, "turns")}`, ctx.config.colors.label, ctx.options.color)}: ${String(count)} · ${message(ctx.config.language, "navigate")}`;
+}
+
+//#endregion
 //#region src/render/usage-line.ts
 function renderWindow(ctx, window) {
 	if (window.percent === null) return null;
@@ -3063,6 +3113,7 @@ function renderElement(ctx, element) {
 		case "mcp": return renderMcpLine(ctx);
 		case "agents": return renderAgentsLine(ctx);
 		case "todos": return renderTodosLine(ctx);
+		case "turns": return renderTurnsLine(ctx);
 		case "sessionTime": return renderSessionLine(ctx);
 		case "promptCache": return renderPromptCacheLine(ctx);
 	}
@@ -3129,7 +3180,8 @@ function compactLines(ctx) {
 		renderSkillsLine(ctx),
 		renderMcpLine(ctx),
 		renderAgentsLine(ctx),
-		renderTodosLine(ctx)
+		renderTodosLine(ctx),
+		renderTurnsLine(ctx)
 	].filter((line) => Boolean(line)).flatMap((line) => line.split("\n"));
 	return [
 		combined,
@@ -4570,6 +4622,7 @@ function buildHudState(cwd, rollout, sessionStart, config, now = /* @__PURE__ */
 		agents: config.display.showAgents ? collectAgentEntries(session) : [],
 		todos: rollout.todos,
 		goal: rollout.goal,
+		conversationTurns: rollout.conversationTurns,
 		compactCount: rollout.compactCount,
 		memory: config.display.showMemoryUsage ? collectMemoryInfo() : null,
 		auth: config.display.showAuth ? collectAuthInfo(usage?.planType ?? null) : null,
@@ -4682,5 +4735,5 @@ async function waitForNewRootSession(cwd, snapshot, codexHome = getCodexHome(), 
 }
 
 //#endregion
-export { getConfigPath as _, waitForNewRootSession as a, RolloutParser as b, desiredPaneHeight as c, viewportRenderHeight as d, renderHud as f, getCodexHome as g, findActiveSession as h, snapshotRootSessions as i, resizeCmuxPane as l, DEFAULT_CONFIG as m, createSessionBindingPath as n, writeSessionBinding as o, loadConfig as p, readSessionBinding as r, buildHudState as s, acquireSessionDiscoveryLock as t, resizeHudPane as u, getHudStateDirectory as v, getLegacyStateDirectory as y };
-//# sourceMappingURL=session-binding-D2aIzZHE.mjs.map
+export { getLegacyStateDirectory as C, getHudStateDirectory as S, loadConfig as _, waitForNewRootSession as a, getCodexHome as b, desiredPaneHeight as c, viewportRenderHeight as d, renderHud as f, sliceAnsi as g, visibleWidth as h, snapshotRootSessions as i, resizeCmuxPane as l, truncateAnsi as m, createSessionBindingPath as n, writeSessionBinding as o, safeText as p, readSessionBinding as r, buildHudState as s, acquireSessionDiscoveryLock as t, resizeHudPane as u, DEFAULT_CONFIG as v, RolloutParser as w, getConfigPath as x, findActiveSession as y };
+//# sourceMappingURL=session-binding-B7WQz9fR.mjs.map

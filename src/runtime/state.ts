@@ -39,6 +39,7 @@ export function buildHudState(
     agents: config.display.showAgents ? collectAgentEntries(session) : [],
     todos: rollout.todos,
     goal: rollout.goal,
+    conversationTurns: rollout.conversationTurns,
     compactCount: rollout.compactCount,
     memory: config.display.showMemoryUsage ? collectMemoryInfo() : null,
     auth: config.display.showAuth ? collectAuthInfo(usage?.planType ?? null) : null,

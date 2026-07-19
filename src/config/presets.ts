@@ -24,6 +24,7 @@ export function createPreset(preset: ConfigPreset): HudConfig {
       showAgents: true,
       showTodos: true,
       showGoal: true,
+      showTurns: true,
       showSessionName: false,
       showAuth: true,
       showAuthUser: true,
@@ -53,6 +54,7 @@ export function createPreset(preset: ConfigPreset): HudConfig {
       showAgents: true,
       showTodos: true,
       showGoal: true,
+      showTurns: true,
       showEffortLevel: true,
       showPermissionProfile: true,
       showUsage: false,
@@ -65,5 +67,6 @@ export function createPreset(preset: ConfigPreset): HudConfig {
   config.display.showUsage = false
   config.display.showAddedDirs = false
   config.display.showGoal = false
+  config.display.showTurns = false
   return config
 }

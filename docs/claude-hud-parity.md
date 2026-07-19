@@ -27,6 +27,7 @@ Codex HUD reproduces the upstream experience using the data that Codex CLI actua
 | Subagent tracking                       | Supported                         | Discovers canonical child rollout files, hierarchy, model, state, duration and active descendants.                                                                                                |
 | Todo/progress line                      | Supported                         | Uses Codex `plan_update` events.                                                                                                                                                                  |
 | Persistent goal                         | Codex-specific extension          | Shows Codex durable goal status, token budget and usage.                                                                                                                                          |
+| Conversation history navigator          | Codex-specific extension          | Indexes canonical user-message events and expands the HUD pane into an explicit, searchable transcript viewer; it does not control the Codex TUI viewport.                                        |
 | Config/rules/hooks/MCP counts           | Supported/adapted                 | Counts Codex config, `AGENTS.md`, rules, hooks, installed skills and MCP servers.                                                                                                                 |
 | Session duration                        | Supported                         | Uses the rollout session start timestamp.                                                                                                                                                         |
 | Output speed                            | Supported                         | Computes last-turn output tokens over generation time after time-to-first-token.                                                                                                                  |
@@ -54,7 +55,8 @@ Codex HUD reproduces the upstream experience using the data that Codex CLI actua
 
 ## Fidelity boundaries
 
-- The HUD never reads or renders user prompts, assistant message bodies, tool output bodies, API keys, or access tokens.
+- The compact HUD never renders user prompts or assistant message bodies. The opt-in conversation navigator reads those message bodies from the active local rollout and displays them only after the user focuses the HUD and opens the navigator. It never reads tool output bodies, API keys, or access tokens.
+- Navigator message bodies remain in renderer memory and are not written to HUD configuration, copied to a second transcript, or sent over the network.
 - Session title support degrades quietly when `sqlite3` is unavailable. Prompt-derived default titles are deliberately suppressed; all rollout-backed fields continue working.
 - `showCost` remains accepted so an upstream-style config does not break, but it is intentionally hidden until Codex provides authoritative cost data.
 - The dedicated pane consumes terminal rows, unlike Claude Code's native footer. It starts at 5 rows, then fits the complete rendered content up to the `CODEX_HUD_HEIGHT` / `--hud-height` maximum (default 30 rows).

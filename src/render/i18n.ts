@@ -29,6 +29,8 @@ const MESSAGES = {
     input: 'in',
     cache: 'cache',
     output: 'out',
+    turns: 'Turns',
+    navigate: 'click HUD and press n',
   },
   'zh-Hans': {
     context: '上下文',
@@ -58,6 +60,8 @@ const MESSAGES = {
     input: '输入',
     cache: '缓存',
     output: '输出',
+    turns: '轮次',
+    navigate: '点击 HUD 后按 n 导航',
   },
   'zh-Hant': {
     context: '上下文',
@@ -87,6 +91,8 @@ const MESSAGES = {
     input: '輸入',
     cache: '快取',
     output: '輸出',
+    turns: '輪次',
+    navigate: '點擊 HUD 後按 n 導航',
   },
 } as const
 

@@ -25,6 +25,7 @@
     "README.zh.md",
     "dist/",
     "docs/claude-hud-parity.md",
+    "docs/conversation-navigator.md",
     "plugins/"
   ],
   "engines": {

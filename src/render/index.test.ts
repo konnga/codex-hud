@@ -89,6 +89,16 @@ function state(): HudState {
       { content: 'Verify', status: 'pending' },
     ],
     goal: { objective: 'Build Codex HUD', status: 'active', tokensUsed: 12_000, tokenBudget: 500_000 },
+    conversationTurns: [
+      {
+        id: 'turn-1',
+        turnId: 'turn-1',
+        startedAt: new Date('2026-07-16T08:10:00Z'),
+        userMessage: 'Add a persistent HUD below Codex.',
+        assistantMessage: 'Implemented the HUD renderer.',
+        assistantPhase: 'final_answer',
+      },
+    ],
     compactCount: 1,
     memory: { totalBytes: 100, usedBytes: 60, freeBytes: 40, usedPercent: 60 },
     auth: { method: 'ChatGPT pro', user: 'builder' },

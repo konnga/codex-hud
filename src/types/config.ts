@@ -21,6 +21,7 @@ export type HudElement
     | 'mcp'
     | 'agents'
     | 'todos'
+    | 'turns'
     | 'sessionTime'
 
 export type HudColorName
@@ -86,6 +87,7 @@ export interface DisplayConfig {
   showAgents: boolean
   showTodos: boolean
   showGoal: boolean
+  showTurns: boolean
   showSessionName: boolean
   showAuth: boolean
   showAuthUser: boolean
@@ -150,6 +152,7 @@ export const DEFAULT_ELEMENT_ORDER: HudElement[] = [
   'mcp',
   'agents',
   'todos',
+  'turns',
   'sessionTime',
 ]
 
@@ -200,6 +203,7 @@ export const DEFAULT_CONFIG: HudConfig = {
     showAgents: false,
     showTodos: false,
     showGoal: true,
+    showTurns: true,
     showSessionName: false,
     showAuth: false,
     showAuthUser: false,

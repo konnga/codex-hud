@@ -1,5 +1,6 @@
 {"timestamp":"2026-07-16T08:00:00.000Z","type":"session_meta","payload":{"session_id":"root-session","timestamp":"2026-07-16T08:00:00.000Z","cwd":"/work/demo","originator":"codex-tui","cli_version":"0.144.1","source":"cli","model_provider":"openai"}}
 {"timestamp":"2026-07-16T08:00:01.000Z","type":"turn_context","payload":{"turn_id":"turn-1","cwd":"/work/demo","workspace_roots":["/work/demo"],"approval_policy":"on-request","sandbox_policy":{"type":"workspace-write"},"model":"gpt-5.5","effort":"high","collaboration_mode":{"mode":"default","settings":{"model":"gpt-5.5","reasoning_effort":"high"}}}}
+{"timestamp":"2026-07-16T08:00:01.500Z","type":"event_msg","payload":{"type":"user_message","message":"Build a conversation navigator."}}
 {"timestamp":"2026-07-16T08:00:02.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1","started_at":"2026-07-16T08:00:02.000Z","model_context_window":128000}}
 {"timestamp":"2026-07-16T08:00:03.000Z","type":"response_item","payload":{"type":"custom_tool_call","id":"item-1","call_id":"call-1","name":"exec","input":"const r = await tools.exec_command({ cmd: 'pnpm test' }); text(r.output);"}}
 {"timestamp":"2026-07-16T08:00:04.000Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call-1","output":"tests passed"}}
@@ -10,4 +11,6 @@
 {"timestamp":"2026-07-16T08:00:09.000Z","type":"event_msg","payload":{"type":"context_compacted"}}
 {"timestamp":"2026-07-16T08:00:10.000Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call-2","output":{"success":false}}}
 {"timestamp":"2026-07-16T08:00:11.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[]}}
+{"timestamp":"2026-07-16T08:00:11.250Z","type":"event_msg","payload":{"type":"agent_message","phase":"commentary","message":"Preparing the final navigator response."}}
+{"timestamp":"2026-07-16T08:00:11.500Z","type":"event_msg","payload":{"type":"agent_message","phase":"final_answer","message":"The conversation navigator is ready."}}
 {"timestamp":"2026-07-16T08:00:12.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-1","completed_at":"2026-07-16T08:00:12.000Z","duration_ms":10000,"time_to_first_token_ms":350}}

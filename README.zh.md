@@ -20,6 +20,7 @@ Codex HUD 是面向 OpenAI Codex CLI 的常驻终端 HUD，集中展示上下文
 🔌 ✓ MCP (1): github
 🤖 ◐ explorer: 检查协议 (2m)
 📋 ▸ 渲染 HUD (1/3)
+↕ 轮次: 3 · 点击 HUD 后按 n 导航
 ⏱️ 1h │ 压缩: 1
 ```
 
@@ -40,6 +41,7 @@ Codex HUD 是面向 OpenAI Codex CLI 的常驻终端 HUD，集中展示上下文
 - prompt-cache 倒计时、输出速度、session title/auth、Git 文件统计
 - 外部额度快照读写、事件驱动刷新和同目录多会话隔离
 - HUD pane 根据实际内容自动收缩/增长，不再保留空白行
+- 终端原生会话历史导航，可直接在 HUD pane 中浏览和搜索用户轮次
 - HUD backend 启动失败时自动降级为原生 Codex，不阻断任何 Codex 命令
 - 项目/认证/Git/Agent 元数据缓存和受限 V8 heap，降低空闲资源占用
 
@@ -264,6 +266,21 @@ codex-hud --backend tmux
 codex-hud render --once --cwd "$PWD" --no-color
 ```
 
+### 会话历史导航
+
+HUD 出现“轮次”行后，点击 HUD pane 并按 `n`，HUD 会展开为会话历史导航器。导航器读取当前 Codex rollout，只列出真实的用户提交，不会把注入的环境上下文或 developer 指令当作用户输入。
+
+- `j` / `k` 或方向键：选择上一轮、下一轮用户输入
+- `Enter` 或右方向键：打开选中的完整轮次
+- `/`：搜索用户输入和助手回复
+- `j` / `k`、Page Up、Page Down：滚动已打开的轮次
+- `Esc`：先返回轮次列表，再关闭导航器
+- `q`：立即关闭导航器
+
+关闭后 HUD 会恢复原来的紧凑高度，并把焦点交回 Codex pane。导航器不会控制或改变 Codex 原生 TUI 的滚动位置。
+
+数据来源、隐私边界、backend 行为和当前限制见[会话历史导航文档](./docs/conversation-navigator.md)。
+
 `--detach` 主要用于自动化和烟雾测试，它会在后台启动会话而不附加当前终端。
 
 ## 配置显示内容
@@ -302,6 +319,7 @@ codex-hud configure --enable tools,skills,agents --disable memory --yes
 | `agents`        | 子 Agent 状态                  |
 | `todos`         | 计划与任务进度                 |
 | `goal`          | 持久 Goal                      |
+| `turns`         | 会话轮次数量与导航提示         |
 | `configCounts`  | 配置、规则、Skill 和 MCP 数量  |
 | `auth`          | 认证方式                       |
 | `memory`        | 近似系统内存                   |

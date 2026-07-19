@@ -99,6 +99,16 @@ describe('rollout parser', () => {
       timeUsedSeconds: 420,
     })
     expect(state.compactCount).toBe(1)
+    expect(state.conversationTurns).toEqual([
+      {
+        id: 'turn-1',
+        turnId: 'turn-1',
+        startedAt: new Date('2026-07-16T08:00:01.500Z'),
+        userMessage: 'Build a conversation navigator.',
+        assistantMessage: 'The conversation navigator is ready.',
+        assistantPhase: 'final_answer',
+      },
+    ])
   })
 
   it('parses only appended records after the initial pass', () => {

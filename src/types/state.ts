@@ -39,6 +39,15 @@ export interface GoalState {
   timeUsedSeconds?: number
 }
 
+export interface ConversationTurn {
+  id: string
+  turnId?: string
+  startedAt: Date
+  userMessage: string
+  assistantMessage: string
+  assistantPhase?: string
+}
+
 export interface UsageWindow {
   label: string
   percent: number | null
@@ -151,6 +160,7 @@ export interface HudState {
   agents: AgentEntry[]
   todos: TodoItem[]
   goal: GoalState | null
+  conversationTurns: ConversationTurn[]
   compactCount: number
   memory: MemoryInfo | null
   auth: AuthInfo | null

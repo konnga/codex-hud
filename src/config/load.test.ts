@@ -52,7 +52,7 @@ describe('configuration validation', () => {
     expect(config.lineLayout).toBe(DEFAULT_CONFIG.lineLayout)
     expect(config.pathLevels).toBe(3)
     expect(config.refreshIntervalMs).toBe(100)
-    expect(config.elementOrder).toEqual(['project', 'context'])
+    expect(config.elementOrder).toEqual(['project', 'context', 'turns'])
     expect(config.colors.context).toBe('#12ff88')
     expect(config.colors.usage).toBe(DEFAULT_CONFIG.colors.usage)
     expect(config.colors.barFilled).toBe(DEFAULT_CONFIG.colors.barFilled)

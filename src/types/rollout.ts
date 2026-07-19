@@ -91,6 +91,8 @@ export interface ResponseItemPayload {
 export interface EventMessagePayload {
   type?: string
   turn_id?: string
+  message?: string
+  phase?: string
   started_at?: string
   completed_at?: string
   duration_ms?: number

@@ -13,6 +13,7 @@ import { truncateAnsi, visibleWidth } from './format.js'
 import { renderAddedDirsLine, renderProjectLine } from './project-line.js'
 import { renderPromptCacheLine } from './prompt-cache-line.js'
 import { renderSessionLine } from './session-line.js'
+import { renderTurnsLine } from './turns-line.js'
 import { renderUsageLine } from './usage-line.js'
 
 function renderElement(ctx: RenderContext, element: HudElement): string | null {
@@ -28,6 +29,7 @@ function renderElement(ctx: RenderContext, element: HudElement): string | null {
     case 'mcp': return renderMcpLine(ctx)
     case 'agents': return renderAgentsLine(ctx)
     case 'todos': return renderTodosLine(ctx)
+    case 'turns': return renderTurnsLine(ctx)
     case 'sessionTime': return renderSessionLine(ctx)
     case 'promptCache': return renderPromptCacheLine(ctx)
   }
@@ -110,6 +112,7 @@ function compactLines(ctx: RenderContext): string[] {
     renderMcpLine(ctx),
     renderAgentsLine(ctx),
     renderTodosLine(ctx),
+    renderTurnsLine(ctx),
   ]
     .filter((line): line is string => Boolean(line))
     .flatMap(line => line.split('\n'))

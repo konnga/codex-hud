@@ -10,6 +10,7 @@ import type {
 } from '../types/rollout.js'
 import type {
   ContextUsage,
+  ConversationTurn,
   GoalState,
   SessionInfo,
   SessionTokenUsage,
@@ -36,6 +37,7 @@ export interface ParsedRolloutState {
   mcpServers: string[]
   todos: TodoItem[]
   goal: GoalState | null
+  conversationTurns: ConversationTurn[]
   compactCount: number
 }
 
@@ -50,6 +52,7 @@ function initialState(): ParsedRolloutState {
     mcpServers: [],
     todos: [],
     goal: null,
+    conversationTurns: [],
     compactCount: 0,
   }
 }
@@ -346,6 +349,38 @@ export class RolloutParser {
   }
 
   private onEvent(payload: EventMessagePayload, timestamp: Date): void {
+    if (payload.type === 'user_message' && typeof payload.message === 'string') {
+      const userMessage = payload.message.trim()
+      if (userMessage) {
+        const turnId = payload.turn_id ?? this.state.session?.turnId
+        this.state.conversationTurns.push({
+          id: turnId ?? `turn-${String(this.state.conversationTurns.length + 1)}`,
+          turnId,
+          startedAt: timestamp,
+          userMessage,
+          assistantMessage: '',
+        })
+      }
+      return
+    }
+    if (payload.type === 'agent_message' && typeof payload.message === 'string') {
+      const turn = this.state.conversationTurns.at(-1)
+      const message = payload.message.trim()
+      if (!turn || !message) {
+        return
+      }
+      if (payload.phase === 'final_answer') {
+        turn.assistantMessage = message
+        turn.assistantPhase = payload.phase
+      }
+      else if (turn.assistantPhase !== 'final_answer') {
+        turn.assistantMessage = turn.assistantMessage
+          ? `${turn.assistantMessage}\n\n${message}`
+          : message
+        turn.assistantPhase = payload.phase
+      }
+      return
+    }
     if (payload.type === 'token_count') {
       this.latestTokenUsage = payload.info ?? this.latestTokenUsage
       this.state.context = calculateContextUsage(

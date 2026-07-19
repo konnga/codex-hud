@@ -122,6 +122,10 @@ function elementOrder(value: unknown): HudElement[] {
       result.push(element)
     }
   }
+  if (result.length > 0 && !seen.has('turns')) {
+    const sessionIndex = result.indexOf('sessionTime')
+    result.splice(sessionIndex >= 0 ? sessionIndex : result.length, 0, 'turns')
+  }
   return result.length > 0 ? result : [...DEFAULT_ELEMENT_ORDER]
 }
 
@@ -216,6 +220,7 @@ export function validateConfig(value: unknown): HudConfig {
       showAgents: booleanValue(rawDisplay.showAgents, fallback.display.showAgents),
       showTodos: booleanValue(rawDisplay.showTodos, fallback.display.showTodos),
       showGoal: booleanValue(rawDisplay.showGoal, fallback.display.showGoal),
+      showTurns: booleanValue(rawDisplay.showTurns, fallback.display.showTurns),
       showSessionName: booleanValue(rawDisplay.showSessionName, fallback.display.showSessionName),
       showAuth: booleanValue(rawDisplay.showAuth, fallback.display.showAuth),
       showAuthUser: booleanValue(rawDisplay.showAuthUser, fallback.display.showAuthUser),

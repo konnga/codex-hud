@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { _ as getConfigPath, a as waitForNewRootSession, b as RolloutParser, f as renderHud, g as getCodexHome, h as findActiveSession, i as snapshotRootSessions, m as DEFAULT_CONFIG, n as createSessionBindingPath, o as writeSessionBinding, p as loadConfig, s as buildHudState, t as acquireSessionDiscoveryLock, v as getHudStateDirectory, y as getLegacyStateDirectory } from "./session-binding-D2aIzZHE.mjs";
+import { C as getLegacyStateDirectory, S as getHudStateDirectory, _ as loadConfig, a as waitForNewRootSession, b as getCodexHome, f as renderHud, i as snapshotRootSessions, n as createSessionBindingPath, o as writeSessionBinding, s as buildHudState, t as acquireSessionDiscoveryLock, v as DEFAULT_CONFIG, w as RolloutParser, x as getConfigPath, y as findActiveSession } from "./session-binding-B7WQz9fR.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import process$1, { stdin, stdout } from "node:process";
@@ -1115,6 +1115,13 @@ const GUIDED_ELEMENTS = [
 		set: (config, value) => config.display.showGoal = value
 	},
 	{
+		name: "turns",
+		category: "Session",
+		label: "Conversation navigator",
+		get: (config) => config.display.showTurns,
+		set: (config, value) => config.display.showTurns = value
+	},
+	{
 		name: "configCounts",
 		category: "Environment",
 		label: "Environment counts",
@@ -1217,6 +1224,7 @@ function createPreset(preset) {
 			showAgents: true,
 			showTodos: true,
 			showGoal: true,
+			showTurns: true,
 			showSessionName: false,
 			showAuth: true,
 			showAuthUser: true,
@@ -1245,6 +1253,7 @@ function createPreset(preset) {
 			showAgents: true,
 			showTodos: true,
 			showGoal: true,
+			showTurns: true,
 			showEffortLevel: true,
 			showPermissionProfile: true,
 			showUsage: false
@@ -1256,6 +1265,7 @@ function createPreset(preset) {
 	config.display.showUsage = false;
 	config.display.showAddedDirs = false;
 	config.display.showGoal = false;
+	config.display.showTurns = false;
 	return config;
 }
 

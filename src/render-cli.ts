@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import type { Buffer } from 'node:buffer'
+import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 // @env node
 import process from 'node:process'
@@ -6,6 +8,13 @@ import { pathToFileURL } from 'node:url'
 import { RolloutParser } from './codex/rollout-parser.js'
 import { findActiveSession } from './codex/session-finder.js'
 import { loadConfig } from './config/load.js'
+import {
+  createNavigatorState,
+  matchingTurnIndices,
+  normalizeNavigatorSelection,
+  renderNavigator,
+  splitNavigatorInput,
+} from './navigator/index.js'
 import { renderHud } from './render/index.js'
 import { watchConfigPath } from './runtime/config-watch.js'
 import {
@@ -84,6 +93,7 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
   const options = parseOptions(args)
   let loaded = loadConfig()
   const parser = new RolloutParser()
+  const navigator = createNavigatorState()
   let currentSessionPath = options.sessionPath
   let lastDiscoveryAt = 0
   let sessionWatcher: fs.FSWatcher | null = null
@@ -93,6 +103,7 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
   let lastFrame = ''
   let lastViewport = ''
   let paneHeight: number | null = null
+  let latestTurns = parser.getState().conversationTurns
   const paneId = process.env.TMUX_PANE ?? null
   const configMtime = (): number => {
     try {
@@ -146,24 +157,34 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
     }
     const rollout = parser.parse()
     const state = buildHudState(options.cwd, rollout, startedAt, loaded.config, new Date())
+    latestTurns = state.conversationTurns
     const width = process.stdout.columns || Number(process.env.COLUMNS) || loaded.config.maxWidth || 120
     const height = viewportRenderHeight(options.maxHeight, process.stdout.rows)
-    const lines = renderHud({
-      config: loaded.config,
-      state,
-      options: {
-        width,
-        height,
-        color: options.color,
-      },
-      now: new Date(),
-    })
+    const lines = navigator.active
+      ? renderNavigator(latestTurns, navigator, {
+          width,
+          height,
+          color: options.color,
+          language: loaded.config.language,
+        })
+      : renderHud({
+          config: loaded.config,
+          state,
+          options: {
+            width,
+            height,
+            color: options.color,
+          },
+          now: new Date(),
+        })
     const frame = lines.join('\n')
     if (options.once) {
       process.stdout.write(`${frame}\n`)
       return
     }
-    const desiredHeight = desiredPaneHeight(lines.length, options.maxHeight)
+    const desiredHeight = navigator.active
+      ? options.maxHeight
+      : desiredPaneHeight(lines.length, options.maxHeight)
     paneHeight = options.cmuxPaneId
       ? resizeCmuxPane(options.cmuxPaneId, desiredHeight, paneHeight)
       : resizeHudPane(paneId, desiredHeight, paneHeight)
@@ -196,7 +217,131 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
     render()
   })
   process.on('SIGWINCH', render)
-  const shutdown = (): void => {
+  const focusCodexPane = (): void => {
+    if (options.cmuxPaneId) {
+      const workspace = process.env.CMUX_WORKSPACE_ID
+      spawnSync('cmux', [
+        'last-pane',
+        ...(workspace ? ['--workspace', workspace] : []),
+      ], { stdio: 'ignore' })
+      return
+    }
+    if (paneId) {
+      spawnSync('tmux', ['select-pane', '-U'], { stdio: 'ignore' })
+    }
+  }
+  const closeNavigator = (): void => {
+    navigator.active = false
+    navigator.view = 'list'
+    navigator.searchMode = false
+    navigator.detailScroll = 0
+    render()
+    focusCodexPane()
+  }
+  const moveSelection = (delta: number): void => {
+    const matches = normalizeNavigatorSelection(navigator, latestTurns)
+    if (matches.length === 0) {
+      return
+    }
+    const current = Math.max(0, matches.indexOf(navigator.selectedIndex))
+    const next = Math.min(matches.length - 1, Math.max(0, current + delta))
+    navigator.selectedIndex = matches[next] ?? navigator.selectedIndex
+    navigator.detailScroll = 0
+  }
+  let shutdown = (): void => {}
+  const onKey = (key: string): void => {
+    if (key === '\u0003') {
+      shutdown()
+      return
+    }
+    if (!navigator.active) {
+      if (
+        loaded.config.display.showTurns
+        && (key === 'n' || key === 'N' || key === '\r')
+        && latestTurns.length > 0
+      ) {
+        navigator.active = true
+        navigator.view = 'list'
+        navigator.searchMode = false
+        navigator.detailScroll = 0
+        navigator.selectedIndex = latestTurns.length - 1
+        render()
+      }
+      return
+    }
+    if (navigator.searchMode) {
+      if (key === '\u001B' || key === '\r') {
+        navigator.searchMode = false
+      }
+      else if (key === '\u007F' || key === '\b') {
+        navigator.query = Array.from(navigator.query).slice(0, -1).join('')
+      }
+      else if (!key.startsWith('\u001B') && Array.from(key).every((character) => {
+        const codePoint = character.codePointAt(0) ?? 0
+        return codePoint > 31 && codePoint !== 127
+      })) {
+        navigator.query += key
+      }
+      normalizeNavigatorSelection(navigator, latestTurns)
+      navigator.detailScroll = 0
+      render()
+      return
+    }
+    if (key === 'q' || key === 'Q') {
+      closeNavigator()
+      return
+    }
+    if (navigator.view === 'detail') {
+      if (key === '\u001B' || key === 'h' || key === '\u001B[D') {
+        navigator.view = 'list'
+        navigator.detailScroll = 0
+      }
+      else if (key === 'j' || key === '\u001B[B') {
+        navigator.detailScroll += 1
+      }
+      else if (key === 'k' || key === '\u001B[A') {
+        navigator.detailScroll = Math.max(0, navigator.detailScroll - 1)
+      }
+      else if (key === '\u001B[6~' || key === ' ') {
+        navigator.detailScroll += Math.max(1, options.maxHeight - 4)
+      }
+      else if (key === '\u001B[5~') {
+        navigator.detailScroll = Math.max(0, navigator.detailScroll - Math.max(1, options.maxHeight - 4))
+      }
+      render()
+      return
+    }
+    if (key === '\u001B') {
+      closeNavigator()
+      return
+    }
+    if (key === '/') {
+      navigator.searchMode = true
+    }
+    else if (key === 'j' || key === '\u001B[B') {
+      moveSelection(1)
+    }
+    else if (key === 'k' || key === '\u001B[A') {
+      moveSelection(-1)
+    }
+    else if (key === 'g') {
+      navigator.selectedIndex = matchingTurnIndices(latestTurns, navigator.query)[0] ?? navigator.selectedIndex
+    }
+    else if (key === 'G') {
+      navigator.selectedIndex = matchingTurnIndices(latestTurns, navigator.query).at(-1) ?? navigator.selectedIndex
+    }
+    else if (key === '\r' || key === 'l' || key === '\u001B[C') {
+      if (latestTurns[navigator.selectedIndex]) {
+        navigator.view = 'detail'
+        navigator.detailScroll = 0
+      }
+    }
+    render()
+  }
+  const onInput = (value: Buffer | string): void => {
+    splitNavigatorInput(value.toString()).forEach(onKey)
+  }
+  shutdown = (): void => {
     clearInterval(interval)
     clearInterval(configSafetyInterval)
     if (debounceTimer) {
@@ -205,8 +350,17 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
     sessionWatcher?.close()
     configWatcher?.close()
     process.off('SIGWINCH', render)
+    process.stdin.off('data', onInput)
+    if (process.stdin.isTTY && process.stdin.isRaw) {
+      process.stdin.setRawMode(false)
+    }
     process.stdout.write('\u001B[?25h\u001B[0m')
     process.exit(0)
+  }
+  if (process.stdin.isTTY) {
+    process.stdin.setRawMode(true)
+    process.stdin.resume()
+    process.stdin.on('data', onInput)
   }
   process.on('SIGINT', shutdown)
   process.on('SIGTERM', shutdown)

@@ -27,6 +27,7 @@ describe('default HUD configuration', () => {
       'mcp',
       'agents',
       'todos',
+      'turns',
       'sessionTime',
     ])
   })

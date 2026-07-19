@@ -9,6 +9,7 @@ export type GuidedElement
     | 'agents'
     | 'todos'
     | 'goal'
+    | 'turns'
     | 'configCounts'
     | 'duration'
     | 'speed'
@@ -37,6 +38,7 @@ export const GUIDED_ELEMENTS: readonly GuidedElementDefinition[] = [
   { name: 'agents', category: 'Activity', label: 'Subagents', get: config => config.display.showAgents, set: (config, value) => config.display.showAgents = value },
   { name: 'todos', category: 'Activity', label: 'Plan / todos', get: config => config.display.showTodos, set: (config, value) => config.display.showTodos = value },
   { name: 'goal', category: 'Activity', label: 'Durable goal', get: config => config.display.showGoal, set: (config, value) => config.display.showGoal = value },
+  { name: 'turns', category: 'Session', label: 'Conversation navigator', get: config => config.display.showTurns, set: (config, value) => config.display.showTurns = value },
   { name: 'configCounts', category: 'Environment', label: 'Environment counts', get: config => config.display.showConfigCounts, set: (config, value) => config.display.showConfigCounts = value },
   { name: 'auth', category: 'Environment', label: 'Authentication method', get: config => config.display.showAuth, set: (config, value) => config.display.showAuth = value },
   { name: 'memory', category: 'Environment', label: 'Approximate system memory', get: config => config.display.showMemoryUsage, set: (config, value) => config.display.showMemoryUsage = value },

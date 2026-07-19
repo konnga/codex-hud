@@ -18,6 +18,7 @@ Approval: on-request │ Permissions: workspace-write │ Sandbox: workspace-wri
 🔌 ✓ MCPs (1): github
 🤖 ◐ explorer: Inspect protocol (2m)
 📋 ▸ Render HUD (1/3)
+↕ Turns: 3 · click HUD and press n
 ⏱️ 1h │ Compactions: 1
 ```
 
@@ -35,6 +36,7 @@ Highlights:
 - Prompt-cache countdown, output speed, session title/auth, Git file stats, and external usage snapshots
 - Event-driven refresh and launch-scoped isolation for concurrent sessions in the same directory
 - Content-fitted cmux/tmux pane height with no reserved blank rows
+- Terminal-native conversation navigator for browsing and searching user turns inside the HUD pane
 - Fail-open startup: HUD backend failures fall back to untouched official Codex execution
 - Cached collectors and a bounded renderer heap for lower idle resource usage
 
@@ -170,6 +172,21 @@ codex --no-hud
 codex-hud render --once --cwd "$PWD" --no-color
 ```
 
+### Conversation navigator
+
+When the HUD shows a `Turns` line, click the HUD pane and press `n` to expand it into the conversation navigator. The navigator reads the current Codex rollout and lists only real user submissions; injected environment or developer context is excluded.
+
+- `j` / `k` or arrow keys: move between user turns
+- `Enter` or right arrow: open the selected turn
+- `/`: search user and assistant text
+- `j` / `k`, Page Up, and Page Down: scroll an opened turn
+- `Esc`: return to the turn list, then close the navigator
+- `q`: close the navigator immediately
+
+Closing the navigator restores the compact HUD height and returns focus to the Codex pane. It does not control or reposition Codex's own TUI scrollback.
+
+See [Conversation navigator](./docs/conversation-navigator.md) for the data model, privacy behavior, backend details, and current limitations.
+
 `--detach` is intended mainly for automation and smoke tests; it starts the session in the background without attaching the current terminal.
 
 ## Display configuration
@@ -190,25 +207,26 @@ codex-hud configure --enable tools,skills,agents --disable memory,speed --yes
 
 Selectable names:
 
-| Name | Display content |
-| --- | --- |
-| `git` | Git branch and working-tree status |
-| `usage` | Usage windows, reset times, and credits |
-| `promptCache` | Prompt-cache countdown |
-| `tools` | Tool-call activity |
-| `skills` | Skill activity |
-| `mcp` | MCP server activity |
-| `agents` | Sub-agent status |
-| `todos` | Plan and task progress |
-| `goal` | Durable goal |
-| `configCounts` | Config, rule, Skill, and MCP counts |
-| `auth` | Authentication method |
-| `memory` | Approximate system memory |
-| `duration` | Session duration |
-| `speed` | Previous response output speed |
-| `sessionName` | Explicitly named session title |
-| `sessionTokens` | Cumulative session tokens |
-| `compactions` | Context compaction count |
+| Name            | Display content                            |
+| --------------- | ------------------------------------------ |
+| `git`           | Git branch and working-tree status         |
+| `usage`         | Usage windows, reset times, and credits    |
+| `promptCache`   | Prompt-cache countdown                     |
+| `tools`         | Tool-call activity                         |
+| `skills`        | Skill activity                             |
+| `mcp`           | MCP server activity                        |
+| `agents`        | Sub-agent status                           |
+| `todos`         | Plan and task progress                     |
+| `goal`          | Durable goal                               |
+| `turns`         | Conversation turn count and navigator hint |
+| `configCounts`  | Config, rule, Skill, and MCP counts        |
+| `auth`          | Authentication method                      |
+| `memory`        | Approximate system memory                  |
+| `duration`      | Session duration                           |
+| `speed`         | Previous response output speed             |
+| `sessionName`   | Explicitly named session title             |
+| `sessionTokens` | Cumulative session tokens                  |
+| `compactions`   | Context compaction count                   |
 
 Saved changes are reloaded by sessions that already have a HUD pane. Hot reload cannot add a HUD pane to an existing Codex process that was started without the Codex HUD launcher.
 
