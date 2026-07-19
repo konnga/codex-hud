@@ -175,6 +175,13 @@ codex plugin add codex-hud@codex-hud
 
 底层 `codex-hud configure` CLI 提供相同的交互式选择器，以及确定性的 `--enable` 和 `--disable` 更新方式。
 
+HUD 默认使用英文，不会根据 README 的语言或系统区域设置自动切换。可以在 setup 时明确指定语言，也可以之后运行 `codex-hud configure` 修改：
+
+```bash
+codex-hud setup --language zh-Hans  # 简体中文
+codex-hud setup --language zh-Hant  # 繁体中文
+```
+
 ## 从源码安装（开发者）
 
 ```bash

@@ -127,6 +127,13 @@ The plugin provides three Skills, available by typing their names or selecting t
 
 The underlying `codex-hud configure` CLI provides the same interactive selector plus deterministic `--enable` and `--disable` updates.
 
+The HUD language defaults to English and does not automatically follow the README language or the system locale. Set it explicitly during setup, or change it later with `codex-hud configure`:
+
+```bash
+codex-hud setup --language zh-Hans  # Simplified Chinese
+codex-hud setup --language zh-Hant  # Traditional Chinese
+```
+
 ## Install from source
 
 ```bash
