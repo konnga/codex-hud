@@ -1,0 +1,62 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm release:check
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+      - name: Verify generated runtime is committed
+        run: git diff --exit-code
+      - name: Build release archives
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${VERSION#v}"
+          mkdir -p release
+          pnpm pack --pack-destination release
+          tar -czf "release/codex-hud-plugin-${VERSION}.tar.gz" -C plugins codex-hud
+          node scripts/version.mjs notes "$VERSION" > release-notes.md
+          cd release
+          sha256sum ./*.tgz ./*.tar.gz > SHA256SUMS
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          PRERELEASE=()
+          if [[ "$TAG" == *-* ]]; then
+            PRERELEASE=(--prerelease)
+          fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --title "Codex HUD $TAG" --notes-file release-notes.md "${PRERELEASE[@]}"
+            gh release upload "$TAG" release/* --clobber
+          else
+            gh release create "$TAG" release/* --title "Codex HUD $TAG" --notes-file release-notes.md "${PRERELEASE[@]}"
+          fi

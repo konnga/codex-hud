@@ -134,6 +134,24 @@ codex-hud setup --language zh-Hans  # Simplified Chinese
 codex-hud setup --language zh-Hant  # Traditional Chinese
 ```
 
+### Upgrade an existing installation
+
+Codex currently provides `marketplace upgrade` but no separate `plugin upgrade` command. Refresh the marketplace snapshot, reinstall the plugin, then start a new Codex session and rerun the setup Skill:
+
+```bash
+codex plugin marketplace upgrade codex-hud
+codex plugin remove codex-hud@codex-hud
+codex plugin add codex-hud@codex-hud
+```
+
+Exit the current Codex session, start `codex` again, and run:
+
+```text
+$codex-hud:setup
+```
+
+After setup completes, exit and start Codex once more so the refreshed launcher creates the HUD from the new runtime. Existing `${CODEX_HOME:-~/.codex}/codex-hud/config.json` settings are preserved unless a preset is explicitly selected. If the shell still resolves an older launcher, run `hash -r` before starting Codex.
+
 ## Install from source
 
 ```bash
@@ -281,6 +299,7 @@ codex plugin marketplace remove codex-hud
 ## Verification
 
 ```bash
+pnpm release:check
 pnpm lint --fix
 pnpm typecheck
 pnpm test
@@ -288,6 +307,8 @@ pnpm build
 node dist/render-cli.mjs --once --cwd "$PWD" --no-color
 node dist/cli.mjs doctor --json
 ```
+
+Maintainers should follow [Versioning and releases](./docs/releasing.md) when preparing a new SemVer, plugin cachebuster, changelog section, and Git tag.
 
 See [README.zh.md](./README.zh.md) for complete Chinese usage and architecture notes. Inside Codex, use `$codex-hud:setup`, `$codex-hud:configure`, or `$codex-hud:doctor`; all three are also available through `/skills`.
 

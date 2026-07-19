@@ -1,5 +1,26 @@
 # Changelog
 
+## [Unreleased]
+
+## 0.2.0 - 2026-07-19
+
+### Added
+
+- Added a native cmux backend that keeps Codex in its original surface and places the HUD in an independent bottom split, preserving terminal-native scrollback, selection, and copying.
+- Added a conversation navigator for browsing, searching, and opening user turns directly inside the HUD pane.
+- Added launch-scoped session and pane binding so concurrent Codex sessions in the same directory receive independent HUDs.
+- Added automated SemVer, plugin cachebuster, CHANGELOG, CI, archive, checksum, and GitHub Release management.
+
+### Changed
+
+- HUD panes now grow and shrink to fit rendered content in both cmux and tmux instead of reserving unused rows.
+- Added documented upgrade steps for existing marketplace installations, explicit language-default guidance, and an actual tmux screenshot.
+
+### Fixed
+
+- Updated cmux resizing for the 0.64 directional API, fixing new Codex sessions that could start without a HUD after `Pane has no adjacent border in direction right`.
+- Redraw and resize the cmux HUD when its panel dimensions change.
+
 ## 0.1.0
 
 - Initial TypeScript CLI and Codex plugin scaffold.

@@ -1,7 +1,7 @@
 {
   "name": "codex-hud",
   "type": "module",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "packageManager": "pnpm@10.32.1",
   "description": "A persistent Claude HUD-style heads-up display for OpenAI Codex CLI.",
   "author": "Codex HUD Contributors",
@@ -19,13 +19,17 @@
     "codex-hud-render": "./dist/render-cli.mjs"
   },
   "files": [
+    "CHANGELOG.md",
     "LICENSE",
     "NOTICE",
     "README.md",
     "README.zh.md",
     "dist/",
+    "docs/assets/",
     "docs/claude-hud-parity.md",
     "docs/conversation-navigator.md",
+    "docs/releasing.md",
+    "docs/releasing.zh.md",
     "plugins/"
   ],
   "engines": {
@@ -36,6 +40,10 @@
     "dev": "tsdown --watch",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
+    "release:cachebuster": "node scripts/version.mjs cachebuster",
+    "release:check": "node scripts/version.mjs check",
+    "release:notes": "node scripts/version.mjs notes",
+    "release:prepare": "node scripts/version.mjs prepare",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
