@@ -24,6 +24,10 @@ Codex HUD 是面向 OpenAI Codex CLI 的常驻终端 HUD，集中展示上下文
 ⏱️ 1h │ 压缩: 1
 ```
 
+实际终端效果（tmux）：
+
+![Codex HUD tmux 示例](./docs/assets/codex-hud-tmux-example.png)
+
 没有可用遥测数据的行会自动隐藏；没有活动计划时，任务行会改为展示持久 Goal。
 
 ## 当前能力

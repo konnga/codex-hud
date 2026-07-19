@@ -22,6 +22,10 @@ Approval: on-request │ Permissions: workspace-write │ Sandbox: workspace-wri
 ⏱️ 1h │ Compactions: 1
 ```
 
+Example terminal view (tmux):
+
+![Codex HUD tmux example](./docs/assets/codex-hud-tmux-example.png)
+
 Rows without available telemetry are omitted automatically. When there is no active plan, the task row can instead show the durable goal.
 
 Highlights:
