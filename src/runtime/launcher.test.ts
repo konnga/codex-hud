@@ -116,6 +116,7 @@ describe('non-interfering launcher', () => {
     const log = path.join(cwd, 'cmux-args.txt')
     executable(path.join(cwd, 'bin'), 'cmux', [
       `printf '%s\n' "$*" >> '${log}'`,
+      `case " $* " in *" identify "*) printf '%s\n' '{"caller":{"pane_id":"source-pane-id"}}' ;; esac`,
       `case " $* " in *" new-split "*) printf '%s\n' '{"workspace_id":"workspace-id","pane_id":"pane-id","surface_id":"surface-id"}' ;; esac`,
       'exit 0',
     ].join('\n'))
@@ -135,7 +136,9 @@ describe('non-interfering launcher', () => {
     expect(fs.readFileSync(output, 'utf8')).toBe('\n')
     const calls = fs.readFileSync(log, 'utf8')
     expect(calls).toContain('ping')
+    expect(calls).toContain('identify --workspace workspace-id --surface source-surface-id')
     expect(calls).toContain('new-split down')
+    expect(calls).toContain('resize-pane --workspace workspace-id --pane source-pane-id -D --amount 10000')
     expect(calls).toContain('send --workspace workspace-id --surface surface-id')
     expect(calls).toContain('close-surface --workspace workspace-id --surface surface-id')
     expect(calls).not.toContain('tmux')

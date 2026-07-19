@@ -59,6 +59,7 @@ describe('cmux native HUD backend', () => {
 
   it('creates, sizes, and starts an unfocused bottom HUD split', () => {
     const { runner, calls } = recordingRunner([
+      result(0, JSON.stringify({ caller: { pane_id: 'source-pane-uuid' } })),
       result(0, JSON.stringify({
         workspace_id: 'workspace-uuid',
         pane_id: 'pane-uuid',
@@ -77,6 +78,16 @@ describe('cmux native HUD backend', () => {
       '--json',
       '--id-format',
       'uuids',
+      'identify',
+      '--workspace',
+      'workspace-uuid',
+      '--surface',
+      'source-surface-uuid',
+    ])
+    expect(calls[1]).toEqual([
+      '--json',
+      '--id-format',
+      'uuids',
       'new-split',
       'down',
       '--workspace',
@@ -86,8 +97,17 @@ describe('cmux native HUD backend', () => {
       '--focus',
       'false',
     ])
-    expect(calls[1]).toEqual(['resize-pane', '-t', 'pane-uuid', '-y', '5'])
-    expect(calls[2]?.slice(0, 6)).toEqual([
+    expect(calls[2]).toEqual([
+      'resize-pane',
+      '--workspace',
+      'workspace-uuid',
+      '--pane',
+      'source-pane-uuid',
+      '-D',
+      '--amount',
+      '10000',
+    ])
+    expect(calls[3]?.slice(0, 6)).toEqual([
       'send',
       '--workspace',
       'workspace-uuid',
@@ -95,8 +115,10 @@ describe('cmux native HUD backend', () => {
       'surface-uuid',
       '--',
     ])
-    expect(calls[2]?.at(-1)).toContain(`exec '`)
-    expect(calls[2]?.at(-1)).toContain(`'--cmux-pane' 'pane-uuid'`)
+    expect(calls[3]?.at(-1)).toContain(`exec '`)
+    expect(calls[3]?.at(-1)).toContain(`'--cmux-pane' 'pane-uuid'`)
+    expect(calls[3]?.at(-1)).toContain(`'--cmux-source-pane' 'source-pane-uuid'`)
+    expect(calls[3]?.at(-1)).toContain(`'--cmux-workspace' 'workspace-uuid'`)
   })
 
   it('closes the created HUD surface', () => {
@@ -113,6 +135,7 @@ describe('cmux native HUD backend', () => {
 
   it('cleans up the split when renderer startup fails', () => {
     const { runner, calls } = recordingRunner([
+      result(0, JSON.stringify({ caller: { pane_id: 'source-pane' } })),
       result(0, JSON.stringify({
         workspace_id: 'workspace',
         pane_id: 'pane',

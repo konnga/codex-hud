@@ -236,6 +236,8 @@ Backend selection defaults to `auto`: native cmux split when an interactive cmux
 
 The cmux backend leaves Codex in the original surface and creates only the HUD as a new unfocused bottom split, preserving native scrollback, selection, and copying. The tmux backend cannot provide identical terminal-native semantics. Inside a user-owned tmux session, Codex HUD does not change that session's tmux options.
 
+Codex HUD uses the cmux 0.64 directional pane-resize API (`--pane`, `-U` / `-D`, and `--amount`). Older Codex HUD builds that still call tmux-style `-t ... -y ...` arguments can fail open with a `Pane has no adjacent border in direction right` message; rebuild or upgrade Codex HUD before starting a new session.
+
 ## Diagnostics
 
 ```bash

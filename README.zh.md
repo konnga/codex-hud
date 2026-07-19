@@ -348,6 +348,8 @@ codex-hud configure --preset full
 
 cmux backend 让 Codex 保持在原 surface，只在下方创建不抢焦点的 HUD split，因此保留原生 scrollback、选择和复制。tmux backend 无法提供完全一致的终端原生语义；在用户自己的 tmux 中启动时，Codex HUD 不修改其 tmux 选项。
 
+Codex HUD 使用 cmux 0.64 的方向式 pane resize API（`--pane`、`-U` / `-D` 和 `--amount`）。仍调用 tmux 风格 `-t ... -y ...` 参数的旧版 Codex HUD 会以 `Pane has no adjacent border in direction right` 错误安全降级为无 HUD 的原生 Codex；遇到该错误时应先重新构建或升级 Codex HUD，再启动新会话。
+
 常用环境变量：
 
 | 变量                  | 作用                                                             |

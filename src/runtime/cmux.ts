@@ -2,7 +2,6 @@ import type { SpawnSyncReturns } from 'node:child_process'
 import { spawnSync } from 'node:child_process'
 // @env node
 import process from 'node:process'
-import { INITIAL_HUD_PANE_HEIGHT } from './pane-size.js'
 import { shellCommand } from './process.js'
 
 export interface CmuxRunner {
@@ -29,6 +28,12 @@ interface CmuxCreationPayload {
   pane_id?: unknown
   surface_id?: unknown
   workspace_id?: unknown
+}
+
+interface CmuxIdentityPayload {
+  caller?: {
+    pane_id?: unknown
+  }
 }
 
 export function isCmuxEnvironment(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -78,7 +83,12 @@ function requiredId(payload: CmuxCreationPayload, key: keyof CmuxCreationPayload
   return value
 }
 
-function rendererCommand(options: CmuxHudOptions, paneId: string): string {
+function rendererCommand(
+  options: CmuxHudOptions,
+  paneId: string,
+  sourcePaneId: string,
+  workspaceId: string,
+): string {
   const args = [
     '--max-old-space-size=64',
     '--max-semi-space-size=2',
@@ -93,6 +103,10 @@ function rendererCommand(options: CmuxHudOptions, paneId: string): string {
     String(options.maximumHeight),
     '--cmux-pane',
     paneId,
+    '--cmux-source-pane',
+    sourcePaneId,
+    '--cmux-workspace',
+    workspaceId,
   ]
   if (options.allowModifiedSession) {
     args.push('--allow-modified-session')
@@ -108,6 +122,28 @@ export function launchCmuxHud(
   const sourceSurfaceId = options.env?.CMUX_SURFACE_ID ?? process.env.CMUX_SURFACE_ID
   if (!workspaceId || !sourceSurfaceId) {
     throw new Error('cmux workspace or surface context is unavailable')
+  }
+  const identified = runner.run([
+    '--json',
+    '--id-format',
+    'uuids',
+    'identify',
+    '--workspace',
+    workspaceId,
+    '--surface',
+    sourceSurfaceId,
+  ])
+  ensureSuccess(identified, 'cmux identify')
+  let identity: CmuxIdentityPayload
+  try {
+    identity = JSON.parse(identified.stdout) as CmuxIdentityPayload
+  }
+  catch {
+    throw new Error('cmux identify returned invalid JSON')
+  }
+  const sourcePaneId = identity.caller?.pane_id
+  if (typeof sourcePaneId !== 'string' || !sourcePaneId) {
+    throw new Error('cmux identify did not return caller.pane_id')
   }
   const split = runner.run([
     '--json',
@@ -134,10 +170,13 @@ export function launchCmuxHud(
   try {
     const resize = runner.run([
       'resize-pane',
-      '-t',
-      handle.paneId,
-      '-y',
-      String(Math.min(INITIAL_HUD_PANE_HEIGHT, options.maximumHeight)),
+      '--workspace',
+      handle.workspaceId,
+      '--pane',
+      sourcePaneId,
+      '-D',
+      '--amount',
+      '10000',
     ])
     ensureSuccess(resize, 'cmux resize-pane')
     const send = runner.run([
@@ -147,7 +186,7 @@ export function launchCmuxHud(
       '--surface',
       handle.surfaceId,
       '--',
-      rendererCommand(options, handle.paneId),
+      rendererCommand(options, handle.paneId, sourcePaneId, handle.workspaceId),
     ])
     ensureSuccess(send, 'cmux send')
     return handle

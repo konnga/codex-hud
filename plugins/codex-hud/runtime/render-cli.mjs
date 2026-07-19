@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { _ as loadConfig, c as desiredPaneHeight, d as viewportRenderHeight, f as renderHud, g as sliceAnsi, h as visibleWidth, l as resizeCmuxPane, m as truncateAnsi, p as safeText, r as readSessionBinding, s as buildHudState, u as resizeHudPane, w as RolloutParser, y as findActiveSession } from "./session-binding-B7WQz9fR.mjs";
+import { _ as loadConfig, c as desiredPaneHeight, d as viewportRenderHeight, f as renderHud, g as sliceAnsi, h as visibleWidth, l as resizeCmuxPane, m as truncateAnsi, p as safeText, r as readSessionBinding, s as buildHudState, u as resizeHudPane, w as RolloutParser, y as findActiveSession } from "./session-binding-Bcz21foS.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -207,6 +207,8 @@ function parseOptions(args) {
 		launchedAfter: null,
 		allowModifiedSession: false,
 		cmuxPaneId: null,
+		cmuxSourcePaneId: null,
+		cmuxWorkspaceId: null,
 		maxHeight: Number(process.env.CODEX_HUD_HEIGHT) || 30
 	};
 	for (let index = 0; index < args.length; index += 1) {
@@ -221,6 +223,8 @@ function parseOptions(args) {
 		} else if (argument === "--no-color") options.color = false;
 		else if (argument === "--allow-modified-session") options.allowModifiedSession = true;
 		else if (argument === "--cmux-pane" && args[index + 1]) options.cmuxPaneId = args[++index];
+		else if (argument === "--cmux-source-pane" && args[index + 1]) options.cmuxSourcePaneId = args[++index];
+		else if (argument === "--cmux-workspace" && args[index + 1]) options.cmuxWorkspaceId = args[++index];
 		else if (argument === "--max-height" && args[index + 1]) options.maxHeight = Math.max(5, Math.min(30, Number(args[++index]) || 30));
 	}
 	return options;
@@ -306,7 +310,7 @@ async function runRenderCli(args = process.argv.slice(2)) {
 			return;
 		}
 		const desiredHeight = navigator.active ? options.maxHeight : desiredPaneHeight(lines.length, options.maxHeight);
-		paneHeight = options.cmuxPaneId ? resizeCmuxPane(options.cmuxPaneId, desiredHeight, paneHeight) : resizeHudPane(paneId, desiredHeight, paneHeight);
+		paneHeight = options.cmuxPaneId ? resizeCmuxPane(options.cmuxPaneId, options.cmuxSourcePaneId, options.cmuxWorkspaceId, desiredHeight, process.stdout.rows, paneHeight) : resizeHudPane(paneId, desiredHeight, paneHeight);
 		const viewport = `${width}x${String(process.stdout.rows ?? "")}`;
 		const viewportChanged = viewport !== lastViewport;
 		if (frame !== lastFrame || viewportChanged) {

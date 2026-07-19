@@ -3200,6 +3200,7 @@ function renderHud(ctx) {
 //#endregion
 //#region src/runtime/pane-size.ts
 const INITIAL_HUD_PANE_HEIGHT = 5;
+const CMUX_RESIZE_POINTS_PER_ROW = 20;
 function viewportRenderHeight(maximum, rows) {
 	const safeMaximum = Math.max(1, Math.round(maximum));
 	if (!rows || !Number.isFinite(rows)) return safeMaximum;
@@ -3219,15 +3220,20 @@ function resizeHudPane(paneId, desiredHeight, previousHeight, runner = (args) =>
 		String(desiredHeight)
 	]).status === 0 ? desiredHeight : previousHeight;
 }
-function resizeCmuxPane(paneId, desiredHeight, previousHeight, runner = (args) => spawnSync("cmux", args, { stdio: "ignore" })) {
-	if (!paneId) return null;
-	if (previousHeight === desiredHeight) return previousHeight;
+function resizeCmuxPane(paneId, sourcePaneId, workspaceId, desiredHeight, currentRows, previousHeight, runner = (args) => spawnSync("cmux", args, { stdio: "ignore" })) {
+	if (!paneId || !sourcePaneId || !workspaceId || !currentRows || !Number.isFinite(currentRows)) return null;
+	const delta = Math.round(desiredHeight) - Math.floor(currentRows);
+	if (delta === 0) return desiredHeight;
+	const growing = delta > 0;
 	return runner([
 		"resize-pane",
-		"-t",
-		paneId,
-		"-y",
-		String(desiredHeight)
+		"--workspace",
+		workspaceId,
+		"--pane",
+		growing ? paneId : sourcePaneId,
+		growing ? "-U" : "-D",
+		"--amount",
+		String(Math.abs(delta) * 20)
 	]).status === 0 ? desiredHeight : previousHeight;
 }
 
@@ -4736,4 +4742,4 @@ async function waitForNewRootSession(cwd, snapshot, codexHome = getCodexHome(), 
 
 //#endregion
 export { getLegacyStateDirectory as C, getHudStateDirectory as S, loadConfig as _, waitForNewRootSession as a, getCodexHome as b, desiredPaneHeight as c, viewportRenderHeight as d, renderHud as f, sliceAnsi as g, visibleWidth as h, snapshotRootSessions as i, resizeCmuxPane as l, truncateAnsi as m, createSessionBindingPath as n, writeSessionBinding as o, safeText as p, readSessionBinding as r, buildHudState as s, acquireSessionDiscoveryLock as t, resizeHudPane as u, DEFAULT_CONFIG as v, RolloutParser as w, getConfigPath as x, findActiveSession as y };
-//# sourceMappingURL=session-binding-B7WQz9fR.mjs.map
+//# sourceMappingURL=session-binding-Bcz21foS.mjs.map

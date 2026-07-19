@@ -37,12 +37,32 @@ describe('adaptive HUD pane sizing', () => {
     expect(run).toHaveBeenCalledWith(['resize-pane', '-t', '%2', '-y', '7'])
   })
 
-  it('resizes only a cmux HUD pane and suppresses unchanged requests', () => {
+  it('uses cmux directional resizing based on the renderer viewport', () => {
     const run = vi.fn(() => ({ status: 0 }))
-    expect(resizeCmuxPane(null, 7, null, run)).toBeNull()
-    expect(resizeCmuxPane('pane-id', 7, 7, run)).toBe(7)
+    expect(resizeCmuxPane(null, 'source', 'workspace', 7, 4, null, run)).toBeNull()
+    expect(resizeCmuxPane('hud', 'source', 'workspace', 7, 7, null, run)).toBe(7)
     expect(run).not.toHaveBeenCalled()
-    expect(resizeCmuxPane('pane-id', 7, 12, run)).toBe(7)
-    expect(run).toHaveBeenCalledWith(['resize-pane', '-t', 'pane-id', '-y', '7'])
+    expect(resizeCmuxPane('hud', 'source', 'workspace', 7, 4, null, run)).toBe(7)
+    expect(run).toHaveBeenLastCalledWith([
+      'resize-pane',
+      '--workspace',
+      'workspace',
+      '--pane',
+      'hud',
+      '-U',
+      '--amount',
+      '60',
+    ])
+    expect(resizeCmuxPane('hud', 'source', 'workspace', 7, 9, null, run)).toBe(7)
+    expect(run).toHaveBeenLastCalledWith([
+      'resize-pane',
+      '--workspace',
+      'workspace',
+      '--pane',
+      'source',
+      '-D',
+      '--amount',
+      '40',
+    ])
   })
 })

@@ -37,6 +37,8 @@ interface RenderCliOptions {
   launchedAfter: Date | null
   allowModifiedSession: boolean
   cmuxPaneId: string | null
+  cmuxSourcePaneId: string | null
+  cmuxWorkspaceId: string | null
   maxHeight: number
 }
 
@@ -50,6 +52,8 @@ function parseOptions(args: string[]): RenderCliOptions {
     launchedAfter: null,
     allowModifiedSession: false,
     cmuxPaneId: null,
+    cmuxSourcePaneId: null,
+    cmuxWorkspaceId: null,
     maxHeight: Number(process.env.CODEX_HUD_HEIGHT) || DEFAULT_HUD_MAX_HEIGHT,
   }
   for (let index = 0; index < args.length; index += 1) {
@@ -78,6 +82,12 @@ function parseOptions(args: string[]): RenderCliOptions {
     }
     else if (argument === '--cmux-pane' && args[index + 1]) {
       options.cmuxPaneId = args[++index]
+    }
+    else if (argument === '--cmux-source-pane' && args[index + 1]) {
+      options.cmuxSourcePaneId = args[++index]
+    }
+    else if (argument === '--cmux-workspace' && args[index + 1]) {
+      options.cmuxWorkspaceId = args[++index]
     }
     else if (argument === '--max-height' && args[index + 1]) {
       options.maxHeight = Math.max(
@@ -186,7 +196,14 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
       ? options.maxHeight
       : desiredPaneHeight(lines.length, options.maxHeight)
     paneHeight = options.cmuxPaneId
-      ? resizeCmuxPane(options.cmuxPaneId, desiredHeight, paneHeight)
+      ? resizeCmuxPane(
+          options.cmuxPaneId,
+          options.cmuxSourcePaneId,
+          options.cmuxWorkspaceId,
+          desiredHeight,
+          process.stdout.rows,
+          paneHeight,
+        )
       : resizeHudPane(paneId, desiredHeight, paneHeight)
     const viewport = `${width}x${String(process.stdout.rows ?? '')}`
     const viewportChanged = viewport !== lastViewport

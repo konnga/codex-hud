@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { C as getLegacyStateDirectory, S as getHudStateDirectory, _ as loadConfig, a as waitForNewRootSession, b as getCodexHome, f as renderHud, i as snapshotRootSessions, n as createSessionBindingPath, o as writeSessionBinding, s as buildHudState, t as acquireSessionDiscoveryLock, v as DEFAULT_CONFIG, w as RolloutParser, x as getConfigPath, y as findActiveSession } from "./session-binding-B7WQz9fR.mjs";
+import { C as getLegacyStateDirectory, S as getHudStateDirectory, _ as loadConfig, a as waitForNewRootSession, b as getCodexHome, f as renderHud, i as snapshotRootSessions, n as createSessionBindingPath, o as writeSessionBinding, s as buildHudState, t as acquireSessionDiscoveryLock, v as DEFAULT_CONFIG, w as RolloutParser, x as getConfigPath, y as findActiveSession } from "./session-binding-Bcz21foS.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import process$1, { stdin, stdout } from "node:process";
@@ -1797,7 +1797,7 @@ function requiredId(payload, key) {
 	if (typeof value !== "string" || !value) throw new Error(`cmux split did not return ${key}`);
 	return value;
 }
-function rendererCommand(options, paneId) {
+function rendererCommand(options, paneId, sourcePaneId, workspaceId) {
 	const args = [
 		"--max-old-space-size=64",
 		"--max-semi-space-size=2",
@@ -1811,7 +1811,11 @@ function rendererCommand(options, paneId) {
 		"--max-height",
 		String(options.maximumHeight),
 		"--cmux-pane",
-		paneId
+		paneId,
+		"--cmux-source-pane",
+		sourcePaneId,
+		"--cmux-workspace",
+		workspaceId
 	];
 	if (options.allowModifiedSession) args.push("--allow-modified-session");
 	return `exec ${shellCommand(process$1.execPath, args)}\n`;
@@ -1820,6 +1824,25 @@ function launchCmuxHud(options, runner) {
 	const workspaceId = options.env?.CMUX_WORKSPACE_ID ?? process$1.env.CMUX_WORKSPACE_ID;
 	const sourceSurfaceId = options.env?.CMUX_SURFACE_ID ?? process$1.env.CMUX_SURFACE_ID;
 	if (!workspaceId || !sourceSurfaceId) throw new Error("cmux workspace or surface context is unavailable");
+	const identified = runner.run([
+		"--json",
+		"--id-format",
+		"uuids",
+		"identify",
+		"--workspace",
+		workspaceId,
+		"--surface",
+		sourceSurfaceId
+	]);
+	ensureSuccess$1(identified, "cmux identify");
+	let identity;
+	try {
+		identity = JSON.parse(identified.stdout);
+	} catch {
+		throw new Error("cmux identify returned invalid JSON");
+	}
+	const sourcePaneId = identity.caller?.pane_id;
+	if (typeof sourcePaneId !== "string" || !sourcePaneId) throw new Error("cmux identify did not return caller.pane_id");
 	const split = runner.run([
 		"--json",
 		"--id-format",
@@ -1843,10 +1866,13 @@ function launchCmuxHud(options, runner) {
 	try {
 		ensureSuccess$1(runner.run([
 			"resize-pane",
-			"-t",
-			handle.paneId,
-			"-y",
-			String(Math.min(5, options.maximumHeight))
+			"--workspace",
+			handle.workspaceId,
+			"--pane",
+			sourcePaneId,
+			"-D",
+			"--amount",
+			"10000"
 		]), "cmux resize-pane");
 		ensureSuccess$1(runner.run([
 			"send",
@@ -1855,7 +1881,7 @@ function launchCmuxHud(options, runner) {
 			"--surface",
 			handle.surfaceId,
 			"--",
-			rendererCommand(options, handle.paneId)
+			rendererCommand(options, handle.paneId, sourcePaneId, handle.workspaceId)
 		]), "cmux send");
 		return handle;
 	} catch (error) {
