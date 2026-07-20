@@ -464,3 +464,7 @@ node dist/cli.mjs start --detach -- "Reply with exactly HUD-OK"
 ```
 
 维护者发布新版本时应遵循 [版本与发布流程](./docs/releasing.zh.md)，统一更新 SemVer、插件 cachebuster、CHANGELOG 与 Git tag。
+
+## 开源协议
+
+Codex HUD 基于 [MIT License](./LICENSE) 开源。改编内容的署名信息请参阅 [NOTICE](./NOTICE)。

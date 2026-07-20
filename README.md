@@ -313,3 +313,7 @@ Maintainers should follow [Versioning and releases](./docs/releasing.md) when pr
 See [README.zh.md](./README.zh.md) for complete Chinese usage and architecture notes. Inside Codex, use `$codex-hud:setup`, `$codex-hud:configure`, or `$codex-hud:doctor`; all three are also available through `/skills`.
 
 Inside cmux, Codex HUD uses the cmux control socket to create, resize, and close only the HUD surface. Outside an existing tmux client, the compatibility backend creates a private per-launch tmux socket and does not load the user's tmux configuration. Inside tmux, it only creates and later removes the HUD pane without changing user-owned options.
+
+## License
+
+Codex HUD is released under the [MIT License](./LICENSE). See [NOTICE](./NOTICE) for attribution of adapted work.
