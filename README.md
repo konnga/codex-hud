@@ -19,7 +19,7 @@ Approval: on-request │ Permissions: workspace-write │ Sandbox: workspace-wri
 🤖 ◐ explorer: Inspect protocol (2m)
 📋 ▸ Render HUD (1/3)
 ↕ Turns: 3 · click HUD and press n
-⏱️ 1h │ Compactions: 1
+⏱️ 1h │ Tokens: 85k (input 50k, cache 30k, output 5k) │ Compactions: 1
 ```
 
 Example terminal view (tmux):
@@ -246,6 +246,8 @@ codex-hud configure --preset full --yes
 codex-hud configure --status --json
 codex-hud configure --enable tools,skills,agents --disable memory,speed --yes
 ```
+
+The Full preset enables cumulative session token totals by default. Existing configurations keep their saved value; enable it explicitly with `codex-hud configure --enable sessionTokens --yes` if needed.
 
 Selectable names:
 

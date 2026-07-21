@@ -38,7 +38,7 @@ export function createPreset(preset: ConfigPreset): HudConfig {
       showCollaborationMode: false,
       showMemoryUsage: false,
       showPromptCache: true,
-      showSessionTokens: false,
+      showSessionTokens: true,
       showSessionStartDate: false,
       showLastResponseAt: false,
       showCompactions: true,

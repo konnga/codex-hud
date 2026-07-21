@@ -21,7 +21,7 @@ Codex HUD 是面向 OpenAI Codex CLI 的常驻终端 HUD，集中展示上下文
 🤖 ◐ explorer: 检查协议 (2m)
 📋 ▸ 渲染 HUD (1/3)
 ↕ 轮次: 3 · 点击 HUD 后按 n 导航
-⏱️ 1h │ 压缩: 1
+⏱️ 1h │ Token: 85k (输入 50k, 缓存 30k, 输出 5k) │ 压缩: 1
 ```
 
 实际终端效果（tmux）：
@@ -341,6 +341,8 @@ codex-hud configure --preset essential --yes
 codex-hud configure --preset minimal --yes
 ```
 
+Full 预设现在默认显示会话累计 Token。已有配置会保留之前保存的值；如需单独开启，可以运行 `codex-hud configure --enable sessionTokens --yes`。
+
 首次运行 `codex-hud setup` 会以 Full 为基线打开显示项选择面板并提供实时预览。之后直接运行 `codex-hud configure` 会从当前配置开始编辑。也可以查询或精确更新指定字段：
 
 ```bash
@@ -452,7 +454,7 @@ codex plugin marketplace remove codex-hud
 
 Claude Code 提供可执行自定义 statusline renderer；Codex CLI 当前只提供固定字段的 `tui.status_line`，插件不能直接注入任意多行 TUI footer。Codex HUD 因此使用独立 pane：cmux 中使用原生 split，其他环境使用 tmux 兼容 backend，同时保持官方 Codex 二进制不变。
 
-HUD 是纯附加层：backend 不可用、pane 创建失败或 renderer 异常时，启动器会直接运行官方 Codex 并保留原始参数与退出码。Full 预设默认聚焦日常信息；系统内存、配置计数、Session ID、开始日期和详细 Token 等诊断字段仍可在配置中单独开启。
+HUD 是纯附加层：backend 不可用、pane 创建失败或 renderer 异常时，启动器会直接运行官方 Codex 并保留原始参数与退出码。Full 预设默认聚焦日常信息并显示会话累计 Token；系统内存、配置计数、Session ID 和开始日期等诊断字段仍可在配置中单独开启。
 
 ## 隐私与安全
 

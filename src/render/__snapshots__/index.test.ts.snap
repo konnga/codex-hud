@@ -12,6 +12,6 @@ exports[`hud renderer > renders the full expanded Codex HUD 1`] = `
   "🤖 ◐ explorer: Inspect protocol (2m)",
   "📋 ▸ Render HUD (1/3)",
   "↕ Turns: 1 · click HUD and press n",
-  "⏱️ 1h │ Compactions: 1",
+  "⏱️ 1h │ Tokens: 55K (in 50K, cache 30K, out 5K) │ Compactions: 1",
 ]
 `;

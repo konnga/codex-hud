@@ -223,6 +223,7 @@ describe('configuration presets', () => {
     expect(config.display.showAgents).toBe(true)
     expect(config.display.showTodos).toBe(true)
     expect(config.display.showPermissionProfile).toBe(true)
+    expect(config.display.showSessionTokens).toBe(true)
   })
 
   it('keeps the minimal preset focused on model, project, and context', () => {

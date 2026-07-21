@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Enabled cumulative session token totals by default in the Full preset.
+
+---
+
+### 变更
+
+- Full 预设现在默认显示会话累计 Token。
+
 ## 0.2.1 - 2026-07-21
 
 ### Fixed

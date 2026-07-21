@@ -1238,7 +1238,7 @@ function createPreset(preset) {
 			showCollaborationMode: false,
 			showMemoryUsage: false,
 			showPromptCache: true,
-			showSessionTokens: false,
+			showSessionTokens: true,
 			showSessionStartDate: false,
 			showLastResponseAt: false,
 			showCompactions: true,
