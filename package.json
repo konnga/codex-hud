@@ -1,7 +1,7 @@
 {
   "name": "codex-hud",
   "type": "module",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "packageManager": "pnpm@10.32.1",
   "description": "A persistent Claude HUD-style heads-up display for OpenAI Codex CLI.",
   "author": "Codex HUD Contributors",

@@ -2,15 +2,19 @@
 
 ## [Unreleased]
 
+## 0.2.2 - 2026-07-21
+
 ### Changed
 
 - Enabled cumulative session token totals by default in the Full preset.
+- Clarified plugin version update steps, including recovery for stale or conflicting marketplace registrations.
 
 ---
 
 ### 变更
 
 - Full 预设现在默认显示会话累计 Token。
+- 完善插件版本更新步骤，并补充 marketplace 快照过期或同名来源冲突时的恢复流程。
 
 ## 0.2.1 - 2026-07-21
 
