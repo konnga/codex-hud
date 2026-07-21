@@ -14,6 +14,7 @@ Codex HUD 以 `package.json` 作为公开[语义化版本](https://semver.org/la
 - Minor：向后兼容的新功能、新 HUD 字段或 backend 能力。
 - Major：不兼容的配置、launcher 或行为变更。
 - 尚未发布的用户可见变更统一记录在 `CHANGELOG.md` 的 `## [Unreleased]` 下。
+- Release Notes 必须同时提供英文和简体中文：英文在前，中间使用水平分隔线（`---`），简体中文在后。GitHub Release 正文会直接从对应版本章节提取。
 - 本地开发只需要刷新插件时，不要增加 SemVer，应该只更新 cachebuster。
 
 ## 准备发布

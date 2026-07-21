@@ -14,6 +14,7 @@ For example, package version `0.2.0` can be installed as plugin version `0.2.0+c
 - Minor: backward-compatible features, new HUD fields, or backend capabilities.
 - Major: incompatible configuration, launcher, or behavior changes.
 - Keep pending user-visible changes under `## [Unreleased]` in `CHANGELOG.md`.
+- Write release notes in both English and Simplified Chinese: English first, then a horizontal rule (`---`), then Simplified Chinese. The GitHub Release body is extracted directly from that version section.
 - Do not increment SemVer only to refresh an installed plugin during development; refresh the cachebuster instead.
 
 ## Prepare a release

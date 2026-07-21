@@ -4,11 +4,23 @@
 
 ## 0.2.1 - 2026-07-21
 
-### Fixed
+### English
+
+#### Fixed
 
 - Prevented duplicate or stale cmux HUD splits by replacing the previously owned HUD for the same source surface and cleaning it up on launcher termination signals.
 - Kept managed launchers working after plugin upgrades or cache cleanup by installing a private runtime copy under the Codex HUD state directory instead of referencing the ephemeral plugin cache.
 - Stopped cmux divider jitter by handing HUD height control to the user after a manual pane resize instead of repeatedly restoring the content-fitted height.
+
+---
+
+### 简体中文
+
+#### 修复
+
+- 通过替换同一来源 surface 之前持有的 HUD，并在 launcher 收到终止信号时完成清理，避免 cmux 中出现重复或残留的 HUD split。
+- 将私有运行时副本安装到 Codex HUD 状态目录，避免插件升级或缓存清理后，受管 launcher 继续引用已经删除的临时插件缓存。
+- 用户手动调整 pane 高度后，将 HUD 高度控制权交给用户，避免刷新时反复恢复内容适配高度造成 cmux 分隔线抖动。
 
 ## 0.2.0 - 2026-07-19
 
