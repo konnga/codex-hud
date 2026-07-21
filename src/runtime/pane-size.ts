@@ -20,6 +20,16 @@ export function desiredPaneHeight(lineCount: number, maximum: number, minimum = 
   return Math.min(safeMaximum, Math.max(minimum, Math.round(lineCount)))
 }
 
+export function isExternalCmuxResize(
+  currentRows: number | null | undefined,
+  managedHeight: number | null,
+): boolean {
+  if (managedHeight === null || !currentRows || !Number.isFinite(currentRows)) {
+    return false
+  }
+  return Math.floor(currentRows) !== managedHeight
+}
+
 export function resizeHudPane(
   paneId: string | null,
   desiredHeight: number,
@@ -47,6 +57,9 @@ export function resizeCmuxPane(
 ): number | null {
   if (!paneId || !sourcePaneId || !workspaceId || !currentRows || !Number.isFinite(currentRows)) {
     return null
+  }
+  if (previousHeight === desiredHeight) {
+    return previousHeight
   }
   const delta = Math.round(desiredHeight) - Math.floor(currentRows)
   if (delta === 0) {

@@ -3209,6 +3209,10 @@ function viewportRenderHeight(maximum, rows) {
 function desiredPaneHeight(lineCount, maximum, minimum = 5) {
 	return Math.min(Math.max(minimum, Math.round(maximum)), Math.max(minimum, Math.round(lineCount)));
 }
+function isExternalCmuxResize(currentRows, managedHeight) {
+	if (managedHeight === null || !currentRows || !Number.isFinite(currentRows)) return false;
+	return Math.floor(currentRows) !== managedHeight;
+}
 function resizeHudPane(paneId, desiredHeight, previousHeight, runner = (args) => spawnSync("tmux", args, { stdio: "ignore" })) {
 	if (!paneId) return null;
 	if (previousHeight === desiredHeight) return previousHeight;
@@ -3222,6 +3226,7 @@ function resizeHudPane(paneId, desiredHeight, previousHeight, runner = (args) =>
 }
 function resizeCmuxPane(paneId, sourcePaneId, workspaceId, desiredHeight, currentRows, previousHeight, runner = (args) => spawnSync("cmux", args, { stdio: "ignore" })) {
 	if (!paneId || !sourcePaneId || !workspaceId || !currentRows || !Number.isFinite(currentRows)) return null;
+	if (previousHeight === desiredHeight) return previousHeight;
 	const delta = Math.round(desiredHeight) - Math.floor(currentRows);
 	if (delta === 0) return desiredHeight;
 	const growing = delta > 0;
@@ -4741,5 +4746,5 @@ async function waitForNewRootSession(cwd, snapshot, codexHome = getCodexHome(), 
 }
 
 //#endregion
-export { getLegacyStateDirectory as C, getHudStateDirectory as S, loadConfig as _, waitForNewRootSession as a, getCodexHome as b, desiredPaneHeight as c, viewportRenderHeight as d, renderHud as f, sliceAnsi as g, visibleWidth as h, snapshotRootSessions as i, resizeCmuxPane as l, truncateAnsi as m, createSessionBindingPath as n, writeSessionBinding as o, safeText as p, readSessionBinding as r, buildHudState as s, acquireSessionDiscoveryLock as t, resizeHudPane as u, DEFAULT_CONFIG as v, RolloutParser as w, getConfigPath as x, findActiveSession as y };
-//# sourceMappingURL=session-binding-Bcz21foS.mjs.map
+export { getHudStateDirectory as C, getConfigPath as S, RolloutParser as T, sliceAnsi as _, waitForNewRootSession as a, findActiveSession as b, desiredPaneHeight as c, resizeHudPane as d, viewportRenderHeight as f, visibleWidth as g, truncateAnsi as h, snapshotRootSessions as i, isExternalCmuxResize as l, safeText as m, createSessionBindingPath as n, writeSessionBinding as o, renderHud as p, readSessionBinding as r, buildHudState as s, acquireSessionDiscoveryLock as t, resizeCmuxPane as u, loadConfig as v, getLegacyStateDirectory as w, getCodexHome as x, DEFAULT_CONFIG as y };
+//# sourceMappingURL=session-binding-BJelLPyI.mjs.map

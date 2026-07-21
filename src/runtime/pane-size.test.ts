@@ -3,6 +3,7 @@ import {
   DEFAULT_HUD_MAX_HEIGHT,
   desiredPaneHeight,
   INITIAL_HUD_PANE_HEIGHT,
+  isExternalCmuxResize,
   resizeCmuxPane,
   resizeHudPane,
   viewportRenderHeight,
@@ -64,5 +65,20 @@ describe('adaptive HUD pane sizing', () => {
       '--amount',
       '40',
     ])
+  })
+
+  it('does not fight an external cmux resize after already requesting the desired height', () => {
+    const run = vi.fn(() => ({ status: 0 }))
+
+    expect(resizeCmuxPane('hud', 'source', 'workspace', 7, 12, 7, run)).toBe(7)
+    expect(run).not.toHaveBeenCalled()
+  })
+
+  it('detects when cmux rows diverge from the last HUD-managed height', () => {
+    expect(isExternalCmuxResize(7, 7)).toBe(false)
+    expect(isExternalCmuxResize(12, 7)).toBe(true)
+    expect(isExternalCmuxResize(undefined, 7)).toBe(false)
+    expect(isExternalCmuxResize(12, null)).toBe(false)
+    expect(isExternalCmuxResize(Number.NaN, 7)).toBe(false)
   })
 })

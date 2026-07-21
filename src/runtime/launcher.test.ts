@@ -1,9 +1,16 @@
+import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
-import { afterEach, describe, expect, it } from 'vitest'
-import { isResumeInvocation, launchCodex, runCodexChild, waitForTmuxClient } from './launcher.js'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import {
+  installTerminationCleanup,
+  isResumeInvocation,
+  launchCodex,
+  runCodexChild,
+  waitForTmuxClient,
+} from './launcher.js'
 import { readSessionBinding } from './session-binding.js'
 
 const directories: string[] = []
@@ -60,6 +67,28 @@ async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<voi
 }
 
 describe('non-interfering launcher', () => {
+  it('cleans up once before re-delivering a termination signal', () => {
+    const target = new EventEmitter() as EventEmitter & {
+      pid: number
+      kill: (pid: number, signal: NodeJS.Signals) => boolean
+    }
+    target.pid = 42
+    target.kill = vi.fn(() => true)
+    const cleanup = vi.fn()
+    const dispose = installTerminationCleanup(cleanup, target)
+
+    target.emit('SIGTERM')
+    target.emit('SIGTERM')
+    dispose()
+
+    expect(cleanup).toHaveBeenCalledTimes(1)
+    expect(target.kill).toHaveBeenCalledTimes(1)
+    expect(target.kill).toHaveBeenCalledWith(42, 'SIGTERM')
+    expect(target.listenerCount('SIGINT')).toBe(0)
+    expect(target.listenerCount('SIGTERM')).toBe(0)
+    expect(target.listenerCount('SIGHUP')).toBe(0)
+  })
+
   it('distinguishes resume flows from ordinary new sessions', () => {
     expect(isResumeInvocation(['resume', '--last'])).toBe(true)
     expect(isResumeInvocation(['--model', 'gpt-test', 'resume', '--last'])).toBe(true)

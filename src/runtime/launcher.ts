@@ -86,6 +86,50 @@ export interface LaunchResult extends TmuxLaunchResult {
   cmuxSurfaceId?: string | null
 }
 
+const TERMINATION_SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const
+type TerminationSignal = typeof TERMINATION_SIGNALS[number]
+
+interface TerminationSignalTarget {
+  pid: number
+  once: (signal: TerminationSignal, listener: () => void) => unknown
+  off: (signal: TerminationSignal, listener: () => void) => unknown
+  kill: (pid: number, signal: TerminationSignal) => boolean
+}
+
+export function installTerminationCleanup(
+  cleanup: () => void,
+  target: TerminationSignalTarget = process,
+): () => void {
+  let active = true
+  const handlers = new Map<TerminationSignal, () => void>()
+  const dispose = (): void => {
+    if (!active) {
+      return
+    }
+    active = false
+    for (const [signal, handler] of handlers) {
+      target.off(signal, handler)
+    }
+  }
+  for (const signal of TERMINATION_SIGNALS) {
+    const handler = (): void => {
+      if (!active) {
+        return
+      }
+      try {
+        cleanup()
+      }
+      finally {
+        dispose()
+        target.kill(target.pid, signal)
+      }
+    }
+    handlers.set(signal, handler)
+    target.once(signal, handler)
+  }
+  return dispose
+}
+
 export function runtimePaths(): { cliPath: string, renderCliPath: string } {
   const modulePath = fileURLToPath(import.meta.url)
   const cliPath = modulePath.endsWith('.ts')
@@ -151,6 +195,16 @@ export async function launchCodex(options: LaunchOptions): Promise<LaunchResult>
       process.stderr.write(`Codex HUD: cmux HUD startup failed (${message}); starting Codex without the HUD.\n`)
       return runDirect()
     }
+    let cleaned = false
+    const cleanup = (): void => {
+      if (cleaned) {
+        return
+      }
+      cleaned = true
+      closeCmuxHud(hud, runner)
+      removeFile(bindingPath)
+    }
+    const disposeTerminationCleanup = installTerminationCleanup(cleanup)
     try {
       const exitCode = await runCodexChild(
         options.codexArgs,
@@ -170,8 +224,8 @@ export async function launchCodex(options: LaunchOptions): Promise<LaunchResult>
       }
     }
     finally {
-      closeCmuxHud(hud, runner)
-      removeFile(bindingPath)
+      disposeTerminationCleanup()
+      cleanup()
     }
   }
 

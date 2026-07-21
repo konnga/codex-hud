@@ -23,10 +23,15 @@ function environment(): void {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-setup-'))
   directories.push(root)
   const realCodex = path.join(root, 'real-codex')
+  const runtime = path.join(root, 'runtime')
   fs.writeFileSync(realCodex, '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+  fs.mkdirSync(runtime)
+  fs.writeFileSync(path.join(runtime, 'cli.mjs'), 'process.exit(0)\n')
+  fs.writeFileSync(path.join(runtime, 'render-cli.mjs'), 'process.exit(0)\n')
   process.env.CODEX_HOME = path.join(root, 'codex-home')
   process.env.CODEX_HUD_BIN_DIR = path.join(root, 'bin')
   process.env.CODEX_HUD_CODEX_BIN = realCodex
+  process.env.CODEX_HUD_RUNTIME_DIR = runtime
 }
 
 describe('codex HUD setup', () => {

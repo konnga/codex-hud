@@ -168,6 +168,8 @@ codex
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
+The managed launchers use a private runtime copy in `${CODEX_HOME:-~/.codex}/codex-hud/runtime`. They do not reference the versioned Codex plugin cache directly, so marketplace upgrades and cache cleanup cannot leave `codex`, `codex-hud`, or `codex-hud-render` pointing at deleted files.
+
 Use `node dist/cli.mjs setup` without `--codex-shim` if you do not want to replace the `codex` command, then start sessions with `codex-hud`. Existing configuration is preserved unless you explicitly select a preset.
 
 The managed shim transparently passes non-interactive commands such as `codex plugin`, `exec`, `login`, `mcp`, `completion`, and `--version` to the official binary; only interactive TUI sessions receive a HUD pane.
@@ -263,7 +265,7 @@ Configuration lives at `${CODEX_HOME:-~/.codex}/codex-hud/config.json`.
 
 Backend selection defaults to `auto`: native cmux split when an interactive cmux surface and healthy control socket are available; the user's existing tmux session when already inside tmux; otherwise a private tmux compatibility session. A broken cmux socket falls back to native Codex without a HUD instead of silently wrapping Codex in tmux. Use `--backend cmux|tmux|none` to override the automatic choice.
 
-The cmux backend leaves Codex in the original surface and creates only the HUD as a new unfocused bottom split, preserving native scrollback, selection, and copying. The tmux backend cannot provide identical terminal-native semantics. Inside a user-owned tmux session, Codex HUD does not change that session's tmux options.
+The cmux backend leaves Codex in the original surface and creates only the HUD as a new unfocused bottom split, preserving native scrollback, selection, and copying. Its initial height fits the rendered content; dragging the divider transfers height control to the user for the rest of that HUD session, so later refreshes do not resize it back. The tmux backend cannot provide identical terminal-native semantics. Inside a user-owned tmux session, Codex HUD does not change that session's tmux options.
 
 Codex HUD uses the cmux 0.64 directional pane-resize API (`--pane`, `-U` / `-D`, and `--amount`). Older Codex HUD builds that still call tmux-style `-t ... -y ...` arguments can fail open with a `Pane has no adjacent border in direction right` message; rebuild or upgrade Codex HUD before starting a new session.
 

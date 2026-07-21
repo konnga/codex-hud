@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { C as getLegacyStateDirectory, S as getHudStateDirectory, _ as loadConfig, a as waitForNewRootSession, b as getCodexHome, f as renderHud, i as snapshotRootSessions, n as createSessionBindingPath, o as writeSessionBinding, s as buildHudState, t as acquireSessionDiscoveryLock, v as DEFAULT_CONFIG, w as RolloutParser, x as getConfigPath, y as findActiveSession } from "./session-binding-Bcz21foS.mjs";
+import { C as getHudStateDirectory, S as getConfigPath, T as RolloutParser, a as waitForNewRootSession, b as findActiveSession, i as snapshotRootSessions, n as createSessionBindingPath, o as writeSessionBinding, p as renderHud, s as buildHudState, t as acquireSessionDiscoveryLock, v as loadConfig, w as getLegacyStateDirectory, x as getCodexHome, y as DEFAULT_CONFIG } from "./session-binding-BJelLPyI.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import process$1, { stdin, stdout } from "node:process";
@@ -7,8 +7,8 @@ import os from "node:os";
 import { styleText } from "node:util";
 import l__default from "node:readline";
 import { spawn, spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
 import { createHash, randomUUID } from "node:crypto";
+import { fileURLToPath } from "node:url";
 
 //#region \0rolldown/runtime.js
 var __commonJSMin = (cb, mod) => () => (mod || (cb((mod = { exports: {} }).exports, mod), cb = null), mod.exports);
@@ -1631,12 +1631,81 @@ function migrateLegacyState(dryRun) {
 		preserveTimestamps: true
 	});
 }
-function executablePaths() {
-	const directory = path.dirname(process$1.argv[1]);
+function runtimeSourceDirectory() {
+	return path.resolve(process$1.env.CODEX_HUD_RUNTIME_DIR || path.dirname(process$1.argv[1]));
+}
+function managedRuntimeDirectory() {
+	return path.join(getHudStateDirectory(), "runtime");
+}
+function installedRuntimeDirectory(state) {
+	const expected = managedRuntimeDirectory();
+	return state.runtimeDirectory && path.resolve(state.runtimeDirectory) === path.resolve(expected) ? state.runtimeDirectory : expected;
+}
+function executablePaths(directory) {
 	return {
 		cli: path.join(directory, "cli.mjs"),
 		render: path.join(directory, "render-cli.mjs")
 	};
+}
+function validateRuntime(directory) {
+	const paths = executablePaths(directory);
+	if (!fs.existsSync(paths.cli) || !fs.existsSync(paths.render)) throw new Error(`Codex HUD runtime is incomplete: ${directory}`);
+}
+function sameDirectory(left, right) {
+	try {
+		return fs.realpathSync.native(left) === fs.realpathSync.native(right);
+	} catch {
+		return path.resolve(left) === path.resolve(right);
+	}
+}
+function deployRuntime(source, target, dryRun) {
+	validateRuntime(source);
+	if (sameDirectory(source, target)) return;
+	if (dryRun) {
+		output(`Would install runtime ${source} -> ${target}`);
+		return;
+	}
+	const suffix = `${process$1.pid}-${Date.now()}`;
+	const staging = `${target}.install-${suffix}`;
+	const backup = `${target}.backup-${suffix}`;
+	let movedPrevious = false;
+	fs.rmSync(staging, {
+		recursive: true,
+		force: true
+	});
+	fs.rmSync(backup, {
+		recursive: true,
+		force: true
+	});
+	try {
+		fs.cpSync(source, staging, {
+			recursive: true,
+			preserveTimestamps: true
+		});
+		validateRuntime(staging);
+		if (fs.existsSync(target)) {
+			fs.renameSync(target, backup);
+			movedPrevious = true;
+		}
+		fs.renameSync(staging, target);
+		fs.rmSync(backup, {
+			recursive: true,
+			force: true
+		});
+	} catch (error) {
+		fs.rmSync(staging, {
+			recursive: true,
+			force: true
+		});
+		if (movedPrevious) {
+			fs.rmSync(target, {
+				recursive: true,
+				force: true
+			});
+			fs.renameSync(backup, target);
+		}
+		throw error;
+	}
 }
 function ensureManagedTarget(target, dryRun) {
 	if (!fs.existsSync(target)) return;
@@ -1663,7 +1732,9 @@ function runInstall(args) {
 	const installCodexShim = args.includes("--codex-shim");
 	migrateLegacyState(dryRun);
 	const directory = binDirectory();
-	const paths = executablePaths();
+	const runtimeSource = runtimeSourceDirectory();
+	const runtimeDirectory = managedRuntimeDirectory();
+	const paths = executablePaths(runtimeDirectory);
 	const realCodex = findExecutable("codex", process$1.env, [path.join(directory, "codex")]);
 	if (!realCodex) throw new Error("Unable to find the real Codex executable before installing the shim.");
 	const managedFiles = [path.join(directory, "codex-hud"), path.join(directory, "codex-hud-render")];
@@ -1677,6 +1748,8 @@ function runInstall(args) {
 		});
 	}
 	const previousState = readInstallState();
+	for (const target of managedFiles) ensureManagedTarget(target, dryRun);
+	deployRuntime(runtimeSource, runtimeDirectory, dryRun);
 	writeLauncher(managedFiles[0], paths.cli, dryRun, realCodex);
 	writeLauncher(managedFiles[1], paths.render, dryRun);
 	if (installCodexShim) {
@@ -1697,7 +1770,8 @@ function runInstall(args) {
 		const state = {
 			version: 1,
 			realCodex,
-			managedFiles
+			managedFiles,
+			runtimeDirectory
 		};
 		fs.writeFileSync(statePath(), `${JSON.stringify(state, null, 2)}\n`, {
 			encoding: "utf8",
@@ -1721,6 +1795,12 @@ function runUninstall(args) {
 	for (const filePath of state.managedFiles) if (dryRun) output(`Would remove ${filePath}`);
 	else if (isManagedLauncher(filePath)) fs.rmSync(filePath, { force: true });
 	else output(`Skipped modified or unmanaged file: ${filePath}`);
+	const runtimeDirectory = installedRuntimeDirectory(state);
+	if (dryRun) output(`Would remove ${runtimeDirectory}`);
+	else fs.rmSync(runtimeDirectory, {
+		recursive: true,
+		force: true
+	});
 	if (!dryRun) {
 		fs.rmSync(statePath(), { force: true });
 		output("Removed Codex HUD managed launchers.");
@@ -1781,6 +1861,57 @@ function createCmuxRunner(executable, env = process$1.env) {
 }
 function cmuxAvailable(runner) {
 	return runner.run(["ping"]).status === 0;
+}
+function cmuxHudOwnershipPath(workspaceId, sourceSurfaceId, env = process$1.env) {
+	const digest = createHash("sha256").update(workspaceId).update("\0").update(sourceSurfaceId).digest("hex").slice(0, 24);
+	return path.join(getHudStateDirectory(env), "cmux", `${digest}.json`);
+}
+function readOwnership(filePath) {
+	try {
+		const value = JSON.parse(fs.readFileSync(filePath, "utf8"));
+		if (value.version === 1 && typeof value.workspaceId === "string" && typeof value.sourceSurfaceId === "string" && typeof value.paneId === "string" && typeof value.surfaceId === "string" && typeof value.ownerPid === "number") return value;
+	} catch {}
+	return null;
+}
+function removeOwnership(filePath) {
+	try {
+		fs.rmSync(filePath, { force: true });
+	} catch {}
+}
+function replacePreviousOwnership(filePath, workspaceId, sourceSurfaceId, runner) {
+	const previous = readOwnership(filePath);
+	if (previous && previous.workspaceId === workspaceId && previous.sourceSurfaceId === sourceSurfaceId) runner.run([
+		"close-surface",
+		"--workspace",
+		previous.workspaceId,
+		"--surface",
+		previous.surfaceId
+	]);
+	removeOwnership(filePath);
+}
+function writeOwnership(handle) {
+	fs.mkdirSync(path.dirname(handle.ownershipPath), {
+		recursive: true,
+		mode: 448
+	});
+	const temporaryPath = `${handle.ownershipPath}.${process$1.pid}.tmp`;
+	const ownership = {
+		version: 1,
+		workspaceId: handle.workspaceId,
+		sourceSurfaceId: handle.sourceSurfaceId,
+		paneId: handle.paneId,
+		surfaceId: handle.surfaceId,
+		ownerPid: process$1.pid
+	};
+	try {
+		fs.writeFileSync(temporaryPath, `${JSON.stringify(ownership, null, 2)}\n`, {
+			encoding: "utf8",
+			mode: 384
+		});
+		fs.renameSync(temporaryPath, handle.ownershipPath);
+	} finally {
+		fs.rmSync(temporaryPath, { force: true });
+	}
 }
 function ensureSuccess$1(result, action) {
 	if (result.status !== 0) throw new Error(`${action} failed: ${result.stderr || `exit ${String(result.status)}`}`);
@@ -1843,6 +1974,8 @@ function launchCmuxHud(options, runner) {
 	}
 	const sourcePaneId = identity.caller?.pane_id;
 	if (typeof sourcePaneId !== "string" || !sourcePaneId) throw new Error("cmux identify did not return caller.pane_id");
+	const ownershipPath = cmuxHudOwnershipPath(workspaceId, sourceSurfaceId, options.env);
+	replacePreviousOwnership(ownershipPath, workspaceId, sourceSurfaceId, runner);
 	const split = runner.run([
 		"--json",
 		"--id-format",
@@ -1861,7 +1994,9 @@ function launchCmuxHud(options, runner) {
 	const handle = {
 		workspaceId: typeof payload.workspace_id === "string" && payload.workspace_id ? payload.workspace_id : workspaceId,
 		paneId: requiredId(payload, "pane_id"),
-		surfaceId: requiredId(payload, "surface_id")
+		surfaceId: requiredId(payload, "surface_id"),
+		sourceSurfaceId,
+		ownershipPath
 	};
 	try {
 		ensureSuccess$1(runner.run([
@@ -1883,6 +2018,7 @@ function launchCmuxHud(options, runner) {
 			"--",
 			rendererCommand(options, handle.paneId, sourcePaneId, handle.workspaceId)
 		]), "cmux send");
+		writeOwnership(handle);
 		return handle;
 	} catch (error) {
 		closeCmuxHud(handle, runner);
@@ -1890,13 +2026,15 @@ function launchCmuxHud(options, runner) {
 	}
 }
 function closeCmuxHud(handle, runner) {
-	runner.run([
+	const closed = runner.run([
 		"close-surface",
 		"--workspace",
 		handle.workspaceId,
 		"--surface",
 		handle.surfaceId
 	]);
+	const ownership = readOwnership(handle.ownershipPath);
+	if (closed.status === 0 && ownership?.surfaceId === handle.surfaceId) removeOwnership(handle.ownershipPath);
 }
 
 //#endregion
@@ -2165,6 +2303,34 @@ function isResumeInvocation(args) {
 	}
 	return false;
 }
+const TERMINATION_SIGNALS = [
+	"SIGINT",
+	"SIGTERM",
+	"SIGHUP"
+];
+function installTerminationCleanup(cleanup, target = process$1) {
+	let active = true;
+	const handlers = /* @__PURE__ */ new Map();
+	const dispose = () => {
+		if (!active) return;
+		active = false;
+		for (const [signal, handler] of handlers) target.off(signal, handler);
+	};
+	for (const signal of TERMINATION_SIGNALS) {
+		const handler = () => {
+			if (!active) return;
+			try {
+				cleanup();
+			} finally {
+				dispose();
+				target.kill(target.pid, signal);
+			}
+		};
+		handlers.set(signal, handler);
+		target.once(signal, handler);
+	}
+	return dispose;
+}
 function runtimePaths() {
 	const modulePath = fileURLToPath(import.meta.url);
 	const cliPath = modulePath.endsWith(".ts") ? path.resolve("dist/cli.mjs") : path.join(path.dirname(modulePath), "cli.mjs");
@@ -2224,6 +2390,14 @@ async function launchCodex(options) {
 			process$1.stderr.write(`Codex HUD: cmux HUD startup failed (${message}); starting Codex without the HUD.\n`);
 			return runDirect();
 		}
+		let cleaned = false;
+		const cleanup = () => {
+			if (cleaned) return;
+			cleaned = true;
+			closeCmuxHud(hud, runner);
+			removeFile(bindingPath);
+		};
+		const disposeTerminationCleanup = installTerminationCleanup(cleanup);
 		try {
 			const exitCode = await runCodexChild(options.codexArgs, null, false, options.cwd, bindingPath, env);
 			return {
@@ -2235,8 +2409,8 @@ async function launchCodex(options) {
 				exitCode
 			};
 		} finally {
-			closeCmuxHud(hud, runner);
-			removeFile(bindingPath);
+			disposeTerminationCleanup();
+			cleanup();
 		}
 	}
 	if (backend === "cmux") {

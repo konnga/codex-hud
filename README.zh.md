@@ -217,6 +217,8 @@ hash -r
 3. 首次配置以 Full 为基线打开显示项选择面板。
 4. 显示实时预览并保存到 `${CODEX_HOME:-~/.codex}/codex-hud/config.json`。
 
+受管 launcher 使用 `${CODEX_HOME:-~/.codex}/codex-hud/runtime` 中的私有运行时副本，不会直接引用带版本号的 Codex 插件缓存。因此 marketplace 升级或缓存清理不会让 `codex`、`codex-hud`、`codex-hud-render` 指向已经删除的文件。
+
 如果 `~/.local/bin` 不在 `PATH` 中，将下面一行加入 shell 配置：
 
 ```bash
@@ -375,7 +377,7 @@ codex-hud configure --preset full
 
 默认 `auto` backend 选择顺序是：交互式 cmux surface 且 control socket 健康时使用 cmux 原生 split；已经位于用户 tmux 中时使用该 tmux；其他终端使用私有 tmux 兼容 backend。cmux socket 异常时会直接运行原生 Codex，不会静默回退到 tmux。可以使用 `--backend cmux|tmux|none` 显式覆盖。
 
-cmux backend 让 Codex 保持在原 surface，只在下方创建不抢焦点的 HUD split，因此保留原生 scrollback、选择和复制。tmux backend 无法提供完全一致的终端原生语义；在用户自己的 tmux 中启动时，Codex HUD 不修改其 tmux 选项。
+cmux backend 让 Codex 保持在原 surface，只在下方创建不抢焦点的 HUD split，因此保留原生 scrollback、选择和复制。HUD 初始高度会贴合渲染内容；手动拖拽分隔线后，本次 HUD 会话的高度控制权会交给用户，后续刷新不会再把高度改回去。tmux backend 无法提供完全一致的终端原生语义；在用户自己的 tmux 中启动时，Codex HUD 不修改其 tmux 选项。
 
 Codex HUD 使用 cmux 0.64 的方向式 pane resize API（`--pane`、`-U` / `-D` 和 `--amount`）。仍调用 tmux 风格 `-t ... -y ...` 参数的旧版 Codex HUD 会以 `Pane has no adjacent border in direction right` 错误安全降级为无 HUD 的原生 Codex；遇到该错误时应先重新构建或升级 Codex HUD，再启动新会话。
 

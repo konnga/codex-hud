@@ -10,6 +10,7 @@ interface InstallState {
   version: 1
   realCodex: string
   managedFiles: string[]
+  runtimeDirectory?: string
 }
 
 const MANAGED_MARKER = '# Managed by Codex HUD'
@@ -64,11 +65,76 @@ function migrateLegacyState(dryRun: boolean): void {
   fs.cpSync(legacy, canonical, { recursive: true, preserveTimestamps: true })
 }
 
-function executablePaths(): { cli: string, render: string } {
-  const directory = path.dirname(process.argv[1])
+function runtimeSourceDirectory(): string {
+  return path.resolve(process.env.CODEX_HUD_RUNTIME_DIR || path.dirname(process.argv[1]))
+}
+
+function managedRuntimeDirectory(): string {
+  return path.join(getHudStateDirectory(), 'runtime')
+}
+
+function installedRuntimeDirectory(state: InstallState): string {
+  const expected = managedRuntimeDirectory()
+  return state.runtimeDirectory && path.resolve(state.runtimeDirectory) === path.resolve(expected)
+    ? state.runtimeDirectory
+    : expected
+}
+
+function executablePaths(directory: string): { cli: string, render: string } {
   return {
     cli: path.join(directory, 'cli.mjs'),
     render: path.join(directory, 'render-cli.mjs'),
+  }
+}
+
+function validateRuntime(directory: string): void {
+  const paths = executablePaths(directory)
+  if (!fs.existsSync(paths.cli) || !fs.existsSync(paths.render)) {
+    throw new Error(`Codex HUD runtime is incomplete: ${directory}`)
+  }
+}
+
+function sameDirectory(left: string, right: string): boolean {
+  try {
+    return fs.realpathSync.native(left) === fs.realpathSync.native(right)
+  }
+  catch {
+    return path.resolve(left) === path.resolve(right)
+  }
+}
+
+function deployRuntime(source: string, target: string, dryRun: boolean): void {
+  validateRuntime(source)
+  if (sameDirectory(source, target)) {
+    return
+  }
+  if (dryRun) {
+    output(`Would install runtime ${source} -> ${target}`)
+    return
+  }
+  const suffix = `${process.pid}-${Date.now()}`
+  const staging = `${target}.install-${suffix}`
+  const backup = `${target}.backup-${suffix}`
+  let movedPrevious = false
+  fs.rmSync(staging, { recursive: true, force: true })
+  fs.rmSync(backup, { recursive: true, force: true })
+  try {
+    fs.cpSync(source, staging, { recursive: true, preserveTimestamps: true })
+    validateRuntime(staging)
+    if (fs.existsSync(target)) {
+      fs.renameSync(target, backup)
+      movedPrevious = true
+    }
+    fs.renameSync(staging, target)
+    fs.rmSync(backup, { recursive: true, force: true })
+  }
+  catch (error) {
+    fs.rmSync(staging, { recursive: true, force: true })
+    if (movedPrevious) {
+      fs.rmSync(target, { recursive: true, force: true })
+      fs.renameSync(backup, target)
+    }
+    throw error
   }
 }
 
@@ -107,7 +173,9 @@ export function runInstall(args: string[]): number {
   const installCodexShim = args.includes('--codex-shim')
   migrateLegacyState(dryRun)
   const directory = binDirectory()
-  const paths = executablePaths()
+  const runtimeSource = runtimeSourceDirectory()
+  const runtimeDirectory = managedRuntimeDirectory()
+  const paths = executablePaths(runtimeDirectory)
   const realCodex = findExecutable('codex', process.env, [
     path.join(directory, 'codex'),
   ])
@@ -127,6 +195,10 @@ export function runInstall(args: string[]): number {
     fs.mkdirSync(getHudStateDirectory(), { recursive: true, mode: 0o700 })
   }
   const previousState = readInstallState()
+  for (const target of managedFiles) {
+    ensureManagedTarget(target, dryRun)
+  }
+  deployRuntime(runtimeSource, runtimeDirectory, dryRun)
   writeLauncher(managedFiles[0], paths.cli, dryRun, realCodex)
   writeLauncher(managedFiles[1], paths.render, dryRun)
   if (installCodexShim) {
@@ -151,7 +223,7 @@ export function runInstall(args: string[]): number {
         fs.rmSync(obsolete, { force: true })
       }
     }
-    const state: InstallState = { version: 1, realCodex, managedFiles }
+    const state: InstallState = { version: 1, realCodex, managedFiles, runtimeDirectory }
     fs.writeFileSync(statePath(), `${JSON.stringify(state, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
     output(`Installed Codex HUD commands in ${directory}`)
   }
@@ -182,6 +254,13 @@ export function runUninstall(args: string[]): number {
     else {
       output(`Skipped modified or unmanaged file: ${filePath}`)
     }
+  }
+  const runtimeDirectory = installedRuntimeDirectory(state)
+  if (dryRun) {
+    output(`Would remove ${runtimeDirectory}`)
+  }
+  else {
+    fs.rmSync(runtimeDirectory, { recursive: true, force: true })
   }
   if (!dryRun) {
     fs.rmSync(statePath(), { force: true })

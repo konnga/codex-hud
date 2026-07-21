@@ -21,6 +21,7 @@ import {
   DEFAULT_HUD_MAX_HEIGHT,
   desiredPaneHeight,
   INITIAL_HUD_PANE_HEIGHT,
+  isExternalCmuxResize,
   resizeCmuxPane,
   resizeHudPane,
   viewportRenderHeight,
@@ -108,11 +109,14 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
   let lastDiscoveryAt = 0
   let sessionWatcher: fs.FSWatcher | null = null
   let debounceTimer: NodeJS.Timeout | null = null
+  let resizeTimer: NodeJS.Timeout | null = null
   parser.setFile(currentSessionPath)
   const startedAt = new Date()
   let lastFrame = ''
   let lastViewport = ''
   let paneHeight: number | null = null
+  let cmuxManualHeight = false
+  let cmuxResizePending = false
   let latestTurns = parser.getState().conversationTurns
   const paneId = process.env.TMUX_PANE ?? null
   const configMtime = (): number => {
@@ -195,8 +199,9 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
     const desiredHeight = navigator.active
       ? options.maxHeight
       : desiredPaneHeight(lines.length, options.maxHeight)
-    paneHeight = options.cmuxPaneId
-      ? resizeCmuxPane(
+    if (options.cmuxPaneId) {
+      if (!cmuxManualHeight && !cmuxResizePending) {
+        paneHeight = resizeCmuxPane(
           options.cmuxPaneId,
           options.cmuxSourcePaneId,
           options.cmuxWorkspaceId,
@@ -204,7 +209,11 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
           process.stdout.rows,
           paneHeight,
         )
-      : resizeHudPane(paneId, desiredHeight, paneHeight)
+      }
+    }
+    else {
+      paneHeight = resizeHudPane(paneId, desiredHeight, paneHeight)
+    }
     const viewport = `${width}x${String(process.stdout.rows ?? '')}`
     const viewportChanged = viewport !== lastViewport
     if (frame !== lastFrame || viewportChanged) {
@@ -233,7 +242,23 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
     lastConfigMtime = configMtime()
     render()
   })
-  process.on('SIGWINCH', render)
+  const onResize = (): void => {
+    if (options.cmuxPaneId) {
+      cmuxResizePending = true
+      if (resizeTimer) {
+        clearTimeout(resizeTimer)
+      }
+      resizeTimer = setTimeout(() => {
+        cmuxResizePending = false
+        if (isExternalCmuxResize(process.stdout.rows, paneHeight)) {
+          cmuxManualHeight = true
+        }
+        render()
+      }, 150)
+    }
+    render()
+  }
+  process.on('SIGWINCH', onResize)
   const focusCodexPane = (): void => {
     if (options.cmuxPaneId) {
       const workspace = process.env.CMUX_WORKSPACE_ID
@@ -364,9 +389,12 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
     if (debounceTimer) {
       clearTimeout(debounceTimer)
     }
+    if (resizeTimer) {
+      clearTimeout(resizeTimer)
+    }
     sessionWatcher?.close()
     configWatcher?.close()
-    process.off('SIGWINCH', render)
+    process.off('SIGWINCH', onResize)
     process.stdin.off('data', onInput)
     if (process.stdin.isTTY && process.stdin.isRaw) {
       process.stdin.setRawMode(false)

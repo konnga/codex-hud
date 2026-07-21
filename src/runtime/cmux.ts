@@ -1,7 +1,11 @@
 import type { SpawnSyncReturns } from 'node:child_process'
 import { spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
+import fs from 'node:fs'
+import path from 'node:path'
 // @env node
 import process from 'node:process'
+import { getHudStateDirectory } from '../config/paths.js'
 import { shellCommand } from './process.js'
 
 export interface CmuxRunner {
@@ -22,6 +26,17 @@ export interface CmuxHudHandle {
   workspaceId: string
   paneId: string
   surfaceId: string
+  sourceSurfaceId: string
+  ownershipPath: string
+}
+
+interface CmuxHudOwnership {
+  version: 1
+  workspaceId: string
+  sourceSurfaceId: string
+  paneId: string
+  surfaceId: string
+  ownerPid: number
 }
 
 interface CmuxCreationPayload {
@@ -58,6 +73,95 @@ export function createCmuxRunner(
 
 export function cmuxAvailable(runner: CmuxRunner): boolean {
   return runner.run(['ping']).status === 0
+}
+
+export function cmuxHudOwnershipPath(
+  workspaceId: string,
+  sourceSurfaceId: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const digest = createHash('sha256')
+    .update(workspaceId)
+    .update('\0')
+    .update(sourceSurfaceId)
+    .digest('hex')
+    .slice(0, 24)
+  return path.join(getHudStateDirectory(env), 'cmux', `${digest}.json`)
+}
+
+function readOwnership(filePath: string): CmuxHudOwnership | null {
+  try {
+    const value = JSON.parse(fs.readFileSync(filePath, 'utf8')) as Partial<CmuxHudOwnership>
+    if (
+      value.version === 1
+      && typeof value.workspaceId === 'string'
+      && typeof value.sourceSurfaceId === 'string'
+      && typeof value.paneId === 'string'
+      && typeof value.surfaceId === 'string'
+      && typeof value.ownerPid === 'number'
+    ) {
+      return value as CmuxHudOwnership
+    }
+  }
+  catch {
+    // Missing or malformed ownership is treated as unowned.
+  }
+  return null
+}
+
+function removeOwnership(filePath: string): void {
+  try {
+    fs.rmSync(filePath, { force: true })
+  }
+  catch {
+    // Cleanup remains best-effort when the state directory is unavailable.
+  }
+}
+
+function replacePreviousOwnership(
+  filePath: string,
+  workspaceId: string,
+  sourceSurfaceId: string,
+  runner: CmuxRunner,
+): void {
+  const previous = readOwnership(filePath)
+  if (
+    previous
+    && previous.workspaceId === workspaceId
+    && previous.sourceSurfaceId === sourceSurfaceId
+  ) {
+    runner.run([
+      'close-surface',
+      '--workspace',
+      previous.workspaceId,
+      '--surface',
+      previous.surfaceId,
+    ])
+  }
+  removeOwnership(filePath)
+}
+
+function writeOwnership(handle: CmuxHudHandle): void {
+  fs.mkdirSync(path.dirname(handle.ownershipPath), { recursive: true, mode: 0o700 })
+  const temporaryPath = `${handle.ownershipPath}.${process.pid}.tmp`
+  const ownership: CmuxHudOwnership = {
+    version: 1,
+    workspaceId: handle.workspaceId,
+    sourceSurfaceId: handle.sourceSurfaceId,
+    paneId: handle.paneId,
+    surfaceId: handle.surfaceId,
+    ownerPid: process.pid,
+  }
+  try {
+    fs.writeFileSync(temporaryPath, `${JSON.stringify(ownership, null, 2)}\n`, {
+      encoding: 'utf8',
+      mode: 0o600,
+    })
+    fs.renameSync(temporaryPath, handle.ownershipPath)
+  }
+  finally {
+    fs.rmSync(temporaryPath, { force: true })
+  }
 }
 
 function ensureSuccess(result: SpawnSyncReturns<string>, action: string): void {
@@ -145,6 +249,8 @@ export function launchCmuxHud(
   if (typeof sourcePaneId !== 'string' || !sourcePaneId) {
     throw new Error('cmux identify did not return caller.pane_id')
   }
+  const ownershipPath = cmuxHudOwnershipPath(workspaceId, sourceSurfaceId, options.env)
+  replacePreviousOwnership(ownershipPath, workspaceId, sourceSurfaceId, runner)
   const split = runner.run([
     '--json',
     '--id-format',
@@ -166,6 +272,8 @@ export function launchCmuxHud(
       : workspaceId,
     paneId: requiredId(payload, 'pane_id'),
     surfaceId: requiredId(payload, 'surface_id'),
+    sourceSurfaceId,
+    ownershipPath,
   }
   try {
     const resize = runner.run([
@@ -189,6 +297,7 @@ export function launchCmuxHud(
       rendererCommand(options, handle.paneId, sourcePaneId, handle.workspaceId),
     ])
     ensureSuccess(send, 'cmux send')
+    writeOwnership(handle)
     return handle
   }
   catch (error) {
@@ -198,11 +307,15 @@ export function launchCmuxHud(
 }
 
 export function closeCmuxHud(handle: CmuxHudHandle, runner: CmuxRunner): void {
-  runner.run([
+  const closed = runner.run([
     'close-surface',
     '--workspace',
     handle.workspaceId,
     '--surface',
     handle.surfaceId,
   ])
+  const ownership = readOwnership(handle.ownershipPath)
+  if (closed.status === 0 && ownership?.surfaceId === handle.surfaceId) {
+    removeOwnership(handle.ownershipPath)
+  }
 }
