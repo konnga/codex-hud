@@ -134,13 +134,24 @@ codex-hud setup --language zh-Hans  # Simplified Chinese
 codex-hud setup --language zh-Hant  # Traditional Chinese
 ```
 
-### Upgrade an existing installation
+### Update to a new version
 
-Codex currently provides `marketplace upgrade` but no separate `plugin upgrade` command. Refresh the marketplace snapshot, reinstall the plugin, then start a new Codex session and rerun the setup Skill:
+Run the following commands in a regular terminal. Codex currently provides `marketplace upgrade` but no separate `plugin upgrade` command. Use `marketplace upgrade` for an already registered marketplace; `marketplace add` is for first-time registration.
 
 ```bash
 codex plugin marketplace upgrade codex-hud
+codex plugin list --marketplace codex-hud --available --json
 codex plugin remove codex-hud@codex-hud
+codex plugin add codex-hud@codex-hud
+```
+
+If Codex reports that marketplace `codex-hud` was already added from a different source, or the refreshed marketplace still exposes no available plugin, rebuild the marketplace registration with the canonical Git URL. Remove the installed plugin first if `codex plugin list --json` still lists it.
+
+```bash
+# Run this first only when the plugin is currently installed:
+codex plugin remove codex-hud@codex-hud
+codex plugin marketplace remove codex-hud
+codex plugin marketplace add https://github.com/konnga/codex-hud.git
 codex plugin add codex-hud@codex-hud
 ```
 
@@ -150,7 +161,7 @@ Exit the current Codex session, start `codex` again, and run:
 $codex-hud:setup
 ```
 
-After setup completes, exit and start Codex once more so the refreshed launcher creates the HUD from the new runtime. Existing `${CODEX_HOME:-~/.codex}/codex-hud/config.json` settings are preserved unless a preset is explicitly selected. If the shell still resolves an older launcher, run `hash -r` before starting Codex.
+After setup completes, exit and start Codex once more so the refreshed launcher creates the HUD from the new runtime. Removing the plugin or marketplace does not delete `${CODEX_HOME:-~/.codex}/codex-hud/config.json`; existing settings are preserved unless a preset is explicitly selected. If the shell still resolves an older launcher, run `hash -r` before starting Codex.
 
 ## Install from source
 

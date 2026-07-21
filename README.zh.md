@@ -182,13 +182,24 @@ codex-hud setup --language zh-Hans  # 简体中文
 codex-hud setup --language zh-Hant  # 繁体中文
 ```
 
-### 更新已有安装
+### 更新版本
 
-Codex 当前提供 `marketplace upgrade`，但没有独立的 `plugin upgrade` 命令。先刷新 marketplace 快照，再重新安装插件：
+以下命令都在普通终端中执行。Codex 当前提供 `marketplace upgrade`，但没有独立的 `plugin upgrade` 命令。已经注册的 marketplace 应使用 `marketplace upgrade`；`marketplace add` 只用于首次添加。
 
 ```bash
 codex plugin marketplace upgrade codex-hud
+codex plugin list --marketplace codex-hud --available --json
 codex plugin remove codex-hud@codex-hud
+codex plugin add codex-hud@codex-hud
+```
+
+如果 Codex 提示 marketplace `codex-hud` 已从其他来源添加，或者刷新后仍然没有发现可用插件，请使用规范的 Git URL 重建 marketplace 注册。如果 `codex plugin list --json` 仍显示已经安装的插件，应先将该插件移除。
+
+```bash
+# 仅在插件当前已经安装时先执行：
+codex plugin remove codex-hud@codex-hud
+codex plugin marketplace remove codex-hud
+codex plugin marketplace add https://github.com/konnga/codex-hud.git
 codex plugin add codex-hud@codex-hud
 ```
 
@@ -198,7 +209,7 @@ codex plugin add codex-hud@codex-hud
 $codex-hud:setup
 ```
 
-setup 完成后再次退出并启动 Codex，使更新后的 launcher 使用新版 runtime 创建 HUD。已有的 `${CODEX_HOME:-~/.codex}/codex-hud/config.json` 配置会保留，除非明确选择新的 preset。如果 shell 仍然解析到旧 launcher，可以在启动 Codex 前运行 `hash -r`。
+setup 完成后再次退出并启动 Codex，使更新后的 launcher 使用新版 runtime 创建 HUD。移除 plugin 或 marketplace 不会删除 `${CODEX_HOME:-~/.codex}/codex-hud/config.json`；已有配置会保留，除非明确选择新的 preset。如果 shell 仍然解析到旧 launcher，可以在启动 Codex 前运行 `hash -r`。
 
 ## 从源码安装（开发者）
 
