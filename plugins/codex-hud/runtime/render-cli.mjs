@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { T as RolloutParser, _ as sliceAnsi, b as findActiveSession, c as desiredPaneHeight, d as resizeHudPane, f as viewportRenderHeight, g as visibleWidth, h as truncateAnsi, l as isExternalCmuxResize, m as safeText, p as renderHud, r as readSessionBinding, s as buildHudState, u as resizeCmuxPane, v as loadConfig } from "./session-binding-BJelLPyI.mjs";
+import { T as RolloutParser, _ as sliceAnsi, b as findActiveSession, c as desiredPaneHeight, d as resizeHudPane, f as viewportRenderHeight, g as visibleWidth, h as truncateAnsi, l as isExternalCmuxResize, m as safeText, p as renderHud, r as readSessionBinding, s as buildHudState, u as resizeCmuxPane, v as loadConfig } from "./session-binding-N33viEGs.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -133,7 +133,7 @@ function renderList(turns, state, options) {
 	const width = Math.max(20, options.width);
 	const height = Math.max(5, options.height);
 	const matches = normalizeNavigatorSelection(state, turns);
-	const header = `${labels.title} · ${String(turns.length)} ${labels.turns}`;
+	const header = `${options.sessionId ? `${options.sessionId} · ` : ""}${labels.title} · ${String(turns.length)} ${labels.turns}`;
 	const search = state.searchMode || state.query ? `${labels.search}: ${state.query}${state.searchMode ? "█" : ""}` : "";
 	const rowCount = Math.max(1, height - (search ? 3 : 2));
 	const selectedPosition = Math.max(0, matches.indexOf(state.selectedIndex));
@@ -171,7 +171,7 @@ function renderDetail(turns, state, options) {
 	const scroll = Math.min(maximumScroll, Math.max(0, state.detailScroll));
 	state.detailScroll = scroll;
 	return [
-		truncateAnsi(`${labels.title} · #${String(state.selectedIndex + 1)}/${String(turns.length)}`, width),
+		truncateAnsi(`${options.sessionId ? `${options.sessionId} · ` : ""}${labels.title} · #${String(state.selectedIndex + 1)}/${String(turns.length)}`, width),
 		...body.slice(scroll, scroll + bodyHeight).map((line) => truncateAnsi(line, width)),
 		truncateAnsi(labels.detailHelp, width)
 	].slice(0, height);
@@ -296,7 +296,8 @@ async function runRenderCli(args = process.argv.slice(2)) {
 			width,
 			height,
 			color: options.color,
-			language: loaded.config.language
+			language: loaded.config.language,
+			sessionId: state.session?.id ?? null
 		}) : renderHud({
 			config: loaded.config,
 			state,

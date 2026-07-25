@@ -48,6 +48,10 @@ function state(): HudState {
       added: 1,
       deleted: 0,
       untracked: 1,
+      renamed: 0,
+      copied: 0,
+      typeChanged: 0,
+      conflicted: 0,
     },
     context: {
       used: 68_000,
@@ -183,7 +187,7 @@ describe('hud renderer', () => {
     config.gitStatus.showFileStats = true
     const lines = renderHud({ config, state: state(), options: { width: 220, height: 20, color: false }, now })
     expect(lines.join('\n')).toContain('+shared')
-    expect(lines.join('\n')).toContain('!2 +1 ?1')
+    expect(lines.join('\n')).toContain('M2 A1 ?1')
     expect(lines.join('\n')).toContain('Cache TTL ⏱️ 5m')
     expect(lines.join('\n')).toContain('Context ██████████ 100%')
     expect(lines[0]).toContain('HUD fidelity audit')

@@ -2,6 +2,40 @@
 
 ## [Unreleased]
 
+## 0.3.0 - 2026-07-25
+
+### Features
+
+- Expanded git working-tree markers to include renamed/copied/type-changed/conflicted states with IntelliJ-style letters (`M/A/D/R/C/T/?/!`) and enabled per-status file counts by default.
+- Conversation navigator header now shows the full Codex session id for rollout correlation.
+- `auth` display now shows the provider hostname (derived from `base_url`) for API-key sessions instead of a generic label.
+
+### Docs
+
+- Added a dedicated git status-marker reference table to both README files.
+- Moved the screenshot asset from `docs/assets/` to `.github/assets/` and updated both README files accordingly.
+
+### Chores
+
+- Excluded `docs/superpowers/plans/` from version control; local planning documents are no longer committed.
+
+---
+
+### 功能
+
+- 扩展 git 工作区状态标记，新增重命名/复制/类型变更/冲突状态，采用 IntelliJ 风格字母（`M/A/D/R/C/T/?/!`），并默认开启分状态文件计数。
+- 会话历史导航器标题行现在显示完整的 Codex session id，方便与 rollout 文件对应。
+- API key 场景下，`auth` 字段现在显示 provider 主机名（取自 `base_url`），而非通用标签。
+
+### 文档
+
+- 在两个 README 中新增专门的 git 状态标记参考表格。
+- 将截图素材从 `docs/assets/` 迁移至 `.github/assets/`，并同步更新两个 README 的引用路径。
+
+### 杂项
+
+- 将 `docs/superpowers/plans/` 排除在版本控制之外，本地计划文档不再提交。
+
 ## 0.2.2 - 2026-07-21
 
 ### Changed

@@ -9,7 +9,7 @@ Codex HUD is a persistent heads-up display for OpenAI Codex CLI. It keeps the of
 With the Full preset and active session telemetry, the HUD expands to show identity, context and quota usage, environment policy, live activity, and session timing:
 
 ```text
-[gpt-5.5 high] │ codex-hud +shared git:(main* ↑1) │ ChatGPT pro (builder)
+[gpt-5.5 high] │ codex-hud +shared git:(main* ↑1) M2 A1 ?1 │ ChatGPT pro (builder)
 Context ██████░░░░ 59% │ Usage 5h: ███░░░░░░░ 25% (resets in 1h 30m) │ 1w: ████████░░ 82% (resets in 4d) │ $12.50
 Cache TTL ⏱️ 5m
 Approval: on-request │ Permissions: workspace-write │ Sandbox: workspace-write
@@ -24,9 +24,26 @@ Approval: on-request │ Permissions: workspace-write │ Sandbox: workspace-wri
 
 Example terminal view (tmux):
 
-![Codex HUD tmux example](./docs/assets/codex-hud-tmux-example.png)
+![Codex HUD tmux example](./.github/assets/codex-hud-tmux-example.png)
 
 Rows without available telemetry are omitted automatically. When there is no active plan, the task row can instead show the durable goal.
+
+### Git status markers
+
+The `git` segment shows the branch name, a `*` dirty flag, optional ahead/behind arrows (`↑`/`↓`), and, when `showFileStats` is enabled (on by default), per-status file counts. The status letters follow the convention used by IntelliJ IDEA and Sublime Merge:
+
+| Marker | Meaning             |
+| ------ | ------------------- |
+| `M`    | Modified            |
+| `A`    | Added (staged)      |
+| `D`    | Deleted             |
+| `R`    | Renamed             |
+| `C`    | Copied              |
+| `T`    | Type changed        |
+| `?`    | Untracked           |
+| `!`    | Conflict (unmerged) |
+
+For example, `git:(main* ↑1) M2 A1 ?1` means the branch is `main` with uncommitted changes, 1 commit ahead of upstream, 2 modified files, 1 staged addition, and 1 untracked file. Note that `!` (conflict) differs from VSCode, which reuses `U` for untracked files; Codex HUD uses `?` for untracked and reserves `!` for merge conflicts.
 
 Highlights:
 
@@ -225,6 +242,8 @@ When the HUD shows a `Turns` line, click the HUD pane and press `n` to expand it
 - `Esc`: return to the turn list, then close the navigator
 - `q`: close the navigator immediately
 
+The navigator header shows the full current Codex session id, so you can correlate the open turns with a specific rollout file.
+
 Closing the navigator restores the compact HUD height and returns focus to the Codex pane. It does not control or reposition Codex's own TUI scrollback.
 
 See [Conversation navigator](./docs/conversation-navigator.md) for the data model, privacy behavior, backend details, and current limitations.
@@ -251,26 +270,26 @@ The Full preset enables cumulative session token totals by default. Existing con
 
 Selectable names:
 
-| Name            | Display content                            |
-| --------------- | ------------------------------------------ |
-| `git`           | Git branch and working-tree status         |
-| `usage`         | Usage windows, reset times, and credits    |
-| `promptCache`   | Prompt-cache countdown                     |
-| `tools`         | Tool-call activity                         |
-| `skills`        | Skill activity                             |
-| `mcp`           | MCP server activity                        |
-| `agents`        | Sub-agent status                           |
-| `todos`         | Plan and task progress                     |
-| `goal`          | Durable goal                               |
-| `turns`         | Conversation turn count and navigator hint |
-| `configCounts`  | Config, rule, Skill, and MCP counts        |
-| `auth`          | Authentication method                      |
-| `memory`        | Approximate system memory                  |
-| `duration`      | Session duration                           |
-| `speed`         | Previous response output speed             |
-| `sessionName`   | Explicitly named session title             |
-| `sessionTokens` | Cumulative session tokens                  |
-| `compactions`   | Context compaction count                   |
+| Name            | Display content                                                               |
+| --------------- | ----------------------------------------------------------------------------- |
+| `git`           | Git branch and working-tree status                                            |
+| `usage`         | Usage windows, reset times, and credits                                       |
+| `promptCache`   | Prompt-cache countdown                                                        |
+| `tools`         | Tool-call activity                                                            |
+| `skills`        | Skill activity                                                                |
+| `mcp`           | MCP server activity                                                           |
+| `agents`        | Sub-agent status                                                              |
+| `todos`         | Plan and task progress                                                        |
+| `goal`          | Durable goal                                                                  |
+| `turns`         | Conversation turn count and navigator hint                                    |
+| `configCounts`  | Config, rule, Skill, and MCP counts                                           |
+| `auth`          | Authentication method (ChatGPT plan, or the provider host for API-key access) |
+| `memory`        | Approximate system memory                                                     |
+| `duration`      | Session duration                                                              |
+| `speed`         | Previous response output speed                                                |
+| `sessionName`   | Explicitly named session title                                                |
+| `sessionTokens` | Cumulative session tokens                                                     |
+| `compactions`   | Context compaction count                                                      |
 
 Saved changes are reloaded by sessions that already have a HUD pane. Hot reload cannot add a HUD pane to an existing Codex process that was started without the Codex HUD launcher.
 

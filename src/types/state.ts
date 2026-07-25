@@ -93,6 +93,10 @@ export interface GitStatus {
   added: number
   deleted: number
   untracked: number
+  renamed: number
+  copied: number
+  typeChanged: number
+  conflicted: number
 }
 
 export interface ProjectInfo {

@@ -173,7 +173,7 @@ export const DEFAULT_CONFIG: HudConfig = {
     enabled: true,
     showDirty: true,
     showAheadBehind: false,
-    showFileStats: false,
+    showFileStats: true,
     branchOverflow: 'truncate',
     pushWarningThreshold: 0,
     pushCriticalThreshold: 0,

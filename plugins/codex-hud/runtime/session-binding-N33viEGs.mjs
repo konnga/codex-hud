@@ -613,7 +613,7 @@ const DEFAULT_CONFIG = {
 		enabled: true,
 		showDirty: true,
 		showAheadBehind: false,
-		showFileStats: false,
+		showFileStats: true,
 		branchOverflow: "truncate",
 		pushWarningThreshold: 0,
 		pushCriticalThreshold: 0
@@ -2970,11 +2970,47 @@ function gitSegment(ctx) {
 	}
 	if (ctx.config.gitStatus.showAheadBehind && status.behind > 0) branch += color(` ↓${status.behind}`, ctx.config.colors.gitBranch, ctx.options.color);
 	const statParts = [
-		status.modified > 0 ? `!${status.modified}` : null,
-		status.added > 0 ? `+${status.added}` : null,
-		status.deleted > 0 ? `✘${status.deleted}` : null,
-		status.untracked > 0 ? `?${status.untracked}` : null
-	].filter((value) => Boolean(value));
+		[
+			"!",
+			status.conflicted ?? 0,
+			ctx.config.colors.critical
+		],
+		[
+			"M",
+			status.modified,
+			"yellow"
+		],
+		[
+			"A",
+			status.added,
+			"green"
+		],
+		[
+			"D",
+			status.deleted,
+			"red"
+		],
+		[
+			"R",
+			status.renamed ?? 0,
+			"cyan"
+		],
+		[
+			"C",
+			status.copied ?? 0,
+			"brightBlue"
+		],
+		[
+			"T",
+			status.typeChanged ?? 0,
+			"magenta"
+		],
+		[
+			"?",
+			status.untracked,
+			"dim"
+		]
+	].filter(([, count]) => count > 0).map(([label, count, clr]) => color(`${label}${count}`, clr, ctx.options.color));
 	const stats = ctx.config.gitStatus.showFileStats && statParts.length > 0 ? ` ${statParts.join(" ")}` : "";
 	return `${wrapper}${branch}${color(")", ctx.config.colors.git, ctx.options.color)}${stats}`;
 }
@@ -3559,15 +3595,33 @@ function collectGitStatus(cwd) {
 	let added = 0;
 	let deleted = 0;
 	let untracked = 0;
-	for (const record of records) {
-		const status = record.slice(0, 2);
-		if (status === "??") {
-			untracked += 1;
+	let renamed = 0;
+	let copied = 0;
+	let typeChanged = 0;
+	let conflicted = 0;
+	let i = 0;
+	while (i < records.length) {
+		const xy = records[i++].slice(0, 2);
+		if (xy === "??") {
+			untracked++;
 			continue;
 		}
-		if (status.includes("D")) deleted += 1;
-		else if (status.includes("A")) added += 1;
-		else modified += 1;
+		if (xy === "!!") continue;
+		if (xy[0] === "U" || xy[1] === "U" || xy === "AA" || xy === "DD") {
+			conflicted++;
+			continue;
+		}
+		const ch = xy[0] !== " " ? xy[0] : xy[1];
+		if (ch === "R") {
+			renamed++;
+			i++;
+		} else if (ch === "C") {
+			copied++;
+			i++;
+		} else if (ch === "A") added++;
+		else if (ch === "D") deleted++;
+		else if (ch === "T") typeChanged++;
+		else modified++;
 	}
 	const divergence = git(root, [
 		"rev-list",
@@ -3585,7 +3639,11 @@ function collectGitStatus(cwd) {
 		modified,
 		added,
 		deleted,
-		untracked
+		untracked,
+		renamed,
+		copied,
+		typeChanged,
+		conflicted
 	};
 	cache.set(cwd, {
 		at: now,
@@ -4543,7 +4601,18 @@ function collectAuthInfo(planType, env = process.env) {
 		return structuredClone(value);
 	}
 	if (hasApiKey) {
-		const value = { method: "API Key" };
+		let providerLabel;
+		try {
+			const configPath = path.join(getCodexHome(env), "config.toml");
+			const config = record(parse(fs.readFileSync(configPath, "utf8")));
+			const providerName = typeof config?.model_provider === "string" ? config.model_provider : null;
+			if (providerName) {
+				const provider = record(record(config?.model_providers)?.[providerName]);
+				const baseUrl = typeof provider?.base_url === "string" ? provider.base_url : null;
+				if (baseUrl) providerLabel = new URL(baseUrl).hostname.replace(/^www\./, "").replace(/\.[^.]+$/, "");
+			}
+		} catch {}
+		const value = { method: providerLabel || "API Key" };
 		authCache.set(cacheKey, {
 			at: Date.now(),
 			value
@@ -4747,4 +4816,4 @@ async function waitForNewRootSession(cwd, snapshot, codexHome = getCodexHome(), 
 
 //#endregion
 export { getHudStateDirectory as C, getConfigPath as S, RolloutParser as T, sliceAnsi as _, waitForNewRootSession as a, findActiveSession as b, desiredPaneHeight as c, resizeHudPane as d, viewportRenderHeight as f, visibleWidth as g, truncateAnsi as h, snapshotRootSessions as i, isExternalCmuxResize as l, safeText as m, createSessionBindingPath as n, writeSessionBinding as o, renderHud as p, readSessionBinding as r, buildHudState as s, acquireSessionDiscoveryLock as t, resizeCmuxPane as u, loadConfig as v, getLegacyStateDirectory as w, getCodexHome as x, DEFAULT_CONFIG as y };
-//# sourceMappingURL=session-binding-BJelLPyI.mjs.map
+//# sourceMappingURL=session-binding-N33viEGs.mjs.map

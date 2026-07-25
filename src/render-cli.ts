@@ -180,6 +180,7 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
           height,
           color: options.color,
           language: loaded.config.language,
+          sessionId: state.session?.id ?? null,
         })
       : renderHud({
           config: loaded.config,

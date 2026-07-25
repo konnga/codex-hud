@@ -11,7 +11,7 @@ Codex HUD 是面向 OpenAI Codex CLI 的常驻终端 HUD，集中展示上下文
 启用 Full 预设且当前会话存在相应遥测数据时，HUD 会展开显示模型与项目、上下文和额度、运行环境、实时活动及会话状态：
 
 ```text
-[gpt-5.5 high] │ codex-hud +shared git:(main* ↑1) │ ChatGPT pro (builder)
+[gpt-5.5 high] │ codex-hud +shared git:(main* ↑1) M2 A1 ?1 │ ChatGPT pro (builder)
 上下文 ██████░░░░ 59% │ 额度 5h: ███░░░░░░░ 25% (重置于 1h 30m) │ 1w: ████████░░ 82% (重置于 4d) │ $12.50
 缓存有效期 ⏱️ 5m
 审批: on-request │ 权限: workspace-write │ 沙箱: workspace-write
@@ -26,9 +26,26 @@ Codex HUD 是面向 OpenAI Codex CLI 的常驻终端 HUD，集中展示上下文
 
 实际终端效果（tmux）：
 
-![Codex HUD tmux 示例](./docs/assets/codex-hud-tmux-example.png)
+![Codex HUD tmux 示例](./.github/assets/codex-hud-tmux-example.png)
 
 没有可用遥测数据的行会自动隐藏；没有活动计划时，任务行会改为展示持久 Goal。
+
+### Git 状态标记
+
+`git` 段依次显示分支名、`*` 脏标记、可选的 ahead/behind 箭头（`↑`/`↓`），以及在启用 `showFileStats`（默认开启）时的分状态文件计数。状态字母遵循 IntelliJ IDEA 与 Sublime Merge 的约定：
+
+| 标记 | 含义           |
+| ---- | -------------- |
+| `M`  | 已修改         |
+| `A`  | 新增（已暂存） |
+| `D`  | 已删除         |
+| `R`  | 重命名         |
+| `C`  | 复制           |
+| `T`  | 类型变更       |
+| `?`  | 未跟踪         |
+| `!`  | 冲突（未合并） |
+
+例如 `git:(main* ↑1) M2 A1 ?1` 表示当前在 `main` 分支且有未提交改动、领先上游 1 个提交、2 个已修改文件、1 个已暂存新增文件、1 个未跟踪文件。注意 `!`（冲突）与 VSCode 不同：VSCode 用 `U` 表示未跟踪，而 Codex HUD 用 `?` 表示未跟踪、`!` 专门表示合并冲突。
 
 ## 当前能力
 
@@ -319,6 +336,8 @@ HUD 出现“轮次”行后，点击 HUD pane 并按 `n`，HUD 会展开为会�
 - `Esc`：先返回轮次列表，再关闭导航器
 - `q`：立即关闭导航器
 
+导航器标题行会显示当前 Codex 会话的完整 session id，方便把打开的轮次与具体的 rollout 文件对应起来。
+
 关闭后 HUD 会恢复原来的紧凑高度，并把焦点交回 Codex pane。导航器不会控制或改变 Codex 原生 TUI 的滚动位置。
 
 数据来源、隐私边界、backend 行为和当前限制见[会话历史导航文档](./docs/conversation-navigator.md)。
@@ -352,26 +371,26 @@ codex-hud configure --enable tools,skills,agents --disable memory --yes
 
 选择面板按 Project、Usage、Activity、Environment 和 Session 分类。可用于 `--enable` / `--disable` 的字段名称如下：
 
-| 名称            | 显示内容                       |
-| --------------- | ------------------------------ |
-| `git`           | Git 分支和工作区状态           |
-| `usage`         | 额度窗口、reset 时间和 credits |
-| `promptCache`   | Prompt Cache 倒计时            |
-| `tools`         | 工具调用活动                   |
-| `skills`        | Skills 活动                    |
-| `mcp`           | MCP server 活动                |
-| `agents`        | 子 Agent 状态                  |
-| `todos`         | 计划与任务进度                 |
-| `goal`          | 持久 Goal                      |
-| `turns`         | 会话轮次数量与导航提示         |
-| `configCounts`  | 配置、规则、Skill 和 MCP 数量  |
-| `auth`          | 认证方式                       |
-| `memory`        | 近似系统内存                   |
-| `duration`      | 会话持续时间                   |
-| `speed`         | 上一次回复的输出速度           |
-| `sessionName`   | 显式命名的会话标题             |
-| `sessionTokens` | 会话累计 Token                 |
-| `compactions`   | Context 压缩次数               |
+| 名称            | 显示内容                                                      |
+| --------------- | ------------------------------------------------------------- |
+| `git`           | Git 分支和工作区状态                                          |
+| `usage`         | 额度窗口、reset 时间和 credits                                |
+| `promptCache`   | Prompt Cache 倒计时                                           |
+| `tools`         | 工具调用活动                                                  |
+| `skills`        | Skills 活动                                                   |
+| `mcp`           | MCP server 活动                                               |
+| `agents`        | 子 Agent 状态                                                 |
+| `todos`         | 计划与任务进度                                                |
+| `goal`          | 持久 Goal                                                     |
+| `turns`         | 会话轮次数量与导航提示                                        |
+| `configCounts`  | 配置、规则、Skill 和 MCP 数量                                 |
+| `auth`          | 认证方式（ChatGPT 套餐，或 API key 场景下的 provider 主机名） |
+| `memory`        | 近似系统内存                                                  |
+| `duration`      | 会话持续时间                                                  |
+| `speed`         | 上一次回复的输出速度                                          |
+| `sessionName`   | 显式命名的会话标题                                            |
+| `sessionTokens` | 会话累计 Token                                                |
+| `compactions`   | Context 压缩次数                                              |
 
 示例：
 

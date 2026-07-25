@@ -40,21 +40,46 @@ export function collectGitStatus(cwd: string): GitStatus | null {
   let added = 0
   let deleted = 0
   let untracked = 0
+  let renamed = 0
+  let copied = 0
+  let typeChanged = 0
+  let conflicted = 0
 
-  for (const record of records) {
-    const status = record.slice(0, 2)
-    if (status === '??') {
-      untracked += 1
+  let i = 0
+  while (i < records.length) {
+    const record = records[i++]
+    const xy = record.slice(0, 2)
+    if (xy === '??') {
+      untracked++
       continue
     }
-    if (status.includes('D')) {
-      deleted += 1
+    if (xy === '!!') {
+      continue
     }
-    else if (status.includes('A')) {
-      added += 1
+    if (xy[0] === 'U' || xy[1] === 'U' || xy === 'AA' || xy === 'DD') {
+      conflicted++
+      continue
+    }
+    const ch = xy[0] !== ' ' ? xy[0] : xy[1]
+    if (ch === 'R') {
+      renamed++
+      i++
+    }
+    else if (ch === 'C') {
+      copied++
+      i++
+    }
+    else if (ch === 'A') {
+      added++
+    }
+    else if (ch === 'D') {
+      deleted++
+    }
+    else if (ch === 'T') {
+      typeChanged++
     }
     else {
-      modified += 1
+      modified++
     }
   }
 
@@ -73,6 +98,10 @@ export function collectGitStatus(cwd: string): GitStatus | null {
     added,
     deleted,
     untracked,
+    renamed,
+    copied,
+    typeChanged,
+    conflicted,
   }
   cache.set(cwd, { at: now, status })
   return structuredClone(status)

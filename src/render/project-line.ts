@@ -58,12 +58,19 @@ function gitSegment(ctx: RenderContext): string | null {
   if (ctx.config.gitStatus.showAheadBehind && status.behind > 0) {
     branch += color(` ↓${status.behind}`, ctx.config.colors.gitBranch, ctx.options.color)
   }
-  const statParts = [
-    status.modified > 0 ? `!${status.modified}` : null,
-    status.added > 0 ? `+${status.added}` : null,
-    status.deleted > 0 ? `✘${status.deleted}` : null,
-    status.untracked > 0 ? `?${status.untracked}` : null,
-  ].filter((value): value is string => Boolean(value))
+  const statEntries: Array<[string, number, string]> = [
+    ['!', status.conflicted ?? 0, ctx.config.colors.critical as string],
+    ['M', status.modified, 'yellow'],
+    ['A', status.added, 'green'],
+    ['D', status.deleted, 'red'],
+    ['R', status.renamed ?? 0, 'cyan'],
+    ['C', status.copied ?? 0, 'brightBlue'],
+    ['T', status.typeChanged ?? 0, 'magenta'],
+    ['?', status.untracked, 'dim'],
+  ]
+  const statParts = statEntries
+    .filter(([, count]) => count > 0)
+    .map(([label, count, clr]) => color(`${label}${count}`, clr, ctx.options.color))
   const stats = ctx.config.gitStatus.showFileStats && statParts.length > 0 ? ` ${statParts.join(' ')}` : ''
   return `${wrapper}${branch}${color(')', ctx.config.colors.git, ctx.options.color)}${stats}`
 }

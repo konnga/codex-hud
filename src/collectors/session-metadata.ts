@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
+import { parse } from 'smol-toml'
 import { getCodexHome } from '../config/paths.js'
 
 type UnknownRecord = Record<string, unknown>
@@ -95,7 +96,23 @@ export function collectAuthInfo(planType: string | null, env: NodeJS.ProcessEnv 
     return structuredClone(value)
   }
   if (hasApiKey) {
-    const value = { method: 'API Key' }
+    let providerLabel: string | undefined
+    try {
+      const configPath = path.join(getCodexHome(env), 'config.toml')
+      const config = record(parse(fs.readFileSync(configPath, 'utf8')))
+      const providerName = typeof config?.model_provider === 'string' ? config.model_provider : null
+      if (providerName) {
+        const providers = record(config?.model_providers)
+        const provider = record(providers?.[providerName])
+        const baseUrl = typeof provider?.base_url === 'string' ? provider.base_url : null
+        if (baseUrl) {
+          // Strip the domain suffix, e.g. "anyrouter.top" -> "anyrouter".
+          providerLabel = new URL(baseUrl).hostname.replace(/^www\./, '').replace(/\.[^.]+$/, '')
+        }
+      }
+    }
+    catch { /* ignore */ }
+    const value: AuthInfo = { method: providerLabel || 'API Key' }
     authCache.set(cacheKey, { at: Date.now(), value })
     return value
   }

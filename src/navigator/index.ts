@@ -17,6 +17,7 @@ export interface NavigatorRenderOptions {
   height: number
   color: boolean
   language: Language
+  sessionId?: string | null
 }
 
 const LABELS = {
@@ -167,7 +168,8 @@ function renderList(
   const width = Math.max(20, options.width)
   const height = Math.max(5, options.height)
   const matches = normalizeNavigatorSelection(state, turns)
-  const header = `${labels.title} · ${String(turns.length)} ${labels.turns}`
+  const sessionPrefix = options.sessionId ? `${options.sessionId} · ` : ''
+  const header = `${sessionPrefix}${labels.title} · ${String(turns.length)} ${labels.turns}`
   const search = state.searchMode || state.query
     ? `${labels.search}: ${state.query}${state.searchMode ? '█' : ''}`
     : ''
@@ -223,7 +225,8 @@ function renderDetail(
   const maximumScroll = Math.max(0, body.length - bodyHeight)
   const scroll = Math.min(maximumScroll, Math.max(0, state.detailScroll))
   state.detailScroll = scroll
-  const header = `${labels.title} · #${String(state.selectedIndex + 1)}/${String(turns.length)}`
+  const sessionPrefix = options.sessionId ? `${options.sessionId} · ` : ''
+  const header = `${sessionPrefix}${labels.title} · #${String(state.selectedIndex + 1)}/${String(turns.length)}`
   return [
     truncateAnsi(header, width),
     ...body.slice(scroll, scroll + bodyHeight).map(line => truncateAnsi(line, width)),
