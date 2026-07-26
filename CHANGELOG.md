@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## 0.3.2 - 2026-07-26
+
 ### Fixed
 
 - The cmux HUD pane no longer gets stuck at the enlarged height after closing the conversation navigator. The renderer treated any `SIGWINCH` whose row count differed from the height it had *requested* as a manual divider drag and permanently disabled auto-fit — but the two routinely differ: resize amounts were converted with a hard-coded 20 points per row while the actual cell height varies with font and display scale, cmux clamps requests against the workspace, and cmux defers PTY row updates for hidden workspaces so the signal can arrive long after the resize that caused it. Manual-resize detection is now based on divider geometry instead: the renderer measures the real points-per-row from `cmux list-panes` before converting, records the pane's share of the container after each resize it issues, and on `SIGWINCH` only hands height ownership to the user when the divider has actually moved from where the HUD left it. Everything else — clamped requests, conversion drift, whole-window resizes — re-adopts the actual height and keeps fitting content.
