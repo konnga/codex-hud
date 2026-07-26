@@ -1,5 +1,5 @@
 import type { RenderContext } from '../types/render.js'
-import { formatTokens, progressBar } from './format.js'
+import { formatBytes, progressBar } from './format.js'
 import { message } from './i18n.js'
 
 export function renderEnvironmentLine(ctx: RenderContext): string | null {
@@ -42,5 +42,5 @@ export function renderMemoryLine(ctx: RenderContext): string | null {
     return null
   }
   const memory = ctx.state.memory
-  return `${message(ctx.config.language, 'memory')} ${progressBar(memory.usedPercent, 6, ctx.config.colors.barFilled, ctx.config.colors.barEmpty)} ${memory.usedPercent}% (${formatTokens(memory.usedBytes / 1024 / 1024)}MiB)`
+  return `${message(ctx.config.language, 'memory')} ${progressBar(memory.usedPercent, 6, ctx.config.colors.barFilled, ctx.config.colors.barEmpty)} ${memory.usedPercent}% (${formatBytes(memory.usedBytes)}/${formatBytes(memory.totalBytes)})`
 }
