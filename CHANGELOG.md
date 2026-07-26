@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- The cmux HUD pane no longer gets stuck at the enlarged height after closing the conversation navigator. The renderer treated any `SIGWINCH` whose row count differed from the height it had *requested* as a manual divider drag and permanently disabled auto-fit — but the two routinely differ: resize amounts were converted with a hard-coded 20 points per row while the actual cell height varies with font and display scale, cmux clamps requests against the workspace, and cmux defers PTY row updates for hidden workspaces so the signal can arrive long after the resize that caused it. Manual-resize detection is now based on divider geometry instead: the renderer measures the real points-per-row from `cmux list-panes` before converting, records the pane's share of the container after each resize it issues, and on `SIGWINCH` only hands height ownership to the user when the divider has actually moved from where the HUD left it. Everything else — clamped requests, conversion drift, whole-window resizes — re-adopts the actual height and keeps fitting content.
+---
+
+### 修复
+
+- 关闭会话导航器后 cmux HUD 面板不再停留在放大后的高度。此前只要 `SIGWINCH` 报告的行数与渲染器“请求的高度”不一致，就会被判定为用户手动拖动分隔条并永久关闭自动适配——但两者经常不一致：行数换算硬编码为每行 20 points 而实际行高随字体与缩放变化、cmux 会按工作区尺寸钳制 resize 请求、且 cmux 对后台工作区延迟同步 PTY 行数（信号可能在 resize 很久之后才到达）。现在手动检测改为基于分隔线几何：渲染器在换算前通过 `cmux list-panes` 实测每行 points，在每次自己发出 resize 后记录面板占容器高度的比例，`SIGWINCH` 到来时只有分隔线确实偏离了 HUD 自己设置的位置才把高度控制权移交给用户；其余情况（请求被钳制、换算偏差、整窗缩放）一律采纳实际高度并继续按内容自适应。
 ## 0.3.1 - 2026-07-26
 
 ### Fixed

@@ -3,11 +3,39 @@ import {
   DEFAULT_HUD_MAX_HEIGHT,
   desiredPaneHeight,
   INITIAL_HUD_PANE_HEIGHT,
-  isExternalCmuxResize,
+  readCmuxPaneGeometry,
   resizeCmuxPane,
   resizeHudPane,
+  settleCmuxPaneHeight,
   viewportRenderHeight,
 } from './pane-size.js'
+
+interface FakePaneState {
+  rows: number
+  height: number
+  container: number
+  resizeStatus?: number
+  onResize?: (args: string[]) => void
+}
+
+function fakeCmuxRunner(state: FakePaneState) {
+  return vi.fn((args: string[]) => {
+    if (args.includes('list-panes')) {
+      return {
+        status: 0,
+        stdout: JSON.stringify({
+          container_frame: { height: state.container },
+          panes: [
+            { id: 'other', rows: 40, pixel_frame: { height: state.container - state.height } },
+            { id: 'hud', rows: state.rows, pixel_frame: { height: state.height } },
+          ],
+        }),
+      }
+    }
+    state.onResize?.(args)
+    return { status: state.resizeStatus ?? 0 }
+  })
+}
 
 describe('adaptive HUD pane sizing', () => {
   it('defaults to a small initial pane with enough headroom for the full HUD', () => {
@@ -37,48 +65,136 @@ describe('adaptive HUD pane sizing', () => {
     expect(resizeHudPane('%2', 7, 12, run)).toBe(7)
     expect(run).toHaveBeenCalledWith(['resize-pane', '-t', '%2', '-y', '7'])
   })
+})
 
-  it('uses cmux directional resizing based on the renderer viewport', () => {
-    const run = vi.fn(() => ({ status: 0 }))
-    expect(resizeCmuxPane(null, 'source', 'workspace', 7, 4, null, run)).toBeNull()
-    expect(resizeCmuxPane('hud', 'source', 'workspace', 7, 7, null, run)).toBe(7)
-    expect(run).not.toHaveBeenCalled()
-    expect(resizeCmuxPane('hud', 'source', 'workspace', 7, 4, null, run)).toBe(7)
-    expect(run).toHaveBeenLastCalledWith([
+describe('cmux pane geometry', () => {
+  it('reads rows, divider height, and container height for the HUD pane', () => {
+    const run = fakeCmuxRunner({ rows: 20, height: 376, container: 1009 })
+
+    const geometry = readCmuxPaneGeometry('ws', 'hud', run)
+
+    expect(run).toHaveBeenCalledWith(['--json', '--id-format', 'both', 'list-panes', '--workspace', 'ws'])
+    expect(geometry).toMatchObject({ rows: 20, heightPoints: 376, containerHeightPoints: 1009 })
+    expect(geometry?.pointsPerRow).toBeCloseTo(18.8, 1)
+  })
+
+  it('keeps the points-per-row estimate within sane bounds when rows lag the divider', () => {
+    expect(readCmuxPaneGeometry('ws', 'hud', fakeCmuxRunner({ rows: 20, height: 166, container: 1009 }))?.pointsPerRow).toBe(12)
+    expect(readCmuxPaneGeometry('ws', 'hud', fakeCmuxRunner({ rows: 2, height: 400, container: 1009 }))?.pointsPerRow).toBe(40)
+  })
+
+  it('returns null for missing context, command failure, or an unknown pane', () => {
+    expect(readCmuxPaneGeometry(null, 'hud', fakeCmuxRunner({ rows: 5, height: 90, container: 900 }))).toBeNull()
+    expect(readCmuxPaneGeometry('ws', null, fakeCmuxRunner({ rows: 5, height: 90, container: 900 }))).toBeNull()
+    expect(readCmuxPaneGeometry('ws', 'hud', vi.fn(() => ({ status: 1 })))).toBeNull()
+    expect(readCmuxPaneGeometry('ws', 'hud', vi.fn(() => ({ status: 0, stdout: 'not json' })))).toBeNull()
+    expect(readCmuxPaneGeometry('ws', 'missing', fakeCmuxRunner({ rows: 5, height: 90, container: 900 }))).toBeNull()
+  })
+})
+
+describe('cmux pane resizing', () => {
+  it('grows the HUD pane using the measured points-per-row', () => {
+    const state: FakePaneState = { rows: 4, height: 72, container: 720 }
+    state.onResize = () => {
+      state.height = 126
+      state.rows = 7
+    }
+    const run = fakeCmuxRunner(state)
+
+    const resized = resizeCmuxPane('hud', 'source', 'ws', 7, 4, null, run)
+
+    expect(run).toHaveBeenCalledWith([
       'resize-pane',
       '--workspace',
-      'workspace',
+      'ws',
+      '--pane',
+      'hud',
+      '-U',
+      '--amount',
+      '54',
+    ])
+    expect(resized.height).toBe(7)
+    expect(resized.issued).toBe(true)
+    expect(resized.fraction).toBeCloseTo(126 / 720, 5)
+  })
+
+  it('shrinks by growing the source pane downward', () => {
+    const state: FakePaneState = { rows: 9, height: 162, container: 720 }
+    const run = fakeCmuxRunner(state)
+
+    const resized = resizeCmuxPane('hud', 'source', 'ws', 7, 9, null, run)
+
+    expect(run).toHaveBeenCalledWith([
+      'resize-pane',
+      '--workspace',
+      'ws',
+      '--pane',
+      'source',
+      '-D',
+      '--amount',
+      '36',
+    ])
+    expect(resized.issued).toBe(true)
+  })
+
+  it('suppresses repeat requests and no-op deltas without issuing commands', () => {
+    const run = fakeCmuxRunner({ rows: 7, height: 126, container: 720 })
+
+    expect(resizeCmuxPane('hud', 'source', 'ws', 7, 12, 7, run)).toEqual({ height: 7, issued: false, fraction: null })
+    expect(run).not.toHaveBeenCalled()
+    expect(resizeCmuxPane('hud', 'source', 'ws', 7, 4, null, run)).toEqual({ height: 7, issued: false, fraction: null })
+    expect(run).toHaveBeenCalledTimes(1)
+  })
+
+  it('falls back to the viewport rows and default ratio when geometry is unavailable', () => {
+    const run = vi.fn((args: string[]) => (args.includes('list-panes') ? { status: 1 } : { status: 0 }))
+
+    const resized = resizeCmuxPane('hud', 'source', 'ws', 7, 4, null, run)
+
+    expect(run).toHaveBeenCalledWith([
+      'resize-pane',
+      '--workspace',
+      'ws',
       '--pane',
       'hud',
       '-U',
       '--amount',
       '60',
     ])
-    expect(resizeCmuxPane('hud', 'source', 'workspace', 7, 9, null, run)).toBe(7)
-    expect(run).toHaveBeenLastCalledWith([
-      'resize-pane',
-      '--workspace',
-      'workspace',
-      '--pane',
-      'source',
-      '-D',
-      '--amount',
-      '40',
-    ])
+    expect(resized).toEqual({ height: 7, issued: true, fraction: null })
   })
 
-  it('does not fight an external cmux resize after already requesting the desired height', () => {
-    const run = vi.fn(() => ({ status: 0 }))
+  it('keeps the previous height when the resize command fails or context is missing', () => {
+    expect(resizeCmuxPane(null, 'source', 'ws', 7, 4, null, fakeCmuxRunner({ rows: 4, height: 72, container: 720 })))
+      .toEqual({ height: null, issued: false, fraction: null })
+    expect(resizeCmuxPane('hud', 'source', 'ws', 7, 4, 4, fakeCmuxRunner({ rows: 4, height: 72, container: 720, resizeStatus: 1 })))
+      .toEqual({ height: 4, issued: false, fraction: null })
+  })
+})
 
-    expect(resizeCmuxPane('hud', 'source', 'workspace', 7, 12, 7, run)).toBe(7)
-    expect(run).not.toHaveBeenCalled()
+describe('cmux resize settlement', () => {
+  it('adopts the actual rows when the divider still sits where the HUD left it', () => {
+    const geometry = { rows: 20, heightPoints: 376, containerHeightPoints: 1009, pointsPerRow: 18.8 }
+
+    expect(settleCmuxPaneHeight(20, 30, 376 / 1009, geometry)).toEqual({ height: 20, manual: false })
   })
 
-  it('detects when cmux rows diverge from the last HUD-managed height', () => {
-    expect(isExternalCmuxResize(7, 7)).toBe(false)
-    expect(isExternalCmuxResize(12, 7)).toBe(true)
-    expect(isExternalCmuxResize(undefined, 7)).toBe(false)
-    expect(isExternalCmuxResize(12, null)).toBe(false)
-    expect(isExternalCmuxResize(Number.NaN, 7)).toBe(false)
+  it('keeps adopting after a window resize that preserves the pane fraction', () => {
+    const geometry = { rows: 26, heightPoints: 470, containerHeightPoints: 1261, pointsPerRow: 18.1 }
+
+    expect(settleCmuxPaneHeight(26, 20, 376 / 1009, geometry)).toEqual({ height: 26, manual: false })
+  })
+
+  it('hands height ownership to the user when the divider moved beyond tolerance', () => {
+    const geometry = { rows: 12, heightPoints: 226, containerHeightPoints: 1009, pointsPerRow: 18.8 }
+
+    expect(settleCmuxPaneHeight(12, 20, 376 / 1009, geometry)).toEqual({ height: 20, manual: true })
+  })
+
+  it('never latches manual mode without geometry or a recorded self fraction', () => {
+    expect(settleCmuxPaneHeight(12, 20, null, { rows: 12, heightPoints: 226, containerHeightPoints: 1009, pointsPerRow: 18.8 }))
+      .toEqual({ height: 12, manual: false })
+    expect(settleCmuxPaneHeight(12, 20, 376 / 1009, null)).toEqual({ height: 12, manual: false })
+    expect(settleCmuxPaneHeight(undefined, 20, null, null)).toEqual({ height: 20, manual: false })
   })
 })

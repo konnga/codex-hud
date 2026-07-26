@@ -21,9 +21,10 @@ import {
   DEFAULT_HUD_MAX_HEIGHT,
   desiredPaneHeight,
   INITIAL_HUD_PANE_HEIGHT,
-  isExternalCmuxResize,
+  readCmuxPaneGeometry,
   resizeCmuxPane,
   resizeHudPane,
+  settleCmuxPaneHeight,
   viewportRenderHeight,
 } from './runtime/pane-size.js'
 import { readSessionBinding } from './runtime/session-binding.js'
@@ -117,6 +118,7 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
   let paneHeight: number | null = null
   let cmuxManualHeight = false
   let cmuxResizePending = false
+  let cmuxSelfFraction: number | null = null
   let latestTurns = parser.getState().conversationTurns
   let codexPid: number | null = null
   const paneId = process.env.TMUX_PANE ?? null
@@ -206,7 +208,7 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
       : desiredPaneHeight(lines.length, options.maxHeight)
     if (options.cmuxPaneId) {
       if (!cmuxManualHeight && !cmuxResizePending) {
-        paneHeight = resizeCmuxPane(
+        const resized = resizeCmuxPane(
           options.cmuxPaneId,
           options.cmuxSourcePaneId,
           options.cmuxWorkspaceId,
@@ -214,6 +216,10 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
           process.stdout.rows,
           paneHeight,
         )
+        paneHeight = resized.height
+        if (resized.issued) {
+          cmuxSelfFraction = resized.fraction
+        }
       }
     }
     else {
@@ -255,7 +261,10 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
       }
       resizeTimer = setTimeout(() => {
         cmuxResizePending = false
-        if (isExternalCmuxResize(process.stdout.rows, paneHeight)) {
+        const geometry = readCmuxPaneGeometry(options.cmuxWorkspaceId, options.cmuxPaneId)
+        const settled = settleCmuxPaneHeight(process.stdout.rows, paneHeight, cmuxSelfFraction, geometry)
+        paneHeight = settled.height
+        if (settled.manual) {
           cmuxManualHeight = true
         }
         render()
