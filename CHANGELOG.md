@@ -2,6 +2,30 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- The `auth` provider label now reports the endpoint the current session actually connected to, read from Codex's own log database, instead of whatever `config.toml` contains at render time. Editing `base_url` mid-flight no longer relabels panes whose sessions are still talking to the previous endpoint. When neither the log database nor an unmodified `config.toml` can prove the endpoint, the label degrades to `API Key` rather than naming the wrong host.
+- Codex writes no rollout until the first message, so a freshly launched pane had no session to attribute an endpoint to and briefly showed whatever `config.toml` held — the provider the user had just switched away from. The launcher now publishes the Codex process id in the session binding, letting the HUD resolve that process's endpoint from launch, and the label never borrows `config.toml` while unbound.
+- The provider label is now the registrable host name rather than the hostname minus its last segment, so `https://api.openai.com/v1` reads `openai` instead of `api.openai`.
+
+### Changed
+
+- `codex-hud doctor` reports the resolved session endpoint, where it came from, and the Codex log database path.
+- Session bindings now carry the Codex process id alongside the rollout path, and are written as soon as Codex starts rather than only once its rollout appears.
+
+---
+
+### 修复
+
+- API key 场景下的 `auth` 标签改为显示当前会话实际连接的 endpoint（取自 Codex 自身的日志数据库），不再显示渲染时 `config.toml` 里的值。中途修改 `base_url` 不会再影响仍在使用旧 endpoint 的会话面板。当日志数据库与未被改写的 `config.toml` 都无法证明 endpoint 时，标签降级为 `API Key`，而不是显示错误的主机名。
+- Codex 在第一条消息之前不会创建 rollout，因此刚启动的面板没有会话可依据，会短暂显示 `config.toml` 当时的值——也就是用户刚刚切走的那个 provider。现在启动器会把 codex 进程号写入 session binding，HUD 从启动起就能解析该进程的 endpoint；未绑定会话时也不再借用 `config.toml`。
+- provider 标签改为取可注册域名而非“主机名去掉最后一段”，因此 `https://api.openai.com/v1` 显示为 `openai` 而不是 `api.openai`。
+
+### 变更
+
+- `codex-hud doctor` 新增会话 endpoint、来源以及 Codex 日志数据库路径的诊断输出。
+- session binding 现在除 rollout 路径外还记录 codex 进程号，并在 Codex 启动时即写入，而不是等到 rollout 出现。
+
 ## 0.3.0 - 2026-07-25
 
 ### Features

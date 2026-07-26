@@ -57,22 +57,35 @@ export function createSessionBindingPath(cwd: string, env: NodeJS.ProcessEnv = p
   return path.join(getHudStateDirectory(env), 'bindings', `${digest}-${randomUUID()}.json`)
 }
 
-export function writeSessionBinding(bindingPath: string, rolloutPath: string): void {
+export interface SessionBinding {
+  rolloutPath: string | null
+  codexPid: number | null
+}
+
+/**
+ * Written once right after Codex is spawned so the HUD can identify the process
+ * before Codex creates a rollout, then again with the rollout once it appears.
+ */
+export function writeSessionBinding(bindingPath: string, rolloutPath: string | null, codexPid?: number | null): void {
   fs.mkdirSync(path.dirname(bindingPath), { recursive: true, mode: 0o700 })
   const temporaryPath = `${bindingPath}.${process.pid}.tmp`
-  fs.writeFileSync(temporaryPath, `${JSON.stringify({ rolloutPath })}\n`, { mode: 0o600 })
+  const payload = { ...(rolloutPath ? { rolloutPath } : {}), ...(codexPid ? { codexPid } : {}) }
+  fs.writeFileSync(temporaryPath, `${JSON.stringify(payload)}\n`, { mode: 0o600 })
   fs.renameSync(temporaryPath, bindingPath)
 }
 
-export function readSessionBinding(bindingPath: string): string | null {
+export function readSessionBinding(bindingPath: string): SessionBinding {
   try {
-    const value = JSON.parse(fs.readFileSync(bindingPath, 'utf8')) as { rolloutPath?: unknown }
-    return typeof value.rolloutPath === 'string' && fs.existsSync(value.rolloutPath)
-      ? value.rolloutPath
-      : null
+    const value = JSON.parse(fs.readFileSync(bindingPath, 'utf8')) as { rolloutPath?: unknown, codexPid?: unknown }
+    return {
+      rolloutPath: typeof value.rolloutPath === 'string' && fs.existsSync(value.rolloutPath)
+        ? value.rolloutPath
+        : null,
+      codexPid: typeof value.codexPid === 'number' && Number.isInteger(value.codexPid) ? value.codexPid : null,
+    }
   }
   catch {
-    return null
+    return { rolloutPath: null, codexPid: null }
   }
 }
 

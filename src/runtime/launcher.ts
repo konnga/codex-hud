@@ -308,6 +308,11 @@ export async function runCodexChild(
   const snapshot = bindingPath ? snapshotRootSessions(cwd, codexHome) : null
   const allowModifiedSession = isResumeInvocation(args)
   const child = spawn(codex, args, { cwd, stdio: 'inherit', env })
+  if (bindingPath && child.pid) {
+    // Codex only writes a rollout once the user sends a message, so publish the
+    // process now: until then it is the HUD's only handle on this session.
+    writeSessionBinding(bindingPath, null, child.pid)
+  }
   const discoveryController = new AbortController()
   let childExited = false
   const exitCodePromise = new Promise<number>((resolve) => {
@@ -340,7 +345,7 @@ export async function runCodexChild(
         )
       }
       if (rolloutPath) {
-        writeSessionBinding(bindingPath, rolloutPath)
+        writeSessionBinding(bindingPath, rolloutPath, child.pid)
       }
     }
     finally {

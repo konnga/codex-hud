@@ -6,7 +6,14 @@ import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 import { parse } from 'smol-toml'
+import { resolveProcessEndpoint, resolveSessionEndpoint } from '../codex/session-endpoint.js'
 import { getCodexHome } from '../config/paths.js'
+
+/** The Codex process a HUD pane was launched for, before it has a session. */
+export interface CodexProcess {
+  pid: number
+  launchedAt: Date
+}
 
 type UnknownRecord = Record<string, unknown>
 const titleCache = new Map<string, { at: number, title: string | null }>()
@@ -74,8 +81,69 @@ function jwtUser(value: unknown, depth = 0): string | null {
   return null
 }
 
-export function collectAuthInfo(planType: string | null, env: NodeJS.ProcessEnv = process.env): AuthInfo | null {
-  const cacheKey = `${getCodexHome(env)}:${planType ?? ''}:${Boolean(env.OPENAI_API_KEY)}`
+const GENERIC_SUFFIX = /^(?:com|co|net|org|edu|gov|ac|or|ne|gob|mil|int)$/
+
+function providerLabel(baseUrl: string): string | null {
+  let hostname: string
+  try {
+    hostname = new URL(baseUrl).hostname
+  }
+  catch {
+    return null
+  }
+  const bare = hostname.replace(/^www\./, '').replace(/^\[|\]$/g, '').replace(/\.$/, '')
+  if (!bare) {
+    return null
+  }
+  // Address literals carry no readable name; show them as they are.
+  if (/^[\d.]+$/.test(bare) || bare.includes(':')) {
+    return bare
+  }
+  // "https://anyrouter.top/v1" -> "anyrouter", "https://api.openai.com/v1" -> "openai".
+  const labels = bare.split('.')
+  const index = labels.length - 2
+  if (index < 0) {
+    return bare
+  }
+  // Skip the second level of a two-part suffix so "api.acme.com.cn" does not
+  // collapse to "com".
+  return index > 0 && GENERIC_SUFFIX.test(labels[index]) ? labels[index - 1] : labels[index]
+}
+
+/**
+ * The endpoint declared in config.toml is only evidence about a session if the
+ * file has not been rewritten since Codex read it at session start. Before a
+ * session is bound the HUD has nothing to attribute the file to, so it must not
+ * borrow the label: that window is exactly Codex's startup, when a provider the
+ * user just switched away from is still the newest thing on disk.
+ */
+function configuredBaseUrl(session: SessionInfo, env: NodeJS.ProcessEnv): string | null {
+  try {
+    const configPath = path.join(getCodexHome(env), 'config.toml')
+    if (fs.statSync(configPath).mtimeMs > session.startTime.getTime()) {
+      return null
+    }
+    const config = record(parse(fs.readFileSync(configPath, 'utf8')))
+    const providerName = session?.modelProvider
+      ?? (typeof config?.model_provider === 'string' ? config.model_provider : null)
+    if (!providerName) {
+      return null
+    }
+    const provider = record(record(config?.model_providers)?.[providerName])
+    return typeof provider?.base_url === 'string' ? provider.base_url : null
+  }
+  catch {
+    return null
+  }
+}
+
+export function collectAuthInfo(
+  planType: string | null,
+  session: SessionInfo | null = null,
+  env: NodeJS.ProcessEnv = process.env,
+  codexProcess: CodexProcess | null = null,
+): AuthInfo | null {
+  const cacheKey = `${getCodexHome(env)}:${planType ?? ''}:${session?.id ?? codexProcess?.pid ?? ''}:${Boolean(env.OPENAI_API_KEY)}`
   const cached = authCache.get(cacheKey)
   if (cached && Date.now() - cached.at < METADATA_CACHE_MS) {
     return cached.value ? structuredClone(cached.value) : null
@@ -96,23 +164,14 @@ export function collectAuthInfo(planType: string | null, env: NodeJS.ProcessEnv 
     return structuredClone(value)
   }
   if (hasApiKey) {
-    let providerLabel: string | undefined
-    try {
-      const configPath = path.join(getCodexHome(env), 'config.toml')
-      const config = record(parse(fs.readFileSync(configPath, 'utf8')))
-      const providerName = typeof config?.model_provider === 'string' ? config.model_provider : null
-      if (providerName) {
-        const providers = record(config?.model_providers)
-        const provider = record(providers?.[providerName])
-        const baseUrl = typeof provider?.base_url === 'string' ? provider.base_url : null
-        if (baseUrl) {
-          // Strip the domain suffix, e.g. "anyrouter.top" -> "anyrouter".
-          providerLabel = new URL(baseUrl).hostname.replace(/^www\./, '').replace(/\.[^.]+$/, '')
-        }
-      }
-    }
-    catch { /* ignore */ }
-    const value: AuthInfo = { method: providerLabel || 'API Key' }
+    // Prefer the endpoint this session actually reached, because config.toml
+    // may have been rewritten since the session started. When neither source
+    // can prove an endpoint, stay generic rather than name the wrong host.
+    const endpoint = session
+      ? resolveSessionEndpoint(session.id, env)
+      : codexProcess && resolveProcessEndpoint(codexProcess.pid, codexProcess.launchedAt, env)
+    const baseUrl = session ? endpoint?.url ?? configuredBaseUrl(session, env) : endpoint?.url ?? null
+    const value: AuthInfo = { method: (baseUrl ? providerLabel(baseUrl) : null) || 'API Key' }
     authCache.set(cacheKey, { at: Date.now(), value })
     return value
   }

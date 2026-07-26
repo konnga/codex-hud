@@ -91,7 +91,18 @@ describe('managed session binding', () => {
 
     writeSessionBinding(bindingPath, rolloutPath)
 
-    expect(readSessionBinding(bindingPath)).toBe(rolloutPath)
+    expect(readSessionBinding(bindingPath)).toEqual({ rolloutPath, codexPid: null })
+  })
+
+  it('publishes the Codex process before a rollout exists', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-binding-pid-'))
+    directories.push(directory)
+    const bindingPath = path.join(directory, 'binding.json')
+
+    // Codex writes no rollout until the first message; the pid is all there is.
+    writeSessionBinding(bindingPath, null, 4242)
+
+    expect(readSessionBinding(bindingPath)).toEqual({ rolloutPath: null, codexPid: 4242 })
   })
 
   it('stops rollout discovery immediately when the launch is aborted', async () => {

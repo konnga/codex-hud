@@ -68,6 +68,7 @@ See the audited [feature and telemetry support matrix](./docs/claude-hud-parity.
 - Node.js 20 or newer
 - A working official OpenAI Codex CLI installation
 - cmux 0.64 or newer for native scrolling/copying, or tmux as a compatibility backend
+- `sqlite3` on `PATH` (optional) for session titles and for resolving the endpoint a session connected to
 - pnpm 10 when building from source
 
 Inside cmux, no tmux installation is required. Outside cmux, install tmux with `brew install tmux` on macOS, `sudo apt install tmux` on Debian/Ubuntu, or the equivalent command for your platform. If no usable backend is available, Codex HUD safely runs official Codex without the HUD.
@@ -270,26 +271,26 @@ The Full preset enables cumulative session token totals by default. Existing con
 
 Selectable names:
 
-| Name            | Display content                                                               |
-| --------------- | ----------------------------------------------------------------------------- |
-| `git`           | Git branch and working-tree status                                            |
-| `usage`         | Usage windows, reset times, and credits                                       |
-| `promptCache`   | Prompt-cache countdown                                                        |
-| `tools`         | Tool-call activity                                                            |
-| `skills`        | Skill activity                                                                |
-| `mcp`           | MCP server activity                                                           |
-| `agents`        | Sub-agent status                                                              |
-| `todos`         | Plan and task progress                                                        |
-| `goal`          | Durable goal                                                                  |
-| `turns`         | Conversation turn count and navigator hint                                    |
-| `configCounts`  | Config, rule, Skill, and MCP counts                                           |
-| `auth`          | Authentication method (ChatGPT plan, or the provider host for API-key access) |
-| `memory`        | Approximate system memory                                                     |
-| `duration`      | Session duration                                                              |
-| `speed`         | Previous response output speed                                                |
-| `sessionName`   | Explicitly named session title                                                |
-| `sessionTokens` | Cumulative session tokens                                                     |
-| `compactions`   | Context compaction count                                                      |
+| Name            | Display content                                                                                                  |
+| --------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `git`           | Git branch and working-tree status                                                                               |
+| `usage`         | Usage windows, reset times, and credits                                                                          |
+| `promptCache`   | Prompt-cache countdown                                                                                           |
+| `tools`         | Tool-call activity                                                                                               |
+| `skills`        | Skill activity                                                                                                   |
+| `mcp`           | MCP server activity                                                                                              |
+| `agents`        | Sub-agent status                                                                                                 |
+| `todos`         | Plan and task progress                                                                                           |
+| `goal`          | Durable goal                                                                                                     |
+| `turns`         | Conversation turn count and navigator hint                                                                       |
+| `configCounts`  | Config, rule, Skill, and MCP counts                                                                              |
+| `auth`          | Authentication method (ChatGPT plan, or for API-key access the endpoint host this session actually connected to) |
+| `memory`        | Approximate system memory                                                                                        |
+| `duration`      | Session duration                                                                                                 |
+| `speed`         | Previous response output speed                                                                                   |
+| `sessionName`   | Explicitly named session title                                                                                   |
+| `sessionTokens` | Cumulative session tokens                                                                                        |
+| `compactions`   | Context compaction count                                                                                         |
 
 Saved changes are reloaded by sessions that already have a HUD pane. Hot reload cannot add a HUD pane to an existing Codex process that was started without the Codex HUD launcher.
 
@@ -309,7 +310,7 @@ codex-hud doctor --json --cwd "$PWD"
 codex-hud render --once --cwd "$PWD" --no-color
 ```
 
-Doctor checks the Codex executable, selected backend, configuration, plugin installation, and active session discovery. The one-shot renderer helps distinguish session discovery problems from terminal pane problems.
+Doctor checks the Codex executable, selected backend, configuration, plugin installation, active session discovery, and the endpoint that session resolved to (plus where that answer came from). The one-shot renderer helps distinguish session discovery problems from terminal pane problems.
 
 ## Uninstall
 

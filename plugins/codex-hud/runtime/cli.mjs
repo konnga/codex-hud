@@ -1,12 +1,12 @@
 #!/usr/bin/env node
-import { C as getHudStateDirectory, S as getConfigPath, T as RolloutParser, a as waitForNewRootSession, b as findActiveSession, i as snapshotRootSessions, n as createSessionBindingPath, o as writeSessionBinding, p as renderHud, s as buildHudState, t as acquireSessionDiscoveryLock, v as loadConfig, w as getLegacyStateDirectory, x as getCodexHome, y as DEFAULT_CONFIG } from "./session-binding-N33viEGs.mjs";
+import { C as getCodexHome, D as RolloutParser, E as getLegacyStateDirectory, S as resolveSessionEndpoint, T as getHudStateDirectory, a as waitForNewRootSession, b as findActiveSession, i as snapshotRootSessions, n as createSessionBindingPath, o as writeSessionBinding, p as renderHud, s as buildHudState, t as acquireSessionDiscoveryLock, v as loadConfig, w as getConfigPath, x as findCodexLogDatabase, y as DEFAULT_CONFIG } from "./session-binding-CxXFKrqv.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import process$1, { stdin, stdout } from "node:process";
+import { spawn, spawnSync } from "node:child_process";
 import os from "node:os";
 import { styleText } from "node:util";
 import l__default from "node:readline";
-import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
@@ -2491,6 +2491,7 @@ async function runCodexChild(args, sessionName, waitForClient = false, cwd = pro
 		stdio: "inherit",
 		env
 	});
+	if (bindingPath && child.pid) writeSessionBinding(bindingPath, null, child.pid);
 	const discoveryController = new AbortController();
 	let childExited = false;
 	const exitCodePromise = new Promise((resolve) => {
@@ -2505,7 +2506,7 @@ async function runCodexChild(args, sessionName, waitForClient = false, cwd = pro
 	if (bindingPath && snapshot && release) try {
 		let rolloutPath = await waitForNewRootSession(cwd, snapshot, codexHome, allowModifiedSession ? 1e4 : 1e3, discoveryController.signal, allowModifiedSession);
 		if (!rolloutPath && childExited) rolloutPath = await waitForNewRootSession(cwd, snapshot, codexHome, 250, void 0, allowModifiedSession);
-		if (rolloutPath) writeSessionBinding(bindingPath, rolloutPath);
+		if (rolloutPath) writeSessionBinding(bindingPath, rolloutPath, child.pid);
 	} finally {
 		release();
 	}
@@ -2699,6 +2700,7 @@ async function main(args = process$1.argv.slice(2)) {
 		const parser = new RolloutParser();
 		parser.setFile(session?.path ?? null);
 		const parsed = parser.parse();
+		const endpoint = parsed.session ? resolveSessionEndpoint(parsed.session.id) : null;
 		const pluginManifest = installedPluginManifest();
 		const installState = path.join(getHudStateDirectory(), "install.json");
 		const codex = findExecutable("codex");
@@ -2724,6 +2726,9 @@ async function main(args = process$1.argv.slice(2)) {
 			sessionId: session?.sessionId ?? null,
 			sessionParsed: parsed.session?.id === session?.sessionId,
 			model: parsed.session?.model ?? null,
+			codexLogDatabase: findCodexLogDatabase(),
+			sessionEndpoint: endpoint?.url ?? null,
+			sessionEndpointSource: endpoint?.source ?? null,
 			pluginManifest,
 			pluginInstalled: Boolean(pluginManifest),
 			managedInstall: fs.existsSync(installState),
@@ -2746,6 +2751,7 @@ async function main(args = process$1.argv.slice(2)) {
 			console.log(`Session: ${report.activeSession ?? "not found"}`);
 			console.log(`Plugin: ${report.pluginManifest ?? "not installed"}`);
 			console.log(`Session parse: ${report.sessionParsed ? "ok" : "not ready"}`);
+			console.log(`Session endpoint: ${report.sessionEndpoint ?? "unknown"}${report.sessionEndpointSource ? ` (${report.sessionEndpointSource})` : ""}`);
 			if (report.shimRecursion) console.log("Warning: Codex executable resolves to the Codex HUD CLI itself.");
 		}
 		return;

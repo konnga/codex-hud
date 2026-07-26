@@ -118,6 +118,7 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
   let cmuxManualHeight = false
   let cmuxResizePending = false
   let latestTurns = parser.getState().conversationTurns
+  let codexPid: number | null = null
   const paneId = process.env.TMUX_PANE ?? null
   const configMtime = (): number => {
     try {
@@ -139,9 +140,11 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
     }
     if (!options.sessionPath && !currentSessionPath && nowMs - lastDiscoveryAt >= 250) {
       lastDiscoveryAt = nowMs
-      const bound = options.sessionBindingPath
+      const binding = options.sessionBindingPath
         ? readSessionBinding(options.sessionBindingPath)
         : null
+      codexPid = binding?.codexPid ?? codexPid
+      const bound = binding?.rolloutPath ?? null
       const discovered = bound
         ? { path: bound }
         : findActiveSession({
@@ -170,7 +173,8 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
       }
     }
     const rollout = parser.parse()
-    const state = buildHudState(options.cwd, rollout, startedAt, loaded.config, new Date())
+    const codexProcess = codexPid ? { pid: codexPid, launchedAt: options.launchedAfter ?? startedAt } : null
+    const state = buildHudState(options.cwd, rollout, startedAt, loaded.config, new Date(), codexProcess)
     latestTurns = state.conversationTurns
     const width = process.stdout.columns || Number(process.env.COLUMNS) || loaded.config.maxWidth || 120
     const height = viewportRenderHeight(options.maxHeight, process.stdout.rows)

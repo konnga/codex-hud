@@ -75,6 +75,7 @@ Codex HUD 是面向 OpenAI Codex CLI 的常驻终端 HUD，集中展示上下文
 - Node.js 20 或更高版本
 - OpenAI Codex CLI，并确保官方 `codex` 命令可以正常运行
 - cmux 0.64 或更高版本，或者作为兼容 backend 的 tmux
+- `sqlite3`（可选，需在 `PATH` 中）：用于读取 session 标题，以及解析会话实际连接的 endpoint
 - 从源码构建时需要 pnpm 10
 
 常见系统可以这样安装 tmux：
@@ -371,26 +372,26 @@ codex-hud configure --enable tools,skills,agents --disable memory --yes
 
 选择面板按 Project、Usage、Activity、Environment 和 Session 分类。可用于 `--enable` / `--disable` 的字段名称如下：
 
-| 名称            | 显示内容                                                      |
-| --------------- | ------------------------------------------------------------- |
-| `git`           | Git 分支和工作区状态                                          |
-| `usage`         | 额度窗口、reset 时间和 credits                                |
-| `promptCache`   | Prompt Cache 倒计时                                           |
-| `tools`         | 工具调用活动                                                  |
-| `skills`        | Skills 活动                                                   |
-| `mcp`           | MCP server 活动                                               |
-| `agents`        | 子 Agent 状态                                                 |
-| `todos`         | 计划与任务进度                                                |
-| `goal`          | 持久 Goal                                                     |
-| `turns`         | 会话轮次数量与导航提示                                        |
-| `configCounts`  | 配置、规则、Skill 和 MCP 数量                                 |
-| `auth`          | 认证方式（ChatGPT 套餐，或 API key 场景下的 provider 主机名） |
-| `memory`        | 近似系统内存                                                  |
-| `duration`      | 会话持续时间                                                  |
-| `speed`         | 上一次回复的输出速度                                          |
-| `sessionName`   | 显式命名的会话标题                                            |
-| `sessionTokens` | 会话累计 Token                                                |
-| `compactions`   | Context 压缩次数                                              |
+| 名称            | 显示内容                                                                      |
+| --------------- | ----------------------------------------------------------------------------- |
+| `git`           | Git 分支和工作区状态                                                          |
+| `usage`         | 额度窗口、reset 时间和 credits                                                |
+| `promptCache`   | Prompt Cache 倒计时                                                           |
+| `tools`         | 工具调用活动                                                                  |
+| `skills`        | Skills 活动                                                                   |
+| `mcp`           | MCP server 活动                                                               |
+| `agents`        | 子 Agent 状态                                                                 |
+| `todos`         | 计划与任务进度                                                                |
+| `goal`          | 持久 Goal                                                                     |
+| `turns`         | 会话轮次数量与导航提示                                                        |
+| `configCounts`  | 配置、规则、Skill 和 MCP 数量                                                 |
+| `auth`          | 认证方式（ChatGPT 套餐，或 API key 场景下当前会话实际连接的 endpoint 主机名） |
+| `memory`        | 近似系统内存                                                                  |
+| `duration`      | 会话持续时间                                                                  |
+| `speed`         | 上一次回复的输出速度                                                          |
+| `sessionName`   | 显式命名的会话标题                                                            |
+| `sessionTokens` | 会话累计 Token                                                                |
+| `compactions`   | Context 压缩次数                                                              |
 
 示例：
 
@@ -428,7 +429,7 @@ Codex HUD 使用 cmux 0.64 的方向式 pane resize API（`--pane`、`-U` / `-D`
 
 ## 诊断
 
-检查 Codex、tmux、配置、插件和当前 session：
+检查 Codex、tmux、配置、插件、当前 session，以及该 session 实际连接的 endpoint 及其来源：
 
 ```bash
 codex-hud doctor

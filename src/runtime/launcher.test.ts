@@ -234,10 +234,11 @@ describe('non-interfering launcher', () => {
     process.env.CODEX_HUD_CODEX_BIN = codex
 
     const child = runCodexChild([], null, false, cwd, bindingPath)
-    await waitFor(() => readSessionBinding(bindingPath) !== null)
-    expect(readSessionBinding(bindingPath)).toBe(path.join(sessions, 'rollout-owned.jsonl'))
+    await waitFor(() => readSessionBinding(bindingPath).rolloutPath !== null)
+    expect(readSessionBinding(bindingPath).rolloutPath).toBe(path.join(sessions, 'rollout-owned.jsonl'))
+    expect(readSessionBinding(bindingPath).codexPid).toBeGreaterThan(0)
     expect(await child).toBe(17)
-    expect(readSessionBinding(bindingPath)).toBeNull()
+    expect(readSessionBinding(bindingPath).rolloutPath).toBeNull()
   })
 
   it('returns promptly when Codex exits before creating a rollout', async () => {

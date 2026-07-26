@@ -5,6 +5,7 @@ import path from 'node:path'
 // @env node
 import process from 'node:process'
 import { RolloutParser } from './codex/rollout-parser.js'
+import { findCodexLogDatabase, resolveSessionEndpoint } from './codex/session-endpoint.js'
 import { findActiveSession } from './codex/session-finder.js'
 import { runConfigure } from './commands/configure.js'
 import { runInstall, runUninstall } from './commands/install.js'
@@ -148,6 +149,7 @@ async function main(args = process.argv.slice(2)): Promise<void> {
     const parser = new RolloutParser()
     parser.setFile(session?.path ?? null)
     const parsed = parser.parse()
+    const endpoint = parsed.session ? resolveSessionEndpoint(parsed.session.id) : null
     const pluginManifest = installedPluginManifest()
     const installState = path.join(getHudStateDirectory(), 'install.json')
     const codex = findExecutable('codex')
@@ -177,6 +179,9 @@ async function main(args = process.argv.slice(2)): Promise<void> {
       sessionId: session?.sessionId ?? null,
       sessionParsed: parsed.session?.id === session?.sessionId,
       model: parsed.session?.model ?? null,
+      codexLogDatabase: findCodexLogDatabase(),
+      sessionEndpoint: endpoint?.url ?? null,
+      sessionEndpointSource: endpoint?.source ?? null,
       pluginManifest,
       pluginInstalled: Boolean(pluginManifest),
       managedInstall: fs.existsSync(installState),
@@ -201,6 +206,7 @@ async function main(args = process.argv.slice(2)): Promise<void> {
       console.log(`Session: ${report.activeSession ?? 'not found'}`)
       console.log(`Plugin: ${report.pluginManifest ?? 'not installed'}`)
       console.log(`Session parse: ${report.sessionParsed ? 'ok' : 'not ready'}`)
+      console.log(`Session endpoint: ${report.sessionEndpoint ?? 'unknown'}${report.sessionEndpointSource ? ` (${report.sessionEndpointSource})` : ''}`)
       if (report.shimRecursion)
         console.log('Warning: Codex executable resolves to the Codex HUD CLI itself.')
     }

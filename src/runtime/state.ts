@@ -1,5 +1,6 @@
 // @env node
 import type { ParsedRolloutState } from '../codex/rollout-parser.js'
+import type { CodexProcess } from '../collectors/session-metadata.js'
 import type { HudConfig } from '../types/config.js'
 import type { HudState } from '../types/state.js'
 import process from 'node:process'
@@ -19,6 +20,7 @@ export function buildHudState(
   sessionStart: Date,
   config: HudConfig,
   now = new Date(),
+  codexProcess: CodexProcess | null = null,
 ): HudState {
   const workspaceRoots = rollout.session?.workspaceRoots ?? []
   const usage = resolveUsageData(rollout.usage, config.display, now)
@@ -42,7 +44,7 @@ export function buildHudState(
     conversationTurns: rollout.conversationTurns,
     compactCount: rollout.compactCount,
     memory: config.display.showMemoryUsage ? collectMemoryInfo() : null,
-    auth: config.display.showAuth ? collectAuthInfo(usage?.planType ?? null) : null,
+    auth: config.display.showAuth ? collectAuthInfo(usage?.planType ?? null, session, process.env, codexProcess) : null,
     sessionStart: session?.startTime ?? sessionStart,
   }
 }

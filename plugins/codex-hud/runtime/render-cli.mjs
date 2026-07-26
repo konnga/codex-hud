@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { T as RolloutParser, _ as sliceAnsi, b as findActiveSession, c as desiredPaneHeight, d as resizeHudPane, f as viewportRenderHeight, g as visibleWidth, h as truncateAnsi, l as isExternalCmuxResize, m as safeText, p as renderHud, r as readSessionBinding, s as buildHudState, u as resizeCmuxPane, v as loadConfig } from "./session-binding-N33viEGs.mjs";
+import { D as RolloutParser, _ as sliceAnsi, b as findActiveSession, c as desiredPaneHeight, d as resizeHudPane, f as viewportRenderHeight, g as visibleWidth, h as truncateAnsi, l as isExternalCmuxResize, m as safeText, p as renderHud, r as readSessionBinding, s as buildHudState, u as resizeCmuxPane, v as loadConfig } from "./session-binding-CxXFKrqv.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -247,6 +247,7 @@ async function runRenderCli(args = process.argv.slice(2)) {
 	let cmuxManualHeight = false;
 	let cmuxResizePending = false;
 	let latestTurns = parser.getState().conversationTurns;
+	let codexPid = null;
 	const paneId = process.env.TMUX_PANE ?? null;
 	const configMtime = () => {
 		try {
@@ -266,7 +267,9 @@ async function runRenderCli(args = process.argv.slice(2)) {
 		}
 		if (!options.sessionPath && !currentSessionPath && nowMs - lastDiscoveryAt >= 250) {
 			lastDiscoveryAt = nowMs;
-			const bound = options.sessionBindingPath ? readSessionBinding(options.sessionBindingPath) : null;
+			const binding = options.sessionBindingPath ? readSessionBinding(options.sessionBindingPath) : null;
+			codexPid = binding?.codexPid ?? codexPid;
+			const bound = binding?.rolloutPath ?? null;
 			const discovered = bound ? { path: bound } : findActiveSession({
 				cwd: options.cwd,
 				launchedAfter: options.launchedAfter,
@@ -288,7 +291,11 @@ async function runRenderCli(args = process.argv.slice(2)) {
 			}
 		}
 		const rollout = parser.parse();
-		const state = buildHudState(options.cwd, rollout, startedAt, loaded.config, /* @__PURE__ */ new Date());
+		const codexProcess = codexPid ? {
+			pid: codexPid,
+			launchedAt: options.launchedAfter ?? startedAt
+		} : null;
+		const state = buildHudState(options.cwd, rollout, startedAt, loaded.config, /* @__PURE__ */ new Date(), codexProcess);
 		latestTurns = state.conversationTurns;
 		const width = process.stdout.columns || Number(process.env.COLUMNS) || loaded.config.maxWidth || 120;
 		const height = viewportRenderHeight(options.maxHeight, process.stdout.rows);

@@ -2,8 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { Buffer } from "node:buffer";
-import os from "node:os";
 import { spawnSync } from "node:child_process";
+import os from "node:os";
 import { createHash, randomUUID } from "node:crypto";
 
 //#region src/codex/context-usage.ts
@@ -460,6 +460,185 @@ function getHudStateDirectory(env = process.env) {
 }
 function getLegacyStateDirectory(env = process.env) {
 	return path.join(getCodexHome(env), LEGACY_CONFIG_DIRECTORY_NAME);
+}
+
+//#endregion
+//#region src/codex/session-endpoint.ts
+const SESSION_ID_PATTERN = /^[\w-]{1,128}$/;
+const LOG_DATABASE_PATTERN = /^logs(?:_(\d+))?\.sqlite$/;
+const QUERY_TIMEOUT_MS = 750;
+const ENDPOINT_CACHE_MS = 3e4;
+const NEWEST_FIRST = "ORDER BY ts DESC, id DESC LIMIT 1";
+const endpointCache = /* @__PURE__ */ new Map();
+/**
+* Codex writes its tracing log to `logs_<schema>.sqlite`; pick the newest
+* schema so a Codex upgrade that bumps the suffix keeps working.
+*/
+function findCodexLogDatabase(codexHome = getCodexHome()) {
+	let best = null;
+	let entries;
+	try {
+		entries = fs.readdirSync(codexHome, { withFileTypes: true });
+	} catch {
+		return null;
+	}
+	for (const entry of entries) {
+		const match = LOG_DATABASE_PATTERN.exec(entry.name);
+		if (!match || !entry.isFile()) continue;
+		const version = Number(match[1] ?? 0);
+		if (!best || version > best.version) best = {
+			file: path.join(codexHome, entry.name),
+			version
+		};
+	}
+	return best?.file ?? null;
+}
+function query(database, sql) {
+	const result = spawnSync("sqlite3", [
+		"-readonly",
+		"-noheader",
+		"-batch",
+		database,
+		sql
+	], {
+		encoding: "utf8",
+		stdio: [
+			"ignore",
+			"pipe",
+			"ignore"
+		],
+		timeout: QUERY_TIMEOUT_MS
+	});
+	return typeof result.stdout === "string" ? result.stdout.split("\n") : [];
+}
+function firstUrl(value) {
+	const url = value.trim().split(/[\s"]/)[0];
+	return url.startsWith("http") ? url : null;
+}
+const INIT_ROW = [
+	`SELECT 'init|' || substr(feedback_log_body, instr(feedback_log_body, 'base_url: Some("') + 16, 200)`,
+	`  FROM logs`,
+	` WHERE thread_id IS NULL`,
+	`   AND target = 'codex_core::session::session'`,
+	`   AND instr(feedback_log_body, 'base_url: Some("') > 0`
+].join("\n");
+/** `process_uuid` is `pid:<PID>:<uuid>`, so a PID is a prefix range on it. */
+function processRange(pid) {
+	return `(process_uuid >= 'pid:${pid}:' AND process_uuid < 'pid:${pid};')`;
+}
+/**
+* Codex runs behind an npm wrapper script, so the process that logs is a child
+* of the one the launcher spawned.
+*/
+function processFamily(pid) {
+	const result = spawnSync("pgrep", ["-P", String(pid)], {
+		encoding: "utf8",
+		stdio: [
+			"ignore",
+			"pipe",
+			"ignore"
+		],
+		timeout: QUERY_TIMEOUT_MS
+	});
+	return [pid, ...typeof result.stdout === "string" ? result.stdout.split("\n").map((line) => Number.parseInt(line.trim(), 10)).filter(Number.isInteger) : []];
+}
+/**
+* The endpoint of a Codex process that has not created a session yet. Codex
+* writes no rollout until the first message, so between launch and that message
+* the process is the only thing the HUD can key on.
+*
+* `since` bounds the scan to this launch: the timestamp column is the indexed
+* one, and without a bound the lookup walks every threadless row ever logged.
+*/
+function resolveProcessEndpoint(codexPid, since, env = process.env, now = Date.now()) {
+	if (!Number.isInteger(codexPid) || codexPid <= 0) return null;
+	const codexHome = getCodexHome(env);
+	const cacheKey = `${codexHome}:pid:${codexPid}`;
+	const cached = endpointCache.get(cacheKey);
+	if (cached && now - cached.at < ENDPOINT_CACHE_MS) return cached.value ? { ...cached.value } : null;
+	const database = findCodexLogDatabase(codexHome);
+	const ranges = database ? processFamily(codexPid).map(processRange).join(" OR ") : "";
+	const lines = ranges ? query(database, [
+		INIT_ROW,
+		`   AND ts >= ${Math.floor(since.getTime() / 1e3) - 60}`,
+		`   AND (${ranges})`,
+		` ${NEWEST_FIRST};`
+	].join("\n")) : [];
+	let value = null;
+	for (const line of lines) {
+		const url = line.startsWith("init|") ? firstUrl(line.slice(5)) : null;
+		if (url) {
+			value = {
+				url,
+				source: "log-init"
+			};
+			break;
+		}
+	}
+	sweep(now);
+	endpointCache.set(cacheKey, {
+		at: now,
+		value
+	});
+	return value ? { ...value } : null;
+}
+function sweep(now) {
+	for (const [key, entry] of endpointCache) if (now - entry.at >= ENDPOINT_CACHE_MS) endpointCache.delete(key);
+}
+/**
+* The session id doubles as the tracing `thread_id`, so Codex's own log is the
+* only record of which endpoint a session really used: `config.toml` may have
+* been rewritten since, and the rollout stores just the provider id.
+*
+* Both queries are index-backed. `AND thread_id IS NULL` on the second one is
+* load-bearing for speed, not only correctness: without it the lookup degrades
+* to a full scan of a multi-hundred-megabyte table on the render path.
+*/
+function resolveSessionEndpoint(sessionId, env = process.env, now = Date.now()) {
+	if (!SESSION_ID_PATTERN.test(sessionId)) return null;
+	const codexHome = getCodexHome(env);
+	const cacheKey = `${codexHome}:${sessionId}`;
+	const cached = endpointCache.get(cacheKey);
+	if (cached && now - cached.at < ENDPOINT_CACHE_MS) return cached.value ? { ...cached.value } : null;
+	const remember = (value) => {
+		sweep(now);
+		endpointCache.set(cacheKey, {
+			at: now,
+			value
+		});
+		return value ? { ...value } : null;
+	};
+	const database = findCodexLogDatabase(codexHome);
+	if (!database) return remember(null);
+	const lines = query(database, [
+		`SELECT 'request|' || substr(feedback_log_body, instr(feedback_log_body, 'url=') + 4, 200)`,
+		`  FROM logs`,
+		` WHERE thread_id = '${sessionId}'`,
+		`   AND target = 'codex_http_client::default_client'`,
+		`   AND instr(feedback_log_body, 'url=') > 0`,
+		` ${NEWEST_FIRST};`,
+		INIT_ROW,
+		`   AND process_uuid = (SELECT process_uuid FROM logs WHERE thread_id = '${sessionId}' ${NEWEST_FIRST})`,
+		`   AND ts <= (SELECT min(ts) FROM logs WHERE thread_id = '${sessionId}')`,
+		` ${NEWEST_FIRST};`
+	].join("\n"));
+	let fallback = null;
+	for (const line of lines) {
+		const separator = line.indexOf("|");
+		if (separator < 0) continue;
+		const tag = line.slice(0, separator);
+		const url = firstUrl(line.slice(separator + 1));
+		if (!url) continue;
+		if (tag === "request") return remember({
+			url,
+			source: "log-request"
+		});
+		if (tag === "init" && !fallback) fallback = {
+			url,
+			source: "log-init"
+		};
+	}
+	return remember(fallback);
 }
 
 //#endregion
@@ -4574,8 +4753,44 @@ function jwtUser(value, depth = 0) {
 	}
 	return null;
 }
-function collectAuthInfo(planType, env = process.env) {
-	const cacheKey = `${getCodexHome(env)}:${planType ?? ""}:${Boolean(env.OPENAI_API_KEY)}`;
+const GENERIC_SUFFIX = /^(?:com|co|net|org|edu|gov|ac|or|ne|gob|mil|int)$/;
+function providerLabel(baseUrl) {
+	let hostname;
+	try {
+		hostname = new URL(baseUrl).hostname;
+	} catch {
+		return null;
+	}
+	const bare = hostname.replace(/^www\./, "").replace(/^\[|\]$/g, "").replace(/\.$/, "");
+	if (!bare) return null;
+	if (/^[\d.]+$/.test(bare) || bare.includes(":")) return bare;
+	const labels = bare.split(".");
+	const index = labels.length - 2;
+	if (index < 0) return bare;
+	return index > 0 && GENERIC_SUFFIX.test(labels[index]) ? labels[index - 1] : labels[index];
+}
+/**
+* The endpoint declared in config.toml is only evidence about a session if the
+* file has not been rewritten since Codex read it at session start. Before a
+* session is bound the HUD has nothing to attribute the file to, so it must not
+* borrow the label: that window is exactly Codex's startup, when a provider the
+* user just switched away from is still the newest thing on disk.
+*/
+function configuredBaseUrl(session, env) {
+	try {
+		const configPath = path.join(getCodexHome(env), "config.toml");
+		if (fs.statSync(configPath).mtimeMs > session.startTime.getTime()) return null;
+		const config = record(parse(fs.readFileSync(configPath, "utf8")));
+		const providerName = session?.modelProvider ?? (typeof config?.model_provider === "string" ? config.model_provider : null);
+		if (!providerName) return null;
+		const provider = record(record(config?.model_providers)?.[providerName]);
+		return typeof provider?.base_url === "string" ? provider.base_url : null;
+	} catch {
+		return null;
+	}
+}
+function collectAuthInfo(planType, session = null, env = process.env, codexProcess = null) {
+	const cacheKey = `${getCodexHome(env)}:${planType ?? ""}:${session?.id ?? codexProcess?.pid ?? ""}:${Boolean(env.OPENAI_API_KEY)}`;
 	const cached = authCache.get(cacheKey);
 	if (cached && Date.now() - cached.at < METADATA_CACHE_MS) return cached.value ? structuredClone(cached.value) : null;
 	const authPath = path.join(getCodexHome(env), "auth.json");
@@ -4601,18 +4816,9 @@ function collectAuthInfo(planType, env = process.env) {
 		return structuredClone(value);
 	}
 	if (hasApiKey) {
-		let providerLabel;
-		try {
-			const configPath = path.join(getCodexHome(env), "config.toml");
-			const config = record(parse(fs.readFileSync(configPath, "utf8")));
-			const providerName = typeof config?.model_provider === "string" ? config.model_provider : null;
-			if (providerName) {
-				const provider = record(record(config?.model_providers)?.[providerName]);
-				const baseUrl = typeof provider?.base_url === "string" ? provider.base_url : null;
-				if (baseUrl) providerLabel = new URL(baseUrl).hostname.replace(/^www\./, "").replace(/\.[^.]+$/, "");
-			}
-		} catch {}
-		const value = { method: providerLabel || "API Key" };
+		const endpoint = session ? resolveSessionEndpoint(session.id, env) : codexProcess && resolveProcessEndpoint(codexProcess.pid, codexProcess.launchedAt, env);
+		const baseUrl = session ? endpoint?.url ?? configuredBaseUrl(session, env) : endpoint?.url ?? null;
+		const value = { method: (baseUrl ? providerLabel(baseUrl) : null) || "API Key" };
 		authCache.set(cacheKey, {
 			at: Date.now(),
 			value
@@ -4681,7 +4887,7 @@ function collectSessionTitle(session, env = process.env) {
 
 //#endregion
 //#region src/runtime/state.ts
-function buildHudState(cwd, rollout, sessionStart, config, now = /* @__PURE__ */ new Date()) {
+function buildHudState(cwd, rollout, sessionStart, config, now = /* @__PURE__ */ new Date(), codexProcess = null) {
 	const workspaceRoots = rollout.session?.workspaceRoots ?? [];
 	const usage = resolveUsageData(rollout.usage, config.display, now);
 	const title = config.display.showSessionName ? collectSessionTitle(rollout.session) : null;
@@ -4705,7 +4911,7 @@ function buildHudState(cwd, rollout, sessionStart, config, now = /* @__PURE__ */
 		conversationTurns: rollout.conversationTurns,
 		compactCount: rollout.compactCount,
 		memory: config.display.showMemoryUsage ? collectMemoryInfo() : null,
-		auth: config.display.showAuth ? collectAuthInfo(usage?.planType ?? null) : null,
+		auth: config.display.showAuth ? collectAuthInfo(usage?.planType ?? null, session, process.env, codexProcess) : null,
 		sessionStart: session?.startTime ?? sessionStart
 	};
 }
@@ -4741,21 +4947,35 @@ function createSessionBindingPath(cwd, env = process.env) {
 	const digest = createHash("sha1").update(normalizedPath(cwd)).digest("hex").slice(0, 12);
 	return path.join(getHudStateDirectory(env), "bindings", `${digest}-${randomUUID()}.json`);
 }
-function writeSessionBinding(bindingPath, rolloutPath) {
+/**
+* Written once right after Codex is spawned so the HUD can identify the process
+* before Codex creates a rollout, then again with the rollout once it appears.
+*/
+function writeSessionBinding(bindingPath, rolloutPath, codexPid) {
 	fs.mkdirSync(path.dirname(bindingPath), {
 		recursive: true,
 		mode: 448
 	});
 	const temporaryPath = `${bindingPath}.${process.pid}.tmp`;
-	fs.writeFileSync(temporaryPath, `${JSON.stringify({ rolloutPath })}\n`, { mode: 384 });
+	const payload = {
+		...rolloutPath ? { rolloutPath } : {},
+		...codexPid ? { codexPid } : {}
+	};
+	fs.writeFileSync(temporaryPath, `${JSON.stringify(payload)}\n`, { mode: 384 });
 	fs.renameSync(temporaryPath, bindingPath);
 }
 function readSessionBinding(bindingPath) {
 	try {
 		const value = JSON.parse(fs.readFileSync(bindingPath, "utf8"));
-		return typeof value.rolloutPath === "string" && fs.existsSync(value.rolloutPath) ? value.rolloutPath : null;
+		return {
+			rolloutPath: typeof value.rolloutPath === "string" && fs.existsSync(value.rolloutPath) ? value.rolloutPath : null,
+			codexPid: typeof value.codexPid === "number" && Number.isInteger(value.codexPid) ? value.codexPid : null
+		};
 	} catch {
-		return null;
+		return {
+			rolloutPath: null,
+			codexPid: null
+		};
 	}
 }
 function lockPath(cwd, env = process.env) {
@@ -4815,5 +5035,5 @@ async function waitForNewRootSession(cwd, snapshot, codexHome = getCodexHome(), 
 }
 
 //#endregion
-export { getHudStateDirectory as C, getConfigPath as S, RolloutParser as T, sliceAnsi as _, waitForNewRootSession as a, findActiveSession as b, desiredPaneHeight as c, resizeHudPane as d, viewportRenderHeight as f, visibleWidth as g, truncateAnsi as h, snapshotRootSessions as i, isExternalCmuxResize as l, safeText as m, createSessionBindingPath as n, writeSessionBinding as o, renderHud as p, readSessionBinding as r, buildHudState as s, acquireSessionDiscoveryLock as t, resizeCmuxPane as u, loadConfig as v, getLegacyStateDirectory as w, getCodexHome as x, DEFAULT_CONFIG as y };
-//# sourceMappingURL=session-binding-N33viEGs.mjs.map
+export { getCodexHome as C, RolloutParser as D, getLegacyStateDirectory as E, resolveSessionEndpoint as S, getHudStateDirectory as T, sliceAnsi as _, waitForNewRootSession as a, findActiveSession as b, desiredPaneHeight as c, resizeHudPane as d, viewportRenderHeight as f, visibleWidth as g, truncateAnsi as h, snapshotRootSessions as i, isExternalCmuxResize as l, safeText as m, createSessionBindingPath as n, writeSessionBinding as o, renderHud as p, readSessionBinding as r, buildHudState as s, acquireSessionDiscoveryLock as t, resizeCmuxPane as u, loadConfig as v, getConfigPath as w, findCodexLogDatabase as x, DEFAULT_CONFIG as y };
+//# sourceMappingURL=session-binding-CxXFKrqv.mjs.map
