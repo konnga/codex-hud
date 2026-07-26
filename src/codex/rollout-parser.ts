@@ -349,6 +349,18 @@ export class RolloutParser {
   }
 
   private onEvent(payload: EventMessagePayload, timestamp: Date): void {
+    // Codex reports MCP calls as their own event carrying the server name,
+    // rather than encoding it in the tool name the way Claude Code does.
+    if (payload.type === 'mcp_tool_call_end' || payload.type === 'mcp_tool_call_begin') {
+      const invocation = payload.invocation
+      const server = invocation && typeof invocation === 'object' && !Array.isArray(invocation)
+        ? (invocation as Record<string, unknown>).server
+        : null
+      if (typeof server === 'string' && server.trim()) {
+        this.state.mcpServers = Array.from(new Set([...this.state.mcpServers, server.trim()]))
+      }
+      return
+    }
     if (payload.type === 'user_message' && typeof payload.message === 'string') {
       const userMessage = payload.message.trim()
       if (userMessage) {

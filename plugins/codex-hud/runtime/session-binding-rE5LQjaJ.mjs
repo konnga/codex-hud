@@ -351,6 +351,12 @@ var RolloutParser = class {
 		if (payload.type === "message" && payload.role === "assistant" && this.state.session) this.state.session.lastResponseAt = timestamp;
 	}
 	onEvent(payload, timestamp) {
+		if (payload.type === "mcp_tool_call_end" || payload.type === "mcp_tool_call_begin") {
+			const invocation = payload.invocation;
+			const server = invocation && typeof invocation === "object" && !Array.isArray(invocation) ? invocation.server : null;
+			if (typeof server === "string" && server.trim()) this.state.mcpServers = Array.from(/* @__PURE__ */ new Set([...this.state.mcpServers, server.trim()]));
+			return;
+		}
 		if (payload.type === "user_message" && typeof payload.message === "string") {
 			const userMessage = payload.message.trim();
 			if (userMessage) {
@@ -2840,6 +2846,22 @@ function formatTokens(value) {
 	if (absolute >= 1e3) return `${(value / 1e3).toFixed(1).replace(/\.0$/, "")}K`;
 	return String(Math.round(value));
 }
+function formatBytes(value) {
+	const units = [
+		"B",
+		"KB",
+		"MB",
+		"GB",
+		"TB"
+	];
+	let size = Math.max(0, value);
+	let unit = 0;
+	while (size >= 1024 && unit < units.length - 1) {
+		size /= 1024;
+		unit += 1;
+	}
+	return `${size.toFixed(unit > 1 ? 1 : 0).replace(/\.0$/, "")} ${units[unit]}`;
+}
 function formatDuration(milliseconds) {
 	return formatMinuteDuration(milliseconds, "floor");
 }
@@ -3113,7 +3135,7 @@ function renderEnvironmentLine(ctx) {
 function renderMemoryLine(ctx) {
 	if (!ctx.config.display.showMemoryUsage || !ctx.state.memory) return null;
 	const memory = ctx.state.memory;
-	return `${message(ctx.config.language, "memory")} ${progressBar(memory.usedPercent, 6, ctx.config.colors.barFilled, ctx.config.colors.barEmpty)} ${memory.usedPercent}% (${formatTokens(memory.usedBytes / 1024 / 1024)}MiB)`;
+	return `${message(ctx.config.language, "memory")} ${progressBar(memory.usedPercent, 6, ctx.config.colors.barFilled, ctx.config.colors.barEmpty)} ${memory.usedPercent}% (${formatBytes(memory.usedBytes)}/${formatBytes(memory.totalBytes)})`;
 }
 
 //#endregion
@@ -3416,6 +3438,22 @@ function renderHud(ctx) {
 //#region src/runtime/pane-size.ts
 const INITIAL_HUD_PANE_HEIGHT = 5;
 const CMUX_RESIZE_POINTS_PER_ROW = 20;
+const CMUX_MANUAL_RESIZE_TOLERANCE_ROWS = 1.5;
+const defaultCmuxRunner = (args) => {
+	const result = spawnSync("cmux", args, {
+		encoding: "utf8",
+		stdio: [
+			"ignore",
+			"pipe",
+			"ignore"
+		],
+		timeout: 1500
+	});
+	return {
+		status: result.status,
+		stdout: typeof result.stdout === "string" ? result.stdout : void 0
+	};
+};
 function viewportRenderHeight(maximum, rows) {
 	const safeMaximum = Math.max(1, Math.round(maximum));
 	if (!rows || !Number.isFinite(rows)) return safeMaximum;
@@ -3424,11 +3462,7 @@ function viewportRenderHeight(maximum, rows) {
 function desiredPaneHeight(lineCount, maximum, minimum = 5) {
 	return Math.min(Math.max(minimum, Math.round(maximum)), Math.max(minimum, Math.round(lineCount)));
 }
-function isExternalCmuxResize(currentRows, managedHeight) {
-	if (managedHeight === null || !currentRows || !Number.isFinite(currentRows)) return false;
-	return Math.floor(currentRows) !== managedHeight;
-}
-function resizeHudPane(paneId, desiredHeight, previousHeight, runner = (args) => spawnSync("tmux", args, { stdio: "ignore" })) {
+function resizeHudPane(paneId, desiredHeight, previousHeight, runner = (args) => ({ status: spawnSync("tmux", args, { stdio: "ignore" }).status })) {
 	if (!paneId) return null;
 	if (previousHeight === desiredHeight) return previousHeight;
 	return runner([
@@ -3439,13 +3473,61 @@ function resizeHudPane(paneId, desiredHeight, previousHeight, runner = (args) =>
 		String(desiredHeight)
 	]).status === 0 ? desiredHeight : previousHeight;
 }
-function resizeCmuxPane(paneId, sourcePaneId, workspaceId, desiredHeight, currentRows, previousHeight, runner = (args) => spawnSync("cmux", args, { stdio: "ignore" })) {
-	if (!paneId || !sourcePaneId || !workspaceId || !currentRows || !Number.isFinite(currentRows)) return null;
-	if (previousHeight === desiredHeight) return previousHeight;
-	const delta = Math.round(desiredHeight) - Math.floor(currentRows);
-	if (delta === 0) return desiredHeight;
+function readCmuxPaneGeometry(workspaceId, paneId, runner = defaultCmuxRunner) {
+	if (!workspaceId || !paneId) return null;
+	const result = runner([
+		"--json",
+		"--id-format",
+		"both",
+		"list-panes",
+		"--workspace",
+		workspaceId
+	]);
+	if (result.status !== 0 || !result.stdout) return null;
+	try {
+		const payload = JSON.parse(result.stdout);
+		const containerHeightPoints = Number(payload.container_frame?.height);
+		const pane = Array.isArray(payload.panes) ? payload.panes.find((entry) => entry?.id === paneId) : void 0;
+		const rows = Number(pane?.rows);
+		const heightPoints = Number(pane?.pixel_frame?.height);
+		if (!pane || !Number.isFinite(rows) || rows <= 0 || !Number.isFinite(heightPoints) || heightPoints <= 0 || !Number.isFinite(containerHeightPoints) || containerHeightPoints <= 0) return null;
+		return {
+			rows,
+			heightPoints,
+			containerHeightPoints,
+			pointsPerRow: Math.min(40, Math.max(12, heightPoints / rows))
+		};
+	} catch {
+		return null;
+	}
+}
+function resizeCmuxPane(paneId, sourcePaneId, workspaceId, desiredHeight, currentRows, previousHeight, runner = defaultCmuxRunner) {
+	if (!paneId || !sourcePaneId || !workspaceId) return {
+		height: null,
+		issued: false,
+		fraction: null
+	};
+	if (previousHeight === desiredHeight) return {
+		height: previousHeight,
+		issued: false,
+		fraction: null
+	};
+	const geometry = readCmuxPaneGeometry(workspaceId, paneId, runner);
+	const rows = geometry?.rows ?? (currentRows && Number.isFinite(currentRows) ? Math.floor(currentRows) : null);
+	if (!rows) return {
+		height: null,
+		issued: false,
+		fraction: null
+	};
+	const delta = Math.round(desiredHeight) - rows;
+	if (delta === 0) return {
+		height: desiredHeight,
+		issued: false,
+		fraction: null
+	};
 	const growing = delta > 0;
-	return runner([
+	const amount = Math.max(1, Math.round(Math.abs(delta) * (geometry?.pointsPerRow ?? 20)));
+	if (runner([
 		"resize-pane",
 		"--workspace",
 		workspaceId,
@@ -3453,8 +3535,36 @@ function resizeCmuxPane(paneId, sourcePaneId, workspaceId, desiredHeight, curren
 		growing ? paneId : sourcePaneId,
 		growing ? "-U" : "-D",
 		"--amount",
-		String(Math.abs(delta) * 20)
-	]).status === 0 ? desiredHeight : previousHeight;
+		String(amount)
+	]).status !== 0) return {
+		height: previousHeight,
+		issued: false,
+		fraction: null
+	};
+	const after = readCmuxPaneGeometry(workspaceId, paneId, runner);
+	return {
+		height: desiredHeight,
+		issued: true,
+		fraction: after ? after.heightPoints / after.containerHeightPoints : null
+	};
+}
+function settleCmuxPaneHeight(currentRows, managedHeight, selfFraction, geometry) {
+	if (geometry && selfFraction !== null) {
+		const expectedPoints = selfFraction * geometry.containerHeightPoints;
+		const tolerancePoints = geometry.pointsPerRow * CMUX_MANUAL_RESIZE_TOLERANCE_ROWS;
+		if (Math.abs(geometry.heightPoints - expectedPoints) > tolerancePoints) return {
+			height: managedHeight,
+			manual: true
+		};
+	}
+	if (currentRows && Number.isFinite(currentRows)) return {
+		height: Math.floor(currentRows),
+		manual: false
+	};
+	return {
+		height: managedHeight,
+		manual: false
+	};
 }
 
 //#endregion
@@ -3570,7 +3680,7 @@ function resolveUsageData(nativeUsage, display, now = /* @__PURE__ */ new Date()
 const COMPLETED_VISIBLE_MS = 3e4;
 const STARTING_VISIBLE_MS = 15 * 6e4;
 const CACHE_MS$1 = 1e3;
-let cache$1 = null;
+let cache$2 = null;
 const rolloutCache = /* @__PURE__ */ new Map();
 function safeDate(value, fallback) {
 	if (typeof value === "number" && Number.isFinite(value)) {
@@ -3688,7 +3798,7 @@ function collectAgentEntries(session, env = process.env, now = /* @__PURE__ */ n
 	if (!session) return [];
 	const codexHome = getCodexHome(env);
 	const key = `${codexHome}:${session.id}`;
-	if (cache$1?.key === key && now.getTime() - cache$1.at < CACHE_MS$1) return structuredClone(cache$1.agents);
+	if (cache$2?.key === key && now.getTime() - cache$2.at < CACHE_MS$1) return structuredClone(cache$2.agents);
 	const runtimes = listSessionCandidates(codexHome).filter((candidate) => isSubagentSource(candidate.source) && candidate.parentThreadId).flatMap((candidate) => {
 		const runtime = parseAgent(candidate, now);
 		return runtime ? [runtime] : [];
@@ -3713,7 +3823,7 @@ function collectAgentEntries(session, env = process.env, now = /* @__PURE__ */ n
 			activeDescendantCount
 		};
 	});
-	cache$1 = {
+	cache$2 = {
 		key,
 		at: now.getTime(),
 		agents
@@ -3725,7 +3835,7 @@ function collectAgentEntries(session, env = process.env, now = /* @__PURE__ */ n
 //#region src/collectors/git.ts
 const GIT_TIMEOUT_MS = 1500;
 const CACHE_MS = 2e3;
-const cache = /* @__PURE__ */ new Map();
+const cache$1 = /* @__PURE__ */ new Map();
 function git(cwd, args) {
 	const result = spawnSync("git", args, {
 		cwd,
@@ -3744,11 +3854,11 @@ function findGitRoot(cwd) {
 }
 function collectGitStatus(cwd) {
 	const now = Date.now();
-	const cached = cache.get(cwd);
+	const cached = cache$1.get(cwd);
 	if (cached && now - cached.at < CACHE_MS) return cached.status ? structuredClone(cached.status) : null;
 	const root = findGitRoot(cwd);
 	if (!root) {
-		cache.set(cwd, {
+		cache$1.set(cwd, {
 			at: now,
 			status: null
 		});
@@ -3824,7 +3934,7 @@ function collectGitStatus(cwd) {
 		typeChanged,
 		conflicted
 	};
-	cache.set(cwd, {
+	cache$1.set(cwd, {
 		at: now,
 		status
 	});
@@ -3833,16 +3943,55 @@ function collectGitStatus(cwd) {
 
 //#endregion
 //#region src/collectors/memory.ts
-function collectMemoryInfo() {
+const MEMORY_CACHE_MS = 5e3;
+const RECLAIMABLE_PAGES = [
+	"free",
+	"inactive",
+	"speculative",
+	"purgeable"
+];
+let cache = null;
+/**
+* `os.freemem()` on macOS counts only wholly free pages, so cached and inactive
+* memory reads as used and every Mac reports ~100%. vm_stat exposes the pages
+* the kernel can actually reclaim.
+*/
+function darwinAvailableBytes() {
+	const result = spawnSync("vm_stat", [], {
+		encoding: "utf8",
+		stdio: [
+			"ignore",
+			"pipe",
+			"ignore"
+		],
+		timeout: 500
+	});
+	if (result.status !== 0 || typeof result.stdout !== "string") return null;
+	const pageSize = Number(/page size of (\d+) bytes/.exec(result.stdout)?.[1]);
+	if (!Number.isFinite(pageSize) || pageSize <= 0) return null;
+	let pages = 0;
+	for (const name of RECLAIMABLE_PAGES) {
+		const match = new RegExp(`^Pages ${name}:\\s+(\\d+)`, "im").exec(result.stdout);
+		if (match) pages += Number(match[1]);
+	}
+	return pages > 0 ? pages * pageSize : null;
+}
+function collectMemoryInfo(now = Date.now()) {
+	if (cache && now - cache.at < MEMORY_CACHE_MS) return { ...cache.value };
 	const totalBytes = os.totalmem();
-	const freeBytes = os.freemem();
+	const freeBytes = (process.platform === "darwin" ? darwinAvailableBytes() : null) ?? os.freemem();
 	const usedBytes = Math.max(0, totalBytes - freeBytes);
-	return {
+	const value = {
 		totalBytes,
 		usedBytes,
 		freeBytes,
 		usedPercent: totalBytes > 0 ? Math.round(usedBytes / totalBytes * 100) : 0
 	};
+	cache = {
+		at: now,
+		value
+	};
+	return { ...value };
 }
 
 //#endregion
@@ -5035,5 +5184,5 @@ async function waitForNewRootSession(cwd, snapshot, codexHome = getCodexHome(), 
 }
 
 //#endregion
-export { getCodexHome as C, RolloutParser as D, getLegacyStateDirectory as E, resolveSessionEndpoint as S, getHudStateDirectory as T, sliceAnsi as _, waitForNewRootSession as a, findActiveSession as b, desiredPaneHeight as c, resizeHudPane as d, viewportRenderHeight as f, visibleWidth as g, truncateAnsi as h, snapshotRootSessions as i, isExternalCmuxResize as l, safeText as m, createSessionBindingPath as n, writeSessionBinding as o, renderHud as p, readSessionBinding as r, buildHudState as s, acquireSessionDiscoveryLock as t, resizeCmuxPane as u, loadConfig as v, getConfigPath as w, findCodexLogDatabase as x, DEFAULT_CONFIG as y };
-//# sourceMappingURL=session-binding-CxXFKrqv.mjs.map
+export { resolveSessionEndpoint as C, getLegacyStateDirectory as D, getHudStateDirectory as E, RolloutParser as O, findCodexLogDatabase as S, getConfigPath as T, visibleWidth as _, waitForNewRootSession as a, DEFAULT_CONFIG as b, desiredPaneHeight as c, resizeHudPane as d, settleCmuxPaneHeight as f, truncateAnsi as g, safeText as h, snapshotRootSessions as i, readCmuxPaneGeometry as l, renderHud as m, createSessionBindingPath as n, writeSessionBinding as o, viewportRenderHeight as p, readSessionBinding as r, buildHudState as s, acquireSessionDiscoveryLock as t, resizeCmuxPane as u, sliceAnsi as v, getCodexHome as w, findActiveSession as x, loadConfig as y };
+//# sourceMappingURL=session-binding-rE5LQjaJ.mjs.map

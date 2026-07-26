@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { D as RolloutParser, _ as sliceAnsi, b as findActiveSession, c as desiredPaneHeight, d as resizeHudPane, f as viewportRenderHeight, g as visibleWidth, h as truncateAnsi, l as isExternalCmuxResize, m as safeText, p as renderHud, r as readSessionBinding, s as buildHudState, u as resizeCmuxPane, v as loadConfig } from "./session-binding-CxXFKrqv.mjs";
+import { O as RolloutParser, _ as visibleWidth, c as desiredPaneHeight, d as resizeHudPane, f as settleCmuxPaneHeight, g as truncateAnsi, h as safeText, l as readCmuxPaneGeometry, m as renderHud, p as viewportRenderHeight, r as readSessionBinding, s as buildHudState, u as resizeCmuxPane, v as sliceAnsi, x as findActiveSession, y as loadConfig } from "./session-binding-rE5LQjaJ.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -246,6 +246,7 @@ async function runRenderCli(args = process.argv.slice(2)) {
 	let paneHeight = null;
 	let cmuxManualHeight = false;
 	let cmuxResizePending = false;
+	let cmuxSelfFraction = null;
 	let latestTurns = parser.getState().conversationTurns;
 	let codexPid = null;
 	const paneId = process.env.TMUX_PANE ?? null;
@@ -322,7 +323,11 @@ async function runRenderCli(args = process.argv.slice(2)) {
 		}
 		const desiredHeight = navigator.active ? options.maxHeight : desiredPaneHeight(lines.length, options.maxHeight);
 		if (options.cmuxPaneId) {
-			if (!cmuxManualHeight && !cmuxResizePending) paneHeight = resizeCmuxPane(options.cmuxPaneId, options.cmuxSourcePaneId, options.cmuxWorkspaceId, desiredHeight, process.stdout.rows, paneHeight);
+			if (!cmuxManualHeight && !cmuxResizePending) {
+				const resized = resizeCmuxPane(options.cmuxPaneId, options.cmuxSourcePaneId, options.cmuxWorkspaceId, desiredHeight, process.stdout.rows, paneHeight);
+				paneHeight = resized.height;
+				if (resized.issued) cmuxSelfFraction = resized.fraction;
+			}
 		} else paneHeight = resizeHudPane(paneId, desiredHeight, paneHeight);
 		const viewport = `${width}x${String(process.stdout.rows ?? "")}`;
 		const viewportChanged = viewport !== lastViewport;
@@ -355,7 +360,10 @@ async function runRenderCli(args = process.argv.slice(2)) {
 			if (resizeTimer) clearTimeout(resizeTimer);
 			resizeTimer = setTimeout(() => {
 				cmuxResizePending = false;
-				if (isExternalCmuxResize(process.stdout.rows, paneHeight)) cmuxManualHeight = true;
+				const geometry = readCmuxPaneGeometry(options.cmuxWorkspaceId, options.cmuxPaneId);
+				const settled = settleCmuxPaneHeight(process.stdout.rows, paneHeight, cmuxSelfFraction, geometry);
+				paneHeight = settled.height;
+				if (settled.manual) cmuxManualHeight = true;
 				render();
 			}, 150);
 		}

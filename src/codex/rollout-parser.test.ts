@@ -123,6 +123,25 @@ describe('rollout parser', () => {
     expect(parser.parse().compactCount).toBe(2)
   })
 
+  it('records MCP servers from the event Codex actually writes', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-rollout-'))
+    temporaryDirectories.push(directory)
+    const filePath = path.join(directory, 'rollout.jsonl')
+    fs.copyFileSync(fixturePath, filePath)
+    // Codex names the server in the event; only Claude Code encodes it in the
+    // tool name, which the fixture already covers with mcp__github__.
+    fs.appendFileSync(filePath, [
+      JSON.stringify({ timestamp: '2026-07-16T08:03:00Z', type: 'event_msg', payload: { type: 'mcp_tool_call_end', invocation: { server: 'node_repl', tool: 'js' } } }),
+      JSON.stringify({ timestamp: '2026-07-16T08:03:01Z', type: 'event_msg', payload: { type: 'mcp_tool_call_end', invocation: { server: 'node_repl', tool: 'js' } } }),
+      JSON.stringify({ timestamp: '2026-07-16T08:03:02Z', type: 'event_msg', payload: { type: 'mcp_tool_call_end', invocation: { server: '  ' } } }),
+      JSON.stringify({ timestamp: '2026-07-16T08:03:03Z', type: 'event_msg', payload: { type: 'mcp_tool_call_end' } }),
+      '',
+    ].join('\n'))
+    const parser = new RolloutParser()
+    parser.setFile(filePath)
+    expect(parser.parse().mcpServers).toEqual(['github', 'node_repl'])
+  })
+
   it('suppresses implausible output-speed samples', () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-rollout-'))
     temporaryDirectories.push(directory)
