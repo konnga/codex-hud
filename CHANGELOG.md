@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## 0.3.1 - 2026-07-26
+
 ### Fixed
 
 - The `auth` provider label now reports the endpoint the current session actually connected to, read from Codex's own log database, instead of whatever `config.toml` contains at render time. Editing `base_url` mid-flight no longer relabels panes whose sessions are still talking to the previous endpoint. When neither the log database nor an unmodified `config.toml` can prove the endpoint, the label degrades to `API Key` rather than naming the wrong host.
