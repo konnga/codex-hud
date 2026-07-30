@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { O as RolloutParser, _ as visibleWidth, c as desiredPaneHeight, d as resizeHudPane, f as settleCmuxPaneHeight, g as truncateAnsi, h as safeText, l as readCmuxPaneGeometry, m as renderHud, p as viewportRenderHeight, r as readSessionBinding, s as buildHudState, u as resizeCmuxPane, v as sliceAnsi, x as findActiveSession, y as loadConfig } from "./session-binding-rE5LQjaJ.mjs";
+import { A as RolloutParser, C as findActiveSession, _ as visibleWidth, c as desiredPaneHeight, d as resizeCmuxPane, f as resizeHudPane, g as truncateAnsi, h as safeText, l as hudRenderHeight, m as renderHud, p as settleCmuxPaneHeight, r as readSessionBinding, s as buildHudState, u as readCmuxPaneGeometry, v as sliceAnsi, y as loadConfig } from "./session-binding-at9jgMbt.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -299,7 +299,8 @@ async function runRenderCli(args = process.argv.slice(2)) {
 		const state = buildHudState(options.cwd, rollout, startedAt, loaded.config, /* @__PURE__ */ new Date(), codexProcess);
 		latestTurns = state.conversationTurns;
 		const width = process.stdout.columns || Number(process.env.COLUMNS) || loaded.config.maxWidth || 120;
-		const height = viewportRenderHeight(options.maxHeight, process.stdout.rows);
+		const constrainToViewport = options.once || Boolean(options.cmuxPaneId && (cmuxManualHeight || cmuxResizePending));
+		const height = hudRenderHeight(options.maxHeight, process.stdout.rows, constrainToViewport);
 		const lines = navigator.active ? renderNavigator(latestTurns, navigator, {
 			width,
 			height,

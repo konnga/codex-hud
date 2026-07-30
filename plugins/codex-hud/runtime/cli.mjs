@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { C as resolveSessionEndpoint, D as getLegacyStateDirectory, E as getHudStateDirectory, O as RolloutParser, S as findCodexLogDatabase, T as getConfigPath, a as waitForNewRootSession, b as DEFAULT_CONFIG, i as snapshotRootSessions, m as renderHud, n as createSessionBindingPath, o as writeSessionBinding, s as buildHudState, t as acquireSessionDiscoveryLock, w as getCodexHome, x as findActiveSession, y as loadConfig } from "./session-binding-rE5LQjaJ.mjs";
+import { A as RolloutParser, C as findActiveSession, D as getConfigPath, E as getCodexHome, O as getHudStateDirectory, S as DEFAULT_CONFIG, T as resolveSessionEndpoint, a as waitForNewRootSession, b as applyConfigMigrations, i as snapshotRootSessions, k as getLegacyStateDirectory, m as renderHud, n as createSessionBindingPath, o as writeSessionBinding, s as buildHudState, t as acquireSessionDiscoveryLock, w as findCodexLogDatabase, x as rawConfigVersion, y as loadConfig } from "./session-binding-at9jgMbt.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import process$1, { stdin, stdout } from "node:process";
@@ -1272,12 +1272,15 @@ function createPreset(preset) {
 //#endregion
 //#region src/config/write.ts
 function mergeKnownConfig(raw, config) {
+	const migration = applyConfigMigrations(config, raw);
+	config = migration.config;
 	const rawGit = typeof raw.gitStatus === "object" && raw.gitStatus !== null && !Array.isArray(raw.gitStatus) ? raw.gitStatus : {};
 	const rawDisplay = typeof raw.display === "object" && raw.display !== null && !Array.isArray(raw.display) ? raw.display : {};
 	const rawColors = typeof raw.colors === "object" && raw.colors !== null && !Array.isArray(raw.colors) ? raw.colors : {};
 	return {
 		...raw,
 		...config,
+		configVersion: migration.toVersion,
 		gitStatus: {
 			...rawGit,
 			...config.gitStatus
@@ -1553,6 +1556,28 @@ async function runConfigure(args) {
 }
 
 //#endregion
+//#region src/config/migrate.ts
+function migrateConfig(options = {}) {
+	const env = options.env ?? process$1.env;
+	const loaded = loadConfig(env);
+	const fromVersion = rawConfigVersion(loaded.raw);
+	if (loaded.error || !fs.existsSync(loaded.path) || fromVersion >= 1) return {
+		path: loaded.path,
+		fromVersion,
+		toVersion: Math.max(fromVersion, 1),
+		migrated: false
+	};
+	const migration = applyConfigMigrations(loaded.config, loaded.raw);
+	if (!options.dryRun) writeConfig(migration.config, loaded.raw, env);
+	return {
+		path: loaded.path,
+		fromVersion: migration.fromVersion,
+		toVersion: migration.toVersion,
+		migrated: migration.migrated
+	};
+}
+
+//#endregion
 //#region src/runtime/process.ts
 function findExecutable(name, env = process$1.env, excludedPaths = []) {
 	const explicit = name === "codex" ? env.CODEX_HUD_CODEX_BIN || env.CODEX_HUB_CODEX_BIN : void 0;
@@ -1731,6 +1756,8 @@ function runInstall(args) {
 	const dryRun = args.includes("--dry-run");
 	const installCodexShim = args.includes("--codex-shim");
 	migrateLegacyState(dryRun);
+	const configMigration = migrateConfig({ dryRun });
+	if (configMigration.migrated) output(`${dryRun ? "Would migrate" : "Migrated"} Codex HUD configuration to version ${configMigration.toVersion}.`);
 	const directory = binDirectory();
 	const runtimeSource = runtimeSourceDirectory();
 	const runtimeDirectory = managedRuntimeDirectory();

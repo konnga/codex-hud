@@ -121,8 +121,8 @@ function normalizeRateLimits(raw) {
 	const credits = raw.credits && typeof raw.credits === "object" ? raw.credits : null;
 	const balance = credits && typeof credits.balance === "string" ? credits.balance : null;
 	return {
-		primary: normalizeWindow(raw.primary, "5h"),
-		secondary: normalizeWindow(raw.secondary, "7d"),
+		primary: normalizeWindow(raw.primary, "limit"),
+		secondary: normalizeWindow(raw.secondary, "limit"),
 		individual: normalizeWindow(raw.individual_limit, "spend", true),
 		planType: typeof raw.plan_type === "string" ? raw.plan_type : null,
 		balanceLabel: balance,
@@ -1094,6 +1094,31 @@ function validateConfig(value) {
 }
 
 //#endregion
+//#region src/config/version.ts
+const CURRENT_CONFIG_VERSION = 1;
+function rawConfigVersion(raw) {
+	const value = raw.configVersion;
+	return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : 0;
+}
+function applyConfigMigrations(config, raw) {
+	const fromVersion = rawConfigVersion(raw);
+	if (fromVersion >= 1) return {
+		config,
+		fromVersion,
+		toVersion: fromVersion,
+		migrated: false
+	};
+	const migrated = structuredClone(config);
+	if (fromVersion < 1) migrated.gitStatus.showFileStats = true;
+	return {
+		config: migrated,
+		fromVersion,
+		toVersion: 1,
+		migrated: true
+	};
+}
+
+//#endregion
 //#region src/config/load.ts
 function loadConfig(env = process.env) {
 	const configPath = getConfigPath(env);
@@ -1102,7 +1127,7 @@ function loadConfig(env = process.env) {
 		const parsed = JSON.parse(source);
 		const raw = typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? parsed : {};
 		return {
-			config: validateConfig(raw),
+			config: applyConfigMigrations(validateConfig(raw), raw).config,
 			path: configPath,
 			raw,
 			error: null
@@ -3031,6 +3056,9 @@ function toolName(ctx, value) {
 	const candidate = mcpLeaf.length <= maximum ? mcpLeaf : value;
 	return maximum === 1 ? "…" : `${candidate.slice(0, maximum - 1)}…`;
 }
+function isCompletedGoal(status) {
+	return status === "complete" || status === "completed";
+}
 function renderToolsLine(ctx) {
 	if (!ctx.config.display.showTools || ctx.state.tools.length === 0) return null;
 	const running = ctx.state.tools.filter((tool) => tool.status === "running").slice(-2);
@@ -3074,7 +3102,7 @@ function renderTodosLine(ctx) {
 		if (current) return `${icon("todos")} ${color("▸", "yellow", ctx.options.color)} ${safeText(current.content)} (${completed}/${ctx.state.todos.length})`;
 		if (completed === ctx.state.todos.length) return `${icon("todos")} ${color("✓", "green", ctx.options.color)} ${message(ctx.config.language, "allComplete")} (${completed}/${ctx.state.todos.length})`;
 	}
-	if (ctx.config.display.showGoal && ctx.state.goal?.objective) {
+	if (ctx.config.display.showGoal && ctx.state.goal?.objective && !isCompletedGoal(ctx.state.goal.status)) {
 		const usage = ctx.state.goal.tokenBudget ? ` ${Math.round((ctx.state.goal.tokensUsed ?? 0) / ctx.state.goal.tokenBudget * 100)}%` : "";
 		const prefix = `${color("◆", "yellow", ctx.options.color)} ${message(ctx.config.language, "goal")}: `;
 		const status = ctx.state.goal.status && ctx.state.goal.status !== "active" ? ` [${ctx.state.goal.status}]` : "";
@@ -3279,6 +3307,10 @@ function renderPromptCacheLine(ctx) {
 
 //#endregion
 //#region src/render/session-line.ts
+function cacheUsage(ctx, inputTokens, cachedInputTokens) {
+	const percent = inputTokens > 0 ? ` · ${Math.min(100, Math.max(0, Math.round(cachedInputTokens / inputTokens * 100)))}%` : "";
+	return `${message(ctx.config.language, "cache")} ${formatTokens(cachedInputTokens)}${percent}`;
+}
 function renderSessionLine(ctx) {
 	const session = ctx.state.session;
 	const parts = [];
@@ -3290,7 +3322,10 @@ function renderSessionLine(ctx) {
 	if (ctx.config.display.showSpeed && session?.outputTokensPerSecond !== void 0) parts.push(`${message(ctx.config.language, "output")}: ${session.outputTokensPerSecond.toFixed(1)} tok/s`);
 	if (ctx.config.display.showSessionTokens && ctx.state.sessionTokens) {
 		const usage = ctx.state.sessionTokens;
-		parts.push(`${message(ctx.config.language, "tokens")}: ${formatTokens(usage.totalTokens)} (${message(ctx.config.language, "input")} ${formatTokens(usage.inputTokens)}, ${message(ctx.config.language, "cache")} ${formatTokens(usage.cachedInputTokens)}, ${message(ctx.config.language, "output")} ${formatTokens(usage.outputTokens)})`);
+		const itemSeparator = ctx.config.language === "en" ? ", " : "，";
+		const groupSeparator = ctx.config.language === "en" ? "; " : "；";
+		const input = `${message(ctx.config.language, "input")} ${formatTokens(usage.inputTokens)}${itemSeparator}${cacheUsage(ctx, usage.inputTokens, usage.cachedInputTokens)}`;
+		parts.push(`${message(ctx.config.language, "tokens")}: ${formatTokens(usage.totalTokens)} (${input}${groupSeparator}${message(ctx.config.language, "output")} ${formatTokens(usage.outputTokens)})`);
 	}
 	if (ctx.config.display.showCompactions && ctx.state.compactCount > 0) parts.push(`${message(ctx.config.language, "compactions")}: ${ctx.state.compactCount}`);
 	if (ctx.config.display.showCodexVersion && session?.cliVersion) parts.push(`Codex ${session.cliVersion}`);
@@ -3323,16 +3358,17 @@ function renderUsageLine(ctx) {
 	const usage = ctx.state.usage;
 	if (Math.max(usage.primary?.percent ?? 0, usage.secondary?.percent ?? 0, usage.individual?.percent ?? 0) < ctx.config.display.usageThreshold) return usage.balanceLabel ? color(`${message(ctx.config.language, "usage")} ${usage.balanceLabel}`, ctx.config.colors.usage, ctx.options.color) : null;
 	const secondary = usage.secondary && (!usage.primary || (usage.secondary.percent ?? 0) >= ctx.config.display.sevenDayThreshold) ? usage.secondary : null;
-	const windows = [
+	const renderedWindows = [
 		usage.primary,
 		secondary,
 		usage.individual
 	].flatMap((window) => window ? [renderWindow(ctx, window)] : []).filter((value) => Boolean(value));
-	if (usage.balanceLabel) windows.push(usage.balanceLabel);
-	if (windows.length === 0) return null;
+	const parts = [...renderedWindows];
+	if (usage.balanceLabel) parts.push(usage.balanceLabel);
+	if (parts.length === 0) return null;
 	const maxPercent = Math.max(usage.primary?.percent ?? 0, usage.secondary?.percent ?? 0, usage.individual?.percent ?? 0);
 	const selectedColor = maxPercent >= 100 ? ctx.config.colors.critical : maxPercent >= 80 ? ctx.config.colors.usageWarning : ctx.config.colors.usage;
-	return color(`${message(ctx.config.language, "usage")} ${windows.join(" │ ")}`, selectedColor, ctx.options.color);
+	return color(`${renderedWindows.length === 0 ? `${message(ctx.config.language, "usage")} ` : ""}${parts.join(" │ ")}`, selectedColor, ctx.options.color);
 }
 
 //#endregion
@@ -3458,6 +3494,10 @@ function viewportRenderHeight(maximum, rows) {
 	const safeMaximum = Math.max(1, Math.round(maximum));
 	if (!rows || !Number.isFinite(rows)) return safeMaximum;
 	return Math.min(safeMaximum, Math.max(1, Math.floor(rows)));
+}
+function hudRenderHeight(maximum, rows, constrainToViewport) {
+	const safeMaximum = Math.max(1, Math.round(maximum));
+	return constrainToViewport ? viewportRenderHeight(safeMaximum, rows) : safeMaximum;
 }
 function desiredPaneHeight(lineCount, maximum, minimum = 5) {
 	return Math.min(Math.max(minimum, Math.round(maximum)), Math.max(minimum, Math.round(lineCount)));
@@ -5184,5 +5224,5 @@ async function waitForNewRootSession(cwd, snapshot, codexHome = getCodexHome(), 
 }
 
 //#endregion
-export { resolveSessionEndpoint as C, getLegacyStateDirectory as D, getHudStateDirectory as E, RolloutParser as O, findCodexLogDatabase as S, getConfigPath as T, visibleWidth as _, waitForNewRootSession as a, DEFAULT_CONFIG as b, desiredPaneHeight as c, resizeHudPane as d, settleCmuxPaneHeight as f, truncateAnsi as g, safeText as h, snapshotRootSessions as i, readCmuxPaneGeometry as l, renderHud as m, createSessionBindingPath as n, writeSessionBinding as o, viewportRenderHeight as p, readSessionBinding as r, buildHudState as s, acquireSessionDiscoveryLock as t, resizeCmuxPane as u, sliceAnsi as v, getCodexHome as w, findActiveSession as x, loadConfig as y };
-//# sourceMappingURL=session-binding-rE5LQjaJ.mjs.map
+export { RolloutParser as A, findActiveSession as C, getConfigPath as D, getCodexHome as E, getHudStateDirectory as O, DEFAULT_CONFIG as S, resolveSessionEndpoint as T, visibleWidth as _, waitForNewRootSession as a, applyConfigMigrations as b, desiredPaneHeight as c, resizeCmuxPane as d, resizeHudPane as f, truncateAnsi as g, safeText as h, snapshotRootSessions as i, getLegacyStateDirectory as k, hudRenderHeight as l, renderHud as m, createSessionBindingPath as n, writeSessionBinding as o, settleCmuxPaneHeight as p, readSessionBinding as r, buildHudState as s, acquireSessionDiscoveryLock as t, readCmuxPaneGeometry as u, sliceAnsi as v, findCodexLogDatabase as w, rawConfigVersion as x, loadConfig as y };
+//# sourceMappingURL=session-binding-at9jgMbt.mjs.map
