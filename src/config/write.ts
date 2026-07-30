@@ -4,8 +4,11 @@ import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 import { getConfigPath } from './paths.js'
+import { applyConfigMigrations } from './version.js'
 
 function mergeKnownConfig(raw: Record<string, unknown>, config: HudConfig): Record<string, unknown> {
+  const migration = applyConfigMigrations(config, raw)
+  config = migration.config
   const rawGit = typeof raw.gitStatus === 'object' && raw.gitStatus !== null && !Array.isArray(raw.gitStatus)
     ? raw.gitStatus as Record<string, unknown>
     : {}
@@ -19,6 +22,7 @@ function mergeKnownConfig(raw: Record<string, unknown>, config: HudConfig): Reco
   return {
     ...raw,
     ...config,
+    configVersion: migration.toVersion,
     gitStatus: { ...rawGit, ...config.gitStatus },
     display: { ...rawDisplay, ...config.display },
     colors: { ...rawColors, ...config.colors },

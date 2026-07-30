@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import process from 'node:process'
 import { getConfigPath } from './paths.js'
 import { validateConfig } from './validate.js'
+import { applyConfigMigrations } from './version.js'
 
 export interface LoadedConfig {
   config: HudConfig
@@ -20,8 +21,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
     const raw = typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
       ? parsed as Record<string, unknown>
       : {}
+    const migration = applyConfigMigrations(validateConfig(raw), raw)
     return {
-      config: validateConfig(raw),
+      config: migration.config,
       path: configPath,
       raw,
       error: null,

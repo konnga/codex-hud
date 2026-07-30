@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { runConfigure } from '../commands/configure.js'
 import { DEFAULT_CONFIG } from '../types/config.js'
 import { loadConfig } from './load.js'
+import { CURRENT_CONFIG_VERSION, migrateConfig } from './migrate.js'
 import { createPreset } from './presets.js'
 import { validateConfig } from './validate.js'
 import { writeConfig } from './write.js'
@@ -110,6 +111,15 @@ describe('configuration persistence', () => {
     expect(parsed.futureFeature).toEqual({ enabled: true })
     expect(parsed.display.futureToggle).toBe('keep-me')
     expect(parsed.display.showTools).toBe(true)
+    expect(parsed.configVersion).toBe(CURRENT_CONFIG_VERSION)
+  })
+
+  it('preserves configuration versions newer than this runtime', () => {
+    const { env, configPath } = temporaryConfigEnv()
+    writeConfig(createPreset('essential'), { configVersion: 99 }, env)
+
+    const parsed = JSON.parse(fs.readFileSync(configPath, 'utf8'))
+    expect(parsed.configVersion).toBe(99)
   })
 
   it('preserves validated advanced overrides during preset configuration', async () => {
@@ -209,6 +219,53 @@ describe('configuration persistence', () => {
     expect(report.enabled).toContain('tools')
     expect(report.disabled).toContain('memory')
     expect(fs.statSync(configPath).mtimeMs).toBe(before)
+  })
+})
+
+describe('configuration migrations', () => {
+  it('enables git file stats once for an unversioned legacy config', () => {
+    const { env, configPath } = temporaryConfigEnv()
+    fs.writeFileSync(configPath, JSON.stringify({
+      language: 'zh-Hans',
+      futureFeature: { enabled: true },
+      gitStatus: { showFileStats: false },
+    }))
+
+    expect(loadConfig(env).config.gitStatus.showFileStats).toBe(true)
+    expect(migrateConfig({ env })).toMatchObject({ migrated: true, fromVersion: 0 })
+    const migrated = JSON.parse(fs.readFileSync(configPath, 'utf8'))
+    expect(migrated.configVersion).toBe(CURRENT_CONFIG_VERSION)
+    expect(migrated.gitStatus.showFileStats).toBe(true)
+    expect(migrated.futureFeature).toEqual({ enabled: true })
+
+    migrated.gitStatus.showFileStats = false
+    fs.writeFileSync(configPath, JSON.stringify(migrated))
+    expect(migrateConfig({ env })).toMatchObject({ migrated: false, fromVersion: CURRENT_CONFIG_VERSION })
+    expect(JSON.parse(fs.readFileSync(configPath, 'utf8')).gitStatus.showFileStats).toBe(false)
+  })
+
+  it('does not rewrite malformed or future-version config files', () => {
+    const malformed = temporaryConfigEnv()
+    fs.writeFileSync(malformed.configPath, '{not-json', 'utf8')
+    expect(migrateConfig({ env: malformed.env }).migrated).toBe(false)
+    expect(fs.readFileSync(malformed.configPath, 'utf8')).toBe('{not-json')
+
+    const future = temporaryConfigEnv()
+    fs.writeFileSync(future.configPath, JSON.stringify({
+      configVersion: 99,
+      gitStatus: { showFileStats: false },
+    }))
+    expect(migrateConfig({ env: future.env })).toMatchObject({ migrated: false, fromVersion: 99 })
+    expect(JSON.parse(fs.readFileSync(future.configPath, 'utf8')).gitStatus.showFileStats).toBe(false)
+  })
+
+  it('reports a dry-run migration without changing the config file', () => {
+    const { env, configPath } = temporaryConfigEnv()
+    const source = JSON.stringify({ gitStatus: { showFileStats: false } })
+    fs.writeFileSync(configPath, source)
+
+    expect(migrateConfig({ env, dryRun: true })).toMatchObject({ migrated: true, fromVersion: 0 })
+    expect(fs.readFileSync(configPath, 'utf8')).toBe(source)
   })
 })
 

@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
+import { migrateConfig } from '../config/migrate.js'
 import { getHudStateDirectory, getLegacyStateDirectory } from '../config/paths.js'
 import { findExecutable, shellQuote } from '../runtime/process.js'
 
@@ -172,6 +173,10 @@ export function runInstall(args: string[]): number {
   const dryRun = args.includes('--dry-run')
   const installCodexShim = args.includes('--codex-shim')
   migrateLegacyState(dryRun)
+  const configMigration = migrateConfig({ dryRun })
+  if (configMigration.migrated) {
+    output(`${dryRun ? 'Would migrate' : 'Migrated'} Codex HUD configuration to version ${configMigration.toVersion}.`)
+  }
   const directory = binDirectory()
   const runtimeSource = runtimeSourceDirectory()
   const runtimeDirectory = managedRuntimeDirectory()

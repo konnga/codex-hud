@@ -84,6 +84,22 @@ describe('managed installer', () => {
     expect(fs.existsSync(path.join(stableRuntime, 'obsolete.mjs'))).toBe(false)
   })
 
+  it('migrates legacy display defaults while upgrading the managed runtime', () => {
+    environment()
+    const configPath = path.join(process.env.CODEX_HOME!, 'codex-hud', 'config.json')
+    fs.mkdirSync(path.dirname(configPath), { recursive: true })
+    fs.writeFileSync(configPath, JSON.stringify({
+      language: 'zh-Hans',
+      gitStatus: { showFileStats: false },
+    }))
+
+    expect(runInstall([])).toBe(0)
+
+    const migrated = JSON.parse(fs.readFileSync(configPath, 'utf8'))
+    expect(migrated.configVersion).toBe(1)
+    expect(migrated.gitStatus.showFileStats).toBe(true)
+  })
+
   it('keeps configuration when uninstalling the managed runtime', () => {
     environment()
     runInstall(['--codex-shim'])
