@@ -2,6 +2,30 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Existing unversioned configurations now enable per-status Git file counts during managed runtime upgrades, matching the 0.3 default. The one-time migration is versioned so later user changes remain respected.
+- HUD startup now measures complete content before fitting the initial five-row pane, so rows beyond the startup viewport are no longer hidden until a manual resize. Explicit cmux manual heights remain viewport-constrained.
+- Completed durable goals now leave the HUD instead of permanently occupying a row with a `[completed]` label; active, paused, and blocked goals remain visible.
+
+### Changed
+
+- Cumulative session tokens now group cached input with total input and show its percentage, making clear that cached tokens are a subset rather than an additional token category.
+- Weekly usage windows now start directly with their `1w` label instead of a redundant `Usage` prefix. Missing window durations use a neutral `limit` label rather than assuming the discontinued five-hour limit; balance-only output keeps the prefix for context.
+
+---
+
+### 修复
+
+- 升级受管 runtime 时，现有未带版本号的配置会开启 Git 分状态文件计数，与 0.3 的默认行为保持一致。迁移只执行一次并记录配置版本，之后仍会尊重用户的手动设置。
+- HUD 启动时会先测量完整内容再调整初始五行 pane，超出启动 viewport 的内容不再需要手动拉高后才能显示；cmux 用户手动设置的高度仍按实际 viewport 裁剪。
+- 持久 Goal 完成后会从 HUD 中移除，不再以 `[completed]` 状态长期占用一行；active、paused 和 blocked 状态仍会显示。
+
+### 变更
+
+- 会话累计 Token 现在将缓存输入与总输入归为一组并显示占比，明确缓存 Token 是输入的子集，而不是额外相加的独立类别。
+- 周额度窗口现在直接从 `1w` 标签开始，不再重复显示 `额度` 前缀。窗口时长缺失时改用中性的 `limit` 标签，不再假设已经取消的 5 小时限制；仅显示余额时仍保留前缀以说明含义。
+
 ## 0.3.2 - 2026-07-26
 
 ### Fixed

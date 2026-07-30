@@ -10,7 +10,7 @@ With the Full preset and active session telemetry, the HUD expands to show ident
 
 ```text
 [gpt-5.5 high] │ codex-hud +shared git:(main* ↑1) M2 A1 ?1 │ ChatGPT pro (builder)
-Context ██████░░░░ 59% │ Usage 5h: ███░░░░░░░ 25% (resets in 1h 30m) │ 1w: ████████░░ 82% (resets in 4d) │ $12.50
+Context ██████░░░░ 59% │ 1w: ████████░░ 82% (resets in 4d) │ $12.50
 Cache TTL ⏱️ 5m
 Approval: on-request │ Permissions: workspace-write │ Sandbox: workspace-write
 🛠️ Tools: ◐ exec_command: pnpm test │ ✓ view_image ×1
@@ -19,7 +19,7 @@ Approval: on-request │ Permissions: workspace-write │ Sandbox: workspace-wri
 🤖 ◐ explorer: Inspect protocol (2m)
 📋 ▸ Render HUD (1/3)
 ↕ Turns: 3 · click HUD and press n
-⏱️ 1h │ Tokens: 85k (input 50k, cache 30k, output 5k) │ Compactions: 1
+⏱️ 1h │ Tokens: 55k (in 50k, cache 30k · 60%; out 5k) │ Compactions: 1
 ```
 
 Example terminal view (tmux):
@@ -27,6 +27,8 @@ Example terminal view (tmux):
 ![Codex HUD tmux example](./.github/assets/codex-hud-tmux-example.png)
 
 Rows without available telemetry are omitted automatically. When there is no active plan, the task row can instead show the durable goal.
+
+Codex currently reports a weekly usage limit rather than the former five-hour window. The HUD renders the duration supplied by Codex telemetry and does not assume a `5h` window when that duration is absent.
 
 ### Git status markers
 
@@ -49,7 +51,7 @@ Highlights:
 
 - Model, provider, reasoning effort, project, and Git status
 - Official Codex context-window calculation and token breakdown
-- Primary, secondary, spend-control, reset-time, and credit usage data
+- Weekly, spend-control, reset-time, and credit usage data reported by Codex
 - Live tools, skills, MCP servers, subagents, plan items, and durable goals
 - Compact/expanded layouts, Full/Essential/Minimal presets, and English/Chinese labels
 - Standard Codex plugin skills for setup, selective live configuration, and diagnostics

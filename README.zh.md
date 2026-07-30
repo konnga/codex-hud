@@ -12,7 +12,7 @@ Codex HUD 是面向 OpenAI Codex CLI 的常驻终端 HUD，集中展示上下文
 
 ```text
 [gpt-5.5 high] │ codex-hud +shared git:(main* ↑1) M2 A1 ?1 │ ChatGPT pro (builder)
-上下文 ██████░░░░ 59% │ 额度 5h: ███░░░░░░░ 25% (重置于 1h 30m) │ 1w: ████████░░ 82% (重置于 4d) │ $12.50
+上下文 ██████░░░░ 59% │ 1w: ████████░░ 82% (重置于 4d) │ $12.50
 缓存有效期 ⏱️ 5m
 审批: on-request │ 权限: workspace-write │ 沙箱: workspace-write
 🛠️ 工具: ◐ exec_command: pnpm test │ ✓ view_image ×1
@@ -21,7 +21,7 @@ Codex HUD 是面向 OpenAI Codex CLI 的常驻终端 HUD，集中展示上下文
 🤖 ◐ explorer: 检查协议 (2m)
 📋 ▸ 渲染 HUD (1/3)
 ↕ 轮次: 3 · 点击 HUD 后按 n 导航
-⏱️ 1h │ Token: 85k (输入 50k, 缓存 30k, 输出 5k) │ 压缩: 1
+⏱️ 1h │ Token: 55k (输入 50k，缓存 30k · 60%；输出 5k) │ 压缩: 1
 ```
 
 实际终端效果（tmux）：
@@ -29,6 +29,8 @@ Codex HUD 是面向 OpenAI Codex CLI 的常驻终端 HUD，集中展示上下文
 ![Codex HUD tmux 示例](./.github/assets/codex-hud-tmux-example.png)
 
 没有可用遥测数据的行会自动隐藏；没有活动计划时，任务行会改为展示持久 Goal。
+
+Codex 当前提供周额度限制，不再提供原来的 5 小时窗口。HUD 按 Codex 遥测上报的实际窗口时长渲染；缺少窗口时长时不会自行假设为 `5h`。
 
 ### Git 状态标记
 
@@ -51,7 +53,7 @@ Codex HUD 是面向 OpenAI Codex CLI 的常驻终端 HUD，集中展示上下文
 
 - 模型、provider、reasoning effort、项目路径和 Git 状态
 - Context 进度条、剩余百分比、当前/累计 token、缓存 token、压缩次数
-- 5 小时、周额度、spend control、reset 时间和 credits balance
+- Codex 上报的周额度、spend control、reset 时间和 credits balance
 - 实时工具调用、Skills、MCP server、子 Agent、计划与持久 Goal
 - approval、sandbox、collaboration mode、Codex 版本、session ID 和耗时
 - compact/expanded 布局、Full/Essential/Minimal 预设
