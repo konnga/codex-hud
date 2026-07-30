@@ -75,8 +75,8 @@ export function normalizeRateLimits(raw: RawRateLimits | null | undefined): Usag
   const credits = raw.credits && typeof raw.credits === 'object' ? raw.credits : null
   const balance = credits && typeof credits.balance === 'string' ? credits.balance : null
   return {
-    primary: normalizeWindow(raw.primary, '5h'),
-    secondary: normalizeWindow(raw.secondary, '7d'),
+    primary: normalizeWindow(raw.primary, 'limit'),
+    secondary: normalizeWindow(raw.secondary, 'limit'),
     individual: normalizeWindow(raw.individual_limit, 'spend', true),
     planType: typeof raw.plan_type === 'string' ? raw.plan_type : null,
     balanceLabel: balance,

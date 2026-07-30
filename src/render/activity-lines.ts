@@ -18,6 +18,10 @@ function toolName(ctx: RenderContext, value: string): string {
   return maximum === 1 ? '…' : `${candidate.slice(0, maximum - 1)}…`
 }
 
+function isCompletedGoal(status: string | undefined): boolean {
+  return status === 'complete' || status === 'completed'
+}
+
 export function renderToolsLine(ctx: RenderContext): string | null {
   if (!ctx.config.display.showTools || ctx.state.tools.length === 0) {
     return null
@@ -86,7 +90,11 @@ export function renderTodosLine(ctx: RenderContext): string | null {
       return `${icon('todos')} ${color('✓', 'green', ctx.options.color)} ${message(ctx.config.language, 'allComplete')} (${completed}/${ctx.state.todos.length})`
     }
   }
-  if (ctx.config.display.showGoal && ctx.state.goal?.objective) {
+  if (
+    ctx.config.display.showGoal
+    && ctx.state.goal?.objective
+    && !isCompletedGoal(ctx.state.goal.status)
+  ) {
     const usage = ctx.state.goal.tokenBudget
       ? ` ${Math.round(((ctx.state.goal.tokensUsed ?? 0) / ctx.state.goal.tokenBudget) * 100)}%`
       : ''

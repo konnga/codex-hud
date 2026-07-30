@@ -129,6 +129,29 @@ describe('hud renderer', () => {
     expect(lines.join('\n')).not.toContain('Memory')
     expect(lines.join('\n')).not.toContain('configs')
     expect(lines.join('\n')).not.toContain('Started')
+    expect(lines.join('\n')).toContain('Context ██████░░░░ 59% │ 5h:')
+    expect(lines.join('\n')).not.toContain('Usage 5h:')
+    expect(lines.join('\n')).toContain('Tokens: 55K (in 50K, cache 30K · 60%; out 5K)')
+  })
+
+  it('keeps the usage label when only a balance is available', () => {
+    const value = state()
+    value.usage = {
+      primary: null,
+      secondary: null,
+      individual: null,
+      planType: 'pro',
+      balanceLabel: '$12.50',
+      limitReachedType: null,
+    }
+    const lines = renderHud({
+      config: createPreset('full'),
+      state: value,
+      options: { width: 180, height: 20, color: false },
+      now,
+    })
+
+    expect(lines.join('\n')).toContain('Context ██████░░░░ 59% │ Usage $12.50')
   })
 
   it('keeps long goals compact at screenshot width', () => {
@@ -147,6 +170,29 @@ describe('hud renderer', () => {
     expect(goal).toContain('…')
   })
 
+  it('removes completed goals while keeping resumable goal states visible', () => {
+    const config = createPreset('full')
+    const value = state()
+    value.todos = []
+    value.goal = { objective: 'Finish the HUD', status: 'active' }
+    const active = renderHud({ config, state: value, options: { width: 100, height: 20, color: false }, now })
+
+    value.goal = { objective: 'Finish the HUD', status: 'paused' }
+    const paused = renderHud({ config, state: value, options: { width: 100, height: 20, color: false }, now })
+
+    value.goal = { objective: 'Finish the HUD', status: 'completed' }
+    const completed = renderHud({ config, state: value, options: { width: 100, height: 20, color: false }, now })
+
+    value.goal = { objective: 'Finish the HUD', status: 'complete' }
+    const complete = renderHud({ config, state: value, options: { width: 100, height: 20, color: false }, now })
+
+    expect(active.join('\n')).toContain('Goal: Finish the HUD')
+    expect(paused.join('\n')).toContain('Goal: Finish the HUD [paused]')
+    expect(completed.join('\n')).not.toContain('Goal:')
+    expect(complete.join('\n')).not.toContain('Goal:')
+    expect(completed).toHaveLength(active.length - 1)
+  })
+
   it('renders a compact one-line identity with activity below it', () => {
     const config = createPreset('minimal')
     config.display.showTools = true
@@ -160,6 +206,40 @@ describe('hud renderer', () => {
     expect(lines[0]).toContain('[gpt-5.5]')
     expect(lines[0]).toContain('Context')
     expect(lines[1]).toContain('Tools:')
+  })
+
+  it('omits the cache percentage when cumulative input is zero', () => {
+    const value = state()
+    value.sessionTokens = {
+      inputTokens: 0,
+      outputTokens: 5_000,
+      reasoningOutputTokens: 0,
+      cachedInputTokens: 0,
+      cacheWriteInputTokens: 0,
+      totalTokens: 5_000,
+    }
+    const lines = renderHud({
+      config: createPreset('full'),
+      state: value,
+      options: { width: 180, height: 20, color: false },
+      now,
+    })
+
+    expect(lines.join('\n')).toContain('Tokens: 5K (in 0, cache 0; out 5K)')
+    expect(lines.join('\n')).not.toContain('NaN%')
+  })
+
+  it('renders nested cache usage in Chinese', () => {
+    const config = createPreset('full')
+    config.language = 'zh-Hans'
+    const lines = renderHud({
+      config,
+      state: state(),
+      options: { width: 180, height: 20, color: false },
+      now,
+    })
+
+    expect(lines.join('\n')).toContain('Token: 55K (输入 50K，缓存 30K · 60%；输出 5K)')
   })
 
   it('clips lines to terminal width', () => {

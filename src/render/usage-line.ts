@@ -40,13 +40,14 @@ export function renderUsageLine(ctx: RenderContext): string | null {
   const secondary = usage.secondary && (!usage.primary || (usage.secondary.percent ?? 0) >= ctx.config.display.sevenDayThreshold)
     ? usage.secondary
     : null
-  const windows = [usage.primary, secondary, usage.individual]
+  const renderedWindows = [usage.primary, secondary, usage.individual]
     .flatMap(window => window ? [renderWindow(ctx, window)] : [])
     .filter((value): value is string => Boolean(value))
+  const parts = [...renderedWindows]
   if (usage.balanceLabel) {
-    windows.push(usage.balanceLabel)
+    parts.push(usage.balanceLabel)
   }
-  if (windows.length === 0) {
+  if (parts.length === 0) {
     return null
   }
   const maxPercent = Math.max(
@@ -57,5 +58,6 @@ export function renderUsageLine(ctx: RenderContext): string | null {
   const selectedColor = maxPercent >= 100
     ? ctx.config.colors.critical
     : maxPercent >= 80 ? ctx.config.colors.usageWarning : ctx.config.colors.usage
-  return color(`${message(ctx.config.language, 'usage')} ${windows.join(' │ ')}`, selectedColor, ctx.options.color)
+  const prefix = renderedWindows.length === 0 ? `${message(ctx.config.language, 'usage')} ` : ''
+  return color(`${prefix}${parts.join(' │ ')}`, selectedColor, ctx.options.color)
 }

@@ -2,6 +2,13 @@ import type { RenderContext } from '../types/render.js'
 import { formatDuration, formatTokens } from './format.js'
 import { message } from './i18n.js'
 
+function cacheUsage(ctx: RenderContext, inputTokens: number, cachedInputTokens: number): string {
+  const percent = inputTokens > 0
+    ? ` · ${Math.min(100, Math.max(0, Math.round((cachedInputTokens / inputTokens) * 100)))}%`
+    : ''
+  return `${message(ctx.config.language, 'cache')} ${formatTokens(cachedInputTokens)}${percent}`
+}
+
 export function renderSessionLine(ctx: RenderContext): string | null {
   const session = ctx.state.session
   const parts: string[] = []
@@ -17,7 +24,10 @@ export function renderSessionLine(ctx: RenderContext): string | null {
   }
   if (ctx.config.display.showSessionTokens && ctx.state.sessionTokens) {
     const usage = ctx.state.sessionTokens
-    parts.push(`${message(ctx.config.language, 'tokens')}: ${formatTokens(usage.totalTokens)} (${message(ctx.config.language, 'input')} ${formatTokens(usage.inputTokens)}, ${message(ctx.config.language, 'cache')} ${formatTokens(usage.cachedInputTokens)}, ${message(ctx.config.language, 'output')} ${formatTokens(usage.outputTokens)})`)
+    const itemSeparator = ctx.config.language === 'en' ? ', ' : '，'
+    const groupSeparator = ctx.config.language === 'en' ? '; ' : '；'
+    const input = `${message(ctx.config.language, 'input')} ${formatTokens(usage.inputTokens)}${itemSeparator}${cacheUsage(ctx, usage.inputTokens, usage.cachedInputTokens)}`
+    parts.push(`${message(ctx.config.language, 'tokens')}: ${formatTokens(usage.totalTokens)} (${input}${groupSeparator}${message(ctx.config.language, 'output')} ${formatTokens(usage.outputTokens)})`)
   }
   if (ctx.config.display.showCompactions && ctx.state.compactCount > 0) {
     parts.push(`${message(ctx.config.language, 'compactions')}: ${ctx.state.compactCount}`)
