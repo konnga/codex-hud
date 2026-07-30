@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   DEFAULT_HUD_MAX_HEIGHT,
   desiredPaneHeight,
+  hudRenderHeight,
   INITIAL_HUD_PANE_HEIGHT,
   readCmuxPaneGeometry,
   resizeCmuxPane,
@@ -55,6 +56,12 @@ describe('adaptive HUD pane sizing', () => {
     expect(viewportRenderHeight(12, 20)).toBe(12)
     expect(viewportRenderHeight(12, undefined)).toBe(12)
     expect(viewportRenderHeight(12, 0)).toBe(12)
+  })
+
+  it('measures complete content before growing an automatically managed startup pane', () => {
+    expect(hudRenderHeight(30, INITIAL_HUD_PANE_HEIGHT, false)).toBe(30)
+    expect(desiredPaneHeight(7, hudRenderHeight(30, INITIAL_HUD_PANE_HEIGHT, false))).toBe(7)
+    expect(hudRenderHeight(30, INITIAL_HUD_PANE_HEIGHT, true)).toBe(5)
   })
 
   it('resizes only a tmux HUD pane and suppresses unchanged requests', () => {

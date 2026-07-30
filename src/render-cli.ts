@@ -20,12 +20,12 @@ import { watchConfigPath } from './runtime/config-watch.js'
 import {
   DEFAULT_HUD_MAX_HEIGHT,
   desiredPaneHeight,
+  hudRenderHeight,
   INITIAL_HUD_PANE_HEIGHT,
   readCmuxPaneGeometry,
   resizeCmuxPane,
   resizeHudPane,
   settleCmuxPaneHeight,
-  viewportRenderHeight,
 } from './runtime/pane-size.js'
 import { readSessionBinding } from './runtime/session-binding.js'
 import { buildHudState } from './runtime/state.js'
@@ -179,7 +179,9 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
     const state = buildHudState(options.cwd, rollout, startedAt, loaded.config, new Date(), codexProcess)
     latestTurns = state.conversationTurns
     const width = process.stdout.columns || Number(process.env.COLUMNS) || loaded.config.maxWidth || 120
-    const height = viewportRenderHeight(options.maxHeight, process.stdout.rows)
+    const constrainToViewport = options.once
+      || Boolean(options.cmuxPaneId && (cmuxManualHeight || cmuxResizePending))
+    const height = hudRenderHeight(options.maxHeight, process.stdout.rows, constrainToViewport)
     const lines = navigator.active
       ? renderNavigator(latestTurns, navigator, {
           width,

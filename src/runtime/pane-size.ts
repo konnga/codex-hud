@@ -43,6 +43,15 @@ export function viewportRenderHeight(maximum: number, rows: number | null | unde
   return Math.min(safeMaximum, Math.max(1, Math.floor(rows)))
 }
 
+export function hudRenderHeight(
+  maximum: number,
+  rows: number | null | undefined,
+  constrainToViewport: boolean,
+): number {
+  const safeMaximum = Math.max(1, Math.round(maximum))
+  return constrainToViewport ? viewportRenderHeight(safeMaximum, rows) : safeMaximum
+}
+
 export function desiredPaneHeight(lineCount: number, maximum: number, minimum = INITIAL_HUD_PANE_HEIGHT): number {
   const safeMaximum = Math.max(minimum, Math.round(maximum))
   return Math.min(safeMaximum, Math.max(minimum, Math.round(lineCount)))
