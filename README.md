@@ -10,7 +10,7 @@ With the Full preset, available session telemetry expands into model and project
 
 ```text
 [gpt-5.5 high] │ codex-hud git:(main* ↑1) M2 A1 ?1 │ ChatGPT pro
-Context ██████░░░░ 59% │ 1w: ████████░░ 82% (resets in 4d)
+Context ██████░░░░ 59% │ 5h: ███░░░░░░░ 25% (resets in 1h 30m) │ 1w: ████████░░ 82% (resets in 4d)
 🛠️ Tools: ◐ exec_command: pnpm test │ ✓ view_image ×1
 🤖 ◐ explorer: Inspect protocol (2m)
 📋 ▸ Render HUD (1/3)

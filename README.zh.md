@@ -10,7 +10,7 @@ Full 预设会根据当前会话的可用数据，展示模型与项目、Contex
 
 ```text
 [gpt-5.5 high] │ codex-hud git:(main* ↑1) M2 A1 ?1 │ ChatGPT pro
-上下文 ██████░░░░ 59% │ 1w: ████████░░ 82% (重置于 4d)
+上下文 ██████░░░░ 59% │ 5h: ███░░░░░░░ 25% (重置于 1h 30m) │ 1w: ████████░░ 82% (重置于 4d)
 🛠️ 工具: ◐ exec_command: pnpm test │ ✓ view_image ×1
 🤖 ◐ explorer: 检查协议 (2m)
 📋 ▸ 渲染 HUD (1/3)
