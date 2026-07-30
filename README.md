@@ -2,188 +2,296 @@
 
 > 🌐 English | [中文文档](./README.zh.md)
 
-Codex HUD is a persistent heads-up display for OpenAI Codex CLI. It keeps the official Codex binary unchanged, runs a dedicated terminal pane below the Codex input area, and incrementally reads local rollout JSONL telemetry. In cmux it uses a native split so Codex keeps native scrolling and copying; tmux remains the compatibility backend elsewhere.
+Keep context, quota, Git status, tools, agents, tasks, and session details visible in a persistent pane below Codex. The official Codex binary remains untouched.
 
 ## Full display preview
 
-With the Full preset and active session telemetry, the HUD expands to show identity, context and quota usage, environment policy, live activity, and session timing:
+With the Full preset, available session telemetry expands into model and project identity, context and quota, live activity, environment policy, and session status:
 
 ```text
-[gpt-5.5 high] │ codex-hud +shared git:(main* ↑1) M2 A1 ?1 │ ChatGPT pro (builder)
-Context ██████░░░░ 59% │ 1w: ████████░░ 82% (resets in 4d) │ $12.50
-Cache TTL ⏱️ 5m
-Approval: on-request │ Permissions: workspace-write │ Sandbox: workspace-write
+[gpt-5.5 high] │ codex-hud git:(main* ↑1) M2 A1 ?1 │ ChatGPT pro
+Context ██████░░░░ 59% │ 1w: ████████░░ 82% (resets in 4d)
 🛠️ Tools: ◐ exec_command: pnpm test │ ✓ view_image ×1
-🧩 ✓ Skills (2): openai-docs, plugin-creator
-🔌 ✓ MCPs (1): github
 🤖 ◐ explorer: Inspect protocol (2m)
 📋 ▸ Render HUD (1/3)
-↕ Turns: 3 · click HUD and press n
-⏱️ 1h │ Tokens: 55k (in 50k, cache 30k · 60%; out 5k) │ Compactions: 1
+⏱️ 1h │ Tokens: 55k (in 50k, cache 30k · 60%; out 5k)
 ```
 
-Example terminal view (tmux):
+Actual terminal view:
 
-![Codex HUD tmux example](./.github/assets/codex-hud-tmux-example.png)
+![Codex HUD terminal view](./.github/assets/codex.png)
 
-Rows without available telemetry are omitted automatically. When there is no active plan, the task row can instead show the durable goal.
+## What is Codex HUD?
 
-Codex currently reports a weekly usage limit rather than the former five-hour window. The HUD renders the duration supplied by Codex telemetry and does not assume a `5h` window when that duration is absent.
+Codex HUD is a persistent terminal information panel for OpenAI Codex CLI. It brings context, quota, Git status, tool calls, agents, tasks, and session details together below Codex, so you can understand the active session without leaving your workflow.
 
-### Git status markers
+It does not replace or modify the official Codex binary. Instead, it reads local Codex rollout data and creates a dedicated HUD pane. It uses a native split in cmux and a tmux compatibility backend elsewhere; if no backend works or HUD startup fails, Codex still runs normally with the original arguments.
 
-The `git` segment shows the branch name, a `*` dirty flag, optional ahead/behind arrows (`↑`/`↓`), and, when `showFileStats` is enabled (on by default), per-status file counts. The status letters follow the convention used by IntelliJ IDEA and Sublime Merge:
+Only rows with available telemetry are rendered; unavailable data stays out of the way.
 
-| Marker | Meaning             |
-| ------ | ------------------- |
-| `M`    | Modified            |
-| `A`    | Added (staged)      |
-| `D`    | Deleted             |
-| `R`    | Renamed             |
-| `C`    | Copied              |
-| `T`    | Type changed        |
-| `?`    | Untracked           |
-| `!`    | Conflict (unmerged) |
+| Category | Examples |
+| --- | --- |
+| Model and project | Model, reasoning effort, project path, Git branch, and file status |
+| Context and quota | Context usage, cumulative tokens, cache ratio, weekly limit, reset time, and credits |
+| Live activity | Tool calls, Skills, MCP servers, subagents, plan items, and durable goals |
+| Environment | Approval policy, sandbox, permissions, and collaboration mode |
+| Session | Session title, duration, output speed, compactions, and turn navigation |
 
-For example, `git:(main* ↑1) M2 A1 ?1` means the branch is `main` with uncommitted changes, 1 commit ahead of upstream, 2 modified files, 1 staged addition, and 1 untracked file. Note that `!` (conflict) differs from VSCode, which reuses `U` for untracked files; Codex HUD uses `?` for untracked and reserves `!` for merge conflicts.
+See the audited [feature and telemetry support matrix](./docs/claude-hud-parity.md) for exact data sources and fallback behavior.
 
-Highlights:
+## Quick start
 
-- Model, provider, reasoning effort, project, and Git status
-- Official Codex context-window calculation and token breakdown
-- Weekly, spend-control, reset-time, and credit usage data reported by Codex
-- Live tools, skills, MCP servers, subagents, plan items, and durable goals
-- Compact/expanded layouts, Full/Essential/Minimal presets, and English/Chinese labels
-- Standard Codex plugin skills for setup, selective live configuration, and diagnostics
-- Reversible launchers and an optional managed `codex` shim
-- Prompt-cache countdown, output speed, session title/auth, Git file stats, and external usage snapshots
-- Event-driven refresh and launch-scoped isolation for concurrent sessions in the same directory
-- Content-fitted cmux/tmux pane height with no reserved blank rows
-- Terminal-native conversation navigator for browsing and searching user turns inside the HUD pane
-- Fail-open startup: HUD backend failures fall back to untouched official Codex execution
-- Cached collectors and a bounded renderer heap for lower idle resource usage
+For a new installation, follow steps 1–4. Existing users can jump directly to step 5.
 
-See the audited [feature and telemetry support matrix](./docs/claude-hud-parity.md) for implementation coverage and the exact fallback used when Codex has no equivalent telemetry.
+```text
+prepare cmux/tmux → install the plugin → run setup → restart Codex
+```
 
-## Requirements
+### 1. Prepare the environment
+
+You need:
 
 - Node.js 20 or newer
 - A working official OpenAI Codex CLI installation
-- cmux 0.64 or newer for native scrolling/copying, or tmux as a compatibility backend
-- `sqlite3` on `PATH` (optional) for session titles and for resolving the endpoint a session connected to
-- pnpm 10 when building from source
+- cmux 0.64 or newer, or tmux
 
-Inside cmux, no tmux installation is required. Outside cmux, install tmux with `brew install tmux` on macOS, `sudo apt install tmux` on Debian/Ubuntu, or the equivalent command for your platform. If no usable backend is available, Codex HUD safely runs official Codex without the HUD.
-
-### Windows support
-
-Native Windows shells are not currently supported for the full HUD. PowerShell, Command Prompt, and native Windows Terminal sessions do not provide a supported cmux/tmux backend, and the managed installer currently creates POSIX shell launchers rather than `.cmd` or PowerShell wrappers. Codex still starts safely, but without the HUD.
-
-WSL2 is supported as a Linux environment. Install Node.js, Codex CLI, tmux, and Codex HUD inside the same WSL distribution:
+tmux is not required inside cmux. Other terminals use tmux as the compatibility backend:
 
 ```bash
-sudo apt update
+# macOS
+brew install tmux
+
+# Debian / Ubuntu
 sudo apt install tmux
-tmux -V
 ```
 
-Do not mix a Windows Codex executable with WSL tmux or WSL launchers. Git Bash and MSYS2 are not tested or supported.
+`sqlite3` is optional and enables session titles and per-session endpoint detection.
 
-## Recommended plugin installation
+### 2. Install the Codex HUD plugin
 
-Install the plugin using Codex CLI's marketplace commands:
+Run in a regular terminal:
 
 ```bash
 codex plugin marketplace add konnga/codex-hud
 codex plugin add codex-hud@codex-hud
 ```
 
-`konnga/codex-hud` is GitHub shorthand for `https://github.com/konnga/codex-hud.git`. The first command fetches and registers the marketplace snapshot; it does not install the plugin. The second command installs plugin `codex-hud` from marketplace `codex-hud`.
+### 3. Run first-time setup
 
-Verify discovery with:
-
-```bash
-codex plugin marketplace list --json
-codex plugin list --marketplace codex-hud --available --json
-```
-
-Start a new Codex session and run:
+Start a new Codex session, then enter:
 
 ```text
 $codex-hud:setup
 ```
 
-You can also open `/skills` and select the Codex HUD setup Skill. Setup installs the managed launchers, starts first-time configuration from Full, and guides you through the visible fields. Then restart Codex:
+You can also open `/skills` and select the Codex HUD setup Skill. It installs the managed launchers and opens a visible-field selector with a live preview.
 
-> **The current Codex session will not gain a HUD immediately.** Setup installs launchers and writes configuration, but it cannot inject a cmux/tmux pane into an already-running Codex TUI. Exit the current session and start a new `codex` or `codex-hud` process.
+> Setup cannot inject a HUD into the Codex TUI that is already running. This is a terminal-pane limitation, not an installation failure.
+
+### 4. Restart Codex
+
+Exit the current session after setup, then run in a regular terminal:
 
 ```bash
 hash -r
 codex
 ```
 
-`hash -r` only refreshes command-path caching in the shell; it does not reload an active Codex process. cmux users do not need tmux; other terminals need tmux for the compatibility backend.
-
-In short: add the marketplace, install the plugin, run the setup Skill, and restart Codex.
-
-> Installation reads the committed GitHub default branch, not an uncommitted local worktree. Maintainers must push `.agents/plugins/marketplace.json`, `plugins/codex-hud/`, and the built plugin runtime before users can install a new release.
-
-To migrate from the former `personal` marketplace name:
+Installation is complete when the new session opens with a HUD pane below Codex. To verify the environment, run:
 
 ```bash
-codex plugin remove codex-hud@personal
-codex plugin marketplace remove personal
-codex plugin marketplace add konnga/codex-hud
-codex plugin add codex-hud@codex-hud
+codex-hud doctor
 ```
 
-### Plugin Skills
+### 5. Update
 
-The plugin provides three Skills, available by typing their names or selecting them from `/skills`:
+Tell Codex directly:
 
-- `$codex-hud:setup` installs or upgrades the managed launchers and starts initial display configuration.
-- `$codex-hud:configure` opens the visible-element selector and preserves advanced overrides.
-- `$codex-hud:doctor` checks the launcher, backend, configuration, plugin, and active session.
-
-The underlying `codex-hud configure` CLI provides the same interactive selector plus deterministic `--enable` and `--disable` updates.
-
-The HUD language defaults to English and does not automatically follow the README language or the system locale. Set it explicitly during setup, or change it later with `codex-hud configure`:
-
-```bash
-codex-hud setup --language zh-Hans  # Simplified Chinese
-codex-hud setup --language zh-Hant  # Traditional Chinese
+```text
+Update Codex HUD to the latest version, preserve my existing configuration, and run doctor when finished.
 ```
 
-### Update to a new version
+The AI can refresh the marketplace, reinstall the plugin, update the managed runtime, and verify the installation. The update does not delete `${CODEX_HOME:-~/.codex}/codex-hud/config.json`.
 
-Run the following commands in a regular terminal. Codex currently provides `marketplace upgrade` but no separate `plugin upgrade` command. Use `marketplace upgrade` for an already registered marketplace; `marketplace add` is for first-time registration.
+> The current session cannot load newly installed Skills or gain the updated HUD pane. Exit and restart Codex after the update finishes.
+
+<details>
+<summary><strong>Manual update commands</strong></summary>
+
+Codex currently has no separate plugin upgrade command, so refresh the marketplace and reinstall the plugin:
 
 ```bash
 codex plugin marketplace upgrade codex-hud
-codex plugin list --marketplace codex-hud --available --json
 codex plugin remove codex-hud@codex-hud
 codex plugin add codex-hud@codex-hud
 ```
 
-If Codex reports that marketplace `codex-hud` was already added from a different source, or the refreshed marketplace still exposes no available plugin, rebuild the marketplace registration with the canonical Git URL. Remove the installed plugin first if `codex plugin list --json` still lists it.
+Then start Codex, run `$codex-hud:setup`, and restart Codex once more.
+
+If the marketplace source conflicts or no plugin appears after refreshing, rebuild the registration:
 
 ```bash
-# Run this first only when the plugin is currently installed:
 codex plugin remove codex-hud@codex-hud
 codex plugin marketplace remove codex-hud
 codex plugin marketplace add https://github.com/konnga/codex-hud.git
 codex plugin add codex-hud@codex-hud
 ```
 
-Exit the current Codex session, start `codex` again, and run:
+Removing the plugin or marketplace does not delete the existing HUD configuration.
 
-```text
-$codex-hud:setup
+</details>
+
+## Everyday commands
+
+| Where | Command or key | Purpose |
+| --- | --- | --- |
+| Inside Codex | `$codex-hud:configure` | Choose visible fields with a live preview |
+| Inside Codex | `$codex-hud:doctor` | Check the launcher, backend, configuration, and active session |
+| HUD pane | `n` | Open the conversation navigator |
+| Terminal | `codex` | Start interactive Codex with the HUD |
+| Terminal | `codex --no-hud` | Temporarily bypass the HUD and run official Codex directly |
+| Terminal | `codex-hud render --once --cwd "$PWD" --no-color` | Print one plain-text HUD frame |
+
+Non-interactive commands such as `codex exec`, `plugin`, `login`, `mcp`, `completion`, `--help`, and `--version` pass directly to the official Codex executable.
+
+## Configure the display
+
+Open the interactive selector at any time:
+
+```bash
+codex-hud configure
 ```
 
-After setup completes, exit and start Codex once more so the refreshed launcher creates the HUD from the new runtime. Removing the plugin or marketplace does not delete `${CODEX_HOME:-~/.codex}/codex-hud/config.json`; existing settings are preserved unless a preset is explicitly selected. If the shell still resolves an older launcher, run `hash -r` before starting Codex.
+Or apply a preset directly:
 
-## Install from source
+| Preset | Best for |
+| --- | --- |
+| `full` | First-time use and complete day-to-day information |
+| `essential` | Project, context, quota, and primary activity only |
+| `minimal` | A small information set for narrow terminals |
+
+```bash
+codex-hud configure --preset full --yes
+codex-hud configure --preset essential --yes
+codex-hud configure --preset minimal --yes
+```
+
+Enable or disable exact fields:
+
+```bash
+codex-hud configure --enable tools,skills,agents --disable memory,speed --yes
+codex-hud configure --status --json
+```
+
+The HUD defaults to English and does not automatically follow the README or system language:
+
+```bash
+codex-hud configure --language zh-Hans
+codex-hud configure --language zh-Hant
+```
+
+Configuration is stored at `${CODEX_HOME:-~/.codex}/codex-hud/config.json`. Sessions that already have a HUD pane reload saved changes automatically. A Codex process started without the Codex HUD launcher still needs to be restarted.
+
+<details>
+<summary><strong>All configurable fields and environment variables</strong></summary>
+
+Names accepted by `--enable` and `--disable`:
+
+| Name | Content |
+| --- | --- |
+| `git` | Git branch and working-tree status |
+| `usage` | Usage windows, reset times, and credits |
+| `promptCache` | Prompt-cache countdown |
+| `tools` / `skills` / `mcp` | Tool, Skill, and MCP activity |
+| `agents` | Subagent status |
+| `todos` / `goal` | Plans, tasks, and durable goals |
+| `turns` | Conversation count and navigator hint |
+| `configCounts` | Config, rule, Skill, and MCP counts |
+| `auth` | ChatGPT plan or the actual endpoint host for the current session |
+| `memory` | Approximate system memory |
+| `duration` / `speed` | Session duration and output speed |
+| `sessionName` / `sessionTokens` | Session title and cumulative tokens |
+| `compactions` | Context compaction count |
+
+Common environment variables:
+
+| Variable | Purpose |
+| --- | --- |
+| `CODEX_HOME` | Codex data and configuration directory |
+| `CODEX_HUD_CONFIG` | Override the HUD configuration path |
+| `CODEX_HUD_CODEX_BIN` | Point to the real Codex executable |
+| `CODEX_HUD_BIN_DIR` | Launcher directory, default `~/.local/bin` |
+| `CODEX_HUD_HEIGHT` | Maximum HUD pane height, default 30 |
+| `NO_COLOR` | Disable ANSI colors |
+
+</details>
+
+<details>
+<summary><strong>Git status markers</strong></summary>
+
+For example, `git:(main* ↑1) M2 A1 ?1` means branch `main` has uncommitted changes, is one commit ahead of upstream, and contains two modified files, one staged addition, and one untracked file.
+
+| Marker | Meaning |
+| --- | --- |
+| `M` | Modified |
+| `A` | Added (staged) |
+| `D` | Deleted |
+| `R` | Renamed |
+| `C` | Copied |
+| `T` | Type changed |
+| `?` | Untracked |
+| `!` | Conflict (unmerged) |
+
+</details>
+
+## Conversation navigator
+
+When the HUD shows a `Turns` row, click the HUD pane and press `n`:
+
+- `j` / `k` or arrow keys: select the previous or next turn
+- `Enter` or right arrow: open the full turn
+- `/`: search user and assistant text
+- Page Up / Page Down: scroll the open turn
+- `Esc`: return to the list, then close
+- `q`: close immediately
+
+The navigator lists real user submissions only; injected environment context and developer instructions are excluded. See [Conversation navigator](./docs/conversation-navigator.md) for its data model, privacy behavior, and limitations.
+
+## System support
+
+| System or environment | Support | Requirements and notes |
+| --- | --- | --- |
+| macOS | Supported | Use cmux 0.64+ or tmux; cmux preserves native scrolling, selection, and copying |
+| Linux | Supported | Requires tmux as the HUD pane backend |
+| WSL2 | Supported | Node.js, Codex, tmux, and Codex HUD must be installed in the same Linux distribution |
+| Native Windows | Full HUD unsupported | PowerShell, Command Prompt, and native Windows Terminal cannot create a supported HUD pane |
+
+Every supported environment requires Node.js 20 or newer and a working official Codex CLI installation. `sqlite3` is optional and enables session titles and actual endpoint detection.
+
+If no usable cmux/tmux environment is available or HUD startup fails, Codex HUD runs official Codex directly. Commands remain available, but no HUD is displayed.
+
+## Troubleshooting
+
+Start with:
+
+```bash
+codex-hud doctor
+codex-hud render --once --cwd "$PWD" --no-color
+```
+
+Common cases:
+
+| Symptom | Fix |
+| --- | --- |
+| Setup succeeded, but the current session has no HUD | Exit Codex, run `hash -r`, and start `codex` again |
+| `tmux: not found` | Install tmux; cmux users do not need it |
+| `Session: not found` | Run Codex and doctor with the same real project directory |
+| The command still resolves to an old launcher | Run `hash -r` or open a new terminal |
+| You want to confirm whether the HUD is involved | Temporarily use `codex --no-hud` |
+
+## Development
+
+Building from source requires pnpm 10:
 
 ```bash
 pnpm install
@@ -193,164 +301,27 @@ hash -r
 codex
 ```
 
-`setup` installs the managed launchers and opens a Full-based visible-element selection panel with a live preview. If `~/.local/bin` is not already available, add it to your shell path:
-
-```bash
-export PATH="$HOME/.local/bin:$PATH"
-```
-
-The managed launchers use a private runtime copy in `${CODEX_HOME:-~/.codex}/codex-hud/runtime`. They do not reference the versioned Codex plugin cache directly, so marketplace upgrades and cache cleanup cannot leave `codex`, `codex-hud`, or `codex-hud-render` pointing at deleted files.
-
-Use `node dist/cli.mjs setup` without `--codex-shim` if you do not want to replace the `codex` command, then start sessions with `codex-hud`. Existing configuration is preserved unless you explicitly select a preset.
-
-The managed shim transparently passes non-interactive commands such as `codex plugin`, `exec`, `login`, `mcp`, `completion`, and `--version` to the official binary; only interactive TUI sessions receive a HUD pane.
-
-The HUD is an optional decoration layer. If the selected backend or HUD startup fails, Codex HUD runs the official Codex binary directly with the same arguments and propagates its exit code. The pane starts at five rows and then fits the rendered content up to the configured maximum height.
-
-## Daily usage
-
-With the optional shim installed, use Codex normally:
-
-```bash
-codex
-codex --model gpt-5.5
-codex -C /path/to/project
-codex resume --last
-```
-
-Without the shim:
-
-```bash
-codex-hud
-codex-hud -- --model gpt-5.5
-codex-hud --backend cmux
-codex-hud --backend tmux
-```
-
-Temporarily bypass the HUD or inspect a single rendered frame:
-
-```bash
-codex --no-hud
-codex-hud render --once --cwd "$PWD" --no-color
-```
-
-### Conversation navigator
-
-When the HUD shows a `Turns` line, click the HUD pane and press `n` to expand it into the conversation navigator. The navigator reads the current Codex rollout and lists only real user submissions; injected environment or developer context is excluded.
-
-- `j` / `k` or arrow keys: move between user turns
-- `Enter` or right arrow: open the selected turn
-- `/`: search user and assistant text
-- `j` / `k`, Page Up, and Page Down: scroll an opened turn
-- `Esc`: return to the turn list, then close the navigator
-- `q`: close the navigator immediately
-
-The navigator header shows the full current Codex session id, so you can correlate the open turns with a specific rollout file.
-
-Closing the navigator restores the compact HUD height and returns focus to the Codex pane. It does not control or reposition Codex's own TUI scrollback.
-
-See [Conversation navigator](./docs/conversation-navigator.md) for the data model, privacy behavior, backend details, and current limitations.
-
-`--detach` is intended mainly for automation and smoke tests; it starts the session in the background without attaching the current terminal.
-
-## Display configuration
-
-Run the interactive selection panel at any time:
-
-```bash
-codex-hud configure
-```
-
-Apply a preset or deterministic changes:
-
-```bash
-codex-hud configure --preset full --yes
-codex-hud configure --status --json
-codex-hud configure --enable tools,skills,agents --disable memory,speed --yes
-```
-
-The Full preset enables cumulative session token totals by default. Existing configurations keep their saved value; enable it explicitly with `codex-hud configure --enable sessionTokens --yes` if needed.
-
-Selectable names:
-
-| Name            | Display content                                                                                                  |
-| --------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `git`           | Git branch and working-tree status                                                                               |
-| `usage`         | Usage windows, reset times, and credits                                                                          |
-| `promptCache`   | Prompt-cache countdown                                                                                           |
-| `tools`         | Tool-call activity                                                                                               |
-| `skills`        | Skill activity                                                                                                   |
-| `mcp`           | MCP server activity                                                                                              |
-| `agents`        | Sub-agent status                                                                                                 |
-| `todos`         | Plan and task progress                                                                                           |
-| `goal`          | Durable goal                                                                                                     |
-| `turns`         | Conversation turn count and navigator hint                                                                       |
-| `configCounts`  | Config, rule, Skill, and MCP counts                                                                              |
-| `auth`          | Authentication method (ChatGPT plan, or for API-key access the endpoint host this session actually connected to) |
-| `memory`        | Approximate system memory                                                                                        |
-| `duration`      | Session duration                                                                                                 |
-| `speed`         | Previous response output speed                                                                                   |
-| `sessionName`   | Explicitly named session title                                                                                   |
-| `sessionTokens` | Cumulative session tokens                                                                                        |
-| `compactions`   | Context compaction count                                                                                         |
-
-Saved changes are reloaded by sessions that already have a HUD pane. Hot reload cannot add a HUD pane to an existing Codex process that was started without the Codex HUD launcher.
-
-Configuration lives at `${CODEX_HOME:-~/.codex}/codex-hud/config.json`.
-
-Backend selection defaults to `auto`: native cmux split when an interactive cmux surface and healthy control socket are available; the user's existing tmux session when already inside tmux; otherwise a private tmux compatibility session. A broken cmux socket falls back to native Codex without a HUD instead of silently wrapping Codex in tmux. Use `--backend cmux|tmux|none` to override the automatic choice.
-
-The cmux backend leaves Codex in the original surface and creates only the HUD as a new unfocused bottom split, preserving native scrollback, selection, and copying. Its initial height fits the rendered content; dragging the divider transfers height control to the user for the rest of that HUD session, so later refreshes do not resize it back. The tmux backend cannot provide identical terminal-native semantics. Inside a user-owned tmux session, Codex HUD does not change that session's tmux options.
-
-Codex HUD uses the cmux 0.64 directional pane-resize API (`--pane`, `-U` / `-D`, and `--amount`). Older Codex HUD builds that still call tmux-style `-t ... -y ...` arguments can fail open with a `Pane has no adjacent border in direction right` message; rebuild or upgrade Codex HUD before starting a new session.
-
-## Diagnostics
-
-```bash
-codex-hud doctor
-codex-hud doctor --json --cwd "$PWD"
-codex-hud render --once --cwd "$PWD" --no-color
-```
-
-Doctor checks the Codex executable, selected backend, configuration, plugin installation, active session discovery, and the endpoint that session resolved to (plus where that answer came from). The one-shot renderer helps distinguish session discovery problems from terminal pane problems.
+The managed runtime is installed at `${CODEX_HOME:-~/.codex}/codex-hud/runtime`, so it does not depend on a plugin cache directory that an upgrade might remove.
 
 ## Uninstall
 
-Preview or remove only the launchers recorded in the managed installation state:
+Remove managed launchers first, then optionally remove the plugin and marketplace:
 
 ```bash
 codex-hud uninstall --dry-run
-codex-hud uninstall
-```
-
-Uninstall removes only launchers recorded in the managed installation state. It does not delete the HUD configuration or official Codex data.
-
-If installed through the Codex plugin marketplace, remove the managed launchers first and then remove the plugin and marketplace:
-
-```bash
 codex-hud uninstall
 codex plugin remove codex-hud@codex-hud
 codex plugin marketplace remove codex-hud
 ```
 
-## Verification
+Uninstall does not delete the HUD configuration, official Codex data, or files that are not managed by Codex HUD.
 
-```bash
-pnpm release:check
-pnpm lint --fix
-pnpm typecheck
-pnpm test
-pnpm build
-node dist/render-cli.mjs --once --cwd "$PWD" --no-color
-node dist/cli.mjs doctor --json
-```
+## Privacy and safety
 
-Maintainers should follow [Versioning and releases](./docs/releasing.md) when preparing a new SemVer, plugin cachebuster, changelog section, and Git tag.
-
-See [README.zh.md](./README.zh.md) for complete Chinese usage and architecture notes. Inside Codex, use `$codex-hud:setup`, `$codex-hud:configure`, or `$codex-hud:doctor`; all three are also available through `/skills`.
-
-Inside cmux, Codex HUD uses the cmux control socket to create, resize, and close only the HUD surface. Outside an existing tmux client, the compatibility backend creates a private per-launch tmux socket and does not load the user's tmux configuration. Inside tmux, it only creates and later removes the HUD pane without changing user-owned options.
-
-## License
+- The HUD reads local Codex rollout data, configuration metadata, and Git status only.
+- The persistent HUD does not display user prompts, model response bodies, or tool output bodies.
+- Conversation content is displayed only after the user explicitly opens the navigator and remains local.
+- All rendered text is stripped of terminal control characters.
+- Codex HUD does not modify the official Codex binary, and `--no-hud` bypasses it at any time.
 
 Codex HUD is released under the [MIT License](./LICENSE). See [NOTICE](./NOTICE) for attribution of adapted work.

@@ -2,85 +2,60 @@
 
 > 🌐 [English](./README.md) | 中文文档
 
-Codex HUD 是面向 OpenAI Codex CLI 的常驻终端 HUD，集中展示上下文、额度、Git 状态、工具活动、Agent、任务与会话信息。
-
-它不修改 Codex 二进制。Codex HUD 在 Codex 输入区下方创建独立 HUD pane，并增量读取 `$CODEX_HOME/sessions/**/rollout-*.jsonl`。在 cmux 中使用原生 split，使 Codex 保留原生滚动与复制；其他终端保留 tmux 兼容 backend。上下文百分比采用 Codex 官方的 12,000 token 基线算法，额度窗口直接使用 Codex 写入的 `used_percent`、`window_minutes` 与 `resets_at`。
+在 Codex 输入区下方常驻显示上下文、额度、Git 状态、工具、Agent、任务和会话信息。无需修改官方 Codex 二进制。
 
 ## 完整展示效果
 
-启用 Full 预设且当前会话存在相应遥测数据时，HUD 会展开显示模型与项目、上下文和额度、运行环境、实时活动及会话状态：
+Full 预设会根据当前会话的可用数据，展示模型与项目、Context 和额度、实时活动、运行环境以及会话状态：
 
 ```text
-[gpt-5.5 high] │ codex-hud +shared git:(main* ↑1) M2 A1 ?1 │ ChatGPT pro (builder)
-上下文 ██████░░░░ 59% │ 1w: ████████░░ 82% (重置于 4d) │ $12.50
-缓存有效期 ⏱️ 5m
-审批: on-request │ 权限: workspace-write │ 沙箱: workspace-write
+[gpt-5.5 high] │ codex-hud git:(main* ↑1) M2 A1 ?1 │ ChatGPT pro
+上下文 ██████░░░░ 59% │ 1w: ████████░░ 82% (重置于 4d)
 🛠️ 工具: ◐ exec_command: pnpm test │ ✓ view_image ×1
-🧩 ✓ 技能 (2): openai-docs, plugin-creator
-🔌 ✓ MCP (1): github
 🤖 ◐ explorer: 检查协议 (2m)
 📋 ▸ 渲染 HUD (1/3)
-↕ 轮次: 3 · 点击 HUD 后按 n 导航
-⏱️ 1h │ Token: 55k (输入 50k，缓存 30k · 60%；输出 5k) │ 压缩: 1
+⏱️ 1h │ Token: 55k (输入 50k，缓存 30k · 60%；输出 5k)
 ```
 
-实际终端效果（tmux）：
+终端效果：
 
-![Codex HUD tmux 示例](./.github/assets/codex-hud-tmux-example.png)
+![Codex HUD 终端效果](./.github/assets/codex.png)
 
-没有可用遥测数据的行会自动隐藏；没有活动计划时，任务行会改为展示持久 Goal。
+## 什么是 Codex HUD？
 
-Codex 当前提供周额度限制，不再提供原来的 5 小时窗口。HUD 按 Codex 遥测上报的实际窗口时长渲染；缺少窗口时长时不会自行假设为 `5h`。
+Codex HUD 是面向 OpenAI Codex CLI 的常驻终端信息面板。它把 Context、额度、Git 状态、工具调用、Agent、任务和会话信息集中显示在 Codex 下方，让你不必离开当前工作流就能了解会话状态。
 
-### Git 状态标记
+它不会替换或修改官方 Codex 二进制，而是读取本地 Codex rollout 数据并创建独立 HUD pane。在 cmux 中使用原生 split，其他终端使用 tmux 兼容 backend；如果 backend 不可用或 HUD 启动失败，Codex 仍会按原参数正常运行。
 
-`git` 段依次显示分支名、`*` 脏标记、可选的 ahead/behind 箭头（`↑`/`↓`），以及在启用 `showFileStats`（默认开启）时的分状态文件计数。状态字母遵循 IntelliJ IDEA 与 Sublime Merge 的约定：
+HUD 只展示当前有数据的行，没有遥测数据的内容会自动隐藏。
 
-| 标记 | 含义           |
-| ---- | -------------- |
-| `M`  | 已修改         |
-| `A`  | 新增（已暂存） |
-| `D`  | 已删除         |
-| `R`  | 重命名         |
-| `C`  | 复制           |
-| `T`  | 类型变更       |
-| `?`  | 未跟踪         |
-| `!`  | 冲突（未合并） |
+| 分类           | 示例                                                              |
+| -------------- | ----------------------------------------------------------------- |
+| 模型与项目     | 模型、reasoning effort、项目路径、Git 分支和文件状态              |
+| Context 与额度 | Context 使用率、累计 Token、缓存占比、周额度、reset 时间、credits |
+| 实时活动       | 工具调用、Skills、MCP server、子 Agent、计划和持久 Goal           |
+| 运行环境       | approval、sandbox、权限和 collaboration mode                      |
+| 会话           | 会话标题、持续时间、输出速度、压缩次数和轮次导航                  |
 
-例如 `git:(main* ↑1) M2 A1 ?1` 表示当前在 `main` 分支且有未提交改动、领先上游 1 个提交、2 个已修改文件、1 个已暂存新增文件、1 个未跟踪文件。注意 `!`（冲突）与 VSCode 不同：VSCode 用 `U` 表示未跟踪，而 Codex HUD 用 `?` 表示未跟踪、`!` 专门表示合并冲突。
+完整遥测来源和支持边界见[功能与遥测支持矩阵](./docs/claude-hud-parity.md)。
 
-## 当前能力
+## 快速开始
 
-- 模型、provider、reasoning effort、项目路径和 Git 状态
-- Context 进度条、剩余百分比、当前/累计 token、缓存 token、压缩次数
-- Codex 上报的周额度、spend control、reset 时间和 credits balance
-- 实时工具调用、Skills、MCP server、子 Agent、计划与持久 Goal
-- approval、sandbox、collaboration mode、Codex 版本、session ID 和耗时
-- compact/expanded 布局、Full/Essential/Minimal 预设
-- 英文、简体中文、繁体中文标签
-- ANSI/256 色/True Color、宽度裁剪、窄终端适配
-- 标准 Codex 插件、setup/configure/doctor 技能
-- 可逆安装、可选 `codex` shim、诊断与卸载
-- prompt-cache 倒计时、输出速度、session title/auth、Git 文件统计
-- 外部额度快照读写、事件驱动刷新和同目录多会话隔离
-- HUD pane 根据实际内容自动收缩/增长，不再保留空白行
-- 终端原生会话历史导航，可直接在 HUD pane 中浏览和搜索用户轮次
-- HUD backend 启动失败时自动降级为原生 Codex，不阻断任何 Codex 命令
-- 项目/认证/Git/Agent 元数据缓存和受限 V8 heap，降低空闲资源占用
+首次安装按第 1–4 项操作；已经安装的用户可以直接跳到第 5 项。
 
-逐项功能与遥测审计见 [支持矩阵](./docs/claude-hud-parity.md)。Codex 没有权威数据源的项目会明确标注，不会用猜测值冒充官方遥测。
+```text
+准备 cmux/tmux → 安装插件 → 运行 setup → 重启 Codex
+```
 
-## 使用前准备
+### 1. 准备运行环境
 
-需要以下环境：
+需要：
 
 - Node.js 20 或更高版本
-- OpenAI Codex CLI，并确保官方 `codex` 命令可以正常运行
-- cmux 0.64 或更高版本，或者作为兼容 backend 的 tmux
-- `sqlite3`（可选，需在 `PATH` 中）：用于读取 session 标题，以及解析会话实际连接的 endpoint
-- 从源码构建时需要 pnpm 10
+- 可以正常运行的官方 OpenAI Codex CLI
+- cmux 0.64 或更高版本，或者 tmux
 
-常见系统可以这样安装 tmux：
+在 cmux 中无需安装 tmux。其他终端需要 tmux 作为兼容 backend：
 
 ```bash
 # macOS
@@ -88,274 +63,112 @@ brew install tmux
 
 # Debian / Ubuntu
 sudo apt install tmux
-
-# Arch Linux
-sudo pacman -S tmux
 ```
 
-在 cmux 中不需要安装 tmux。其他终端使用 tmux 兼容 backend；没有可用 backend 时，Codex HUD 会运行原生 Codex，不会阻断命令，但不会显示 HUD。
+`sqlite3` 是可选依赖，用于读取会话标题和会话实际连接的 endpoint。
 
-### Windows 支持
+### 2. 安装 Codex HUD 插件
 
-原生 Windows shell 目前不能使用完整 HUD。PowerShell、CMD 和原生 Windows Terminal 会话没有受支持的 cmux/tmux backend，而且当前受管安装器生成的是 POSIX shell launcher，不是 `.cmd` 或 PowerShell wrapper。Codex 仍会安全启动，但不会显示 HUD。
-
-WSL2 可以作为 Linux 环境使用。Node.js、Codex CLI、tmux 和 Codex HUD 必须安装在同一个 WSL distribution 中：
-
-```bash
-sudo apt update
-sudo apt install tmux
-tmux -V
-```
-
-不要混用 Windows 版 Codex 与 WSL 中的 tmux 或 launcher。Git Bash 和 MSYS2 尚未测试，也不属于当前支持范围。
-
-## 推荐安装（Codex 插件）
-
-Codex CLI 使用 shell 中的 `codex plugin` 命令管理 marketplace 和插件。
-
-第一步，添加 Codex HUD marketplace：
+在普通终端执行：
 
 ```bash
 codex plugin marketplace add konnga/codex-hud
-```
-
-`konnga/codex-hud` 是 GitHub shorthand，Codex 会从下面的仓库默认分支拉取 marketplace 快照：
-
-```text
-https://github.com/konnga/codex-hud.git
-```
-
-这一步只添加 marketplace，还没有安装插件。
-
-第二步，安装插件：
-
-```bash
 codex plugin add codex-hud@codex-hud
 ```
 
-其中前一个 `codex-hud` 是插件名，`@` 后面的 `codex-hud` 是 `.agents/plugins/marketplace.json` 中声明的 marketplace 名。
+### 3. 运行首次设置
 
-可以使用以下命令确认 marketplace 和插件是否已经被正确识别：
-
-```bash
-codex plugin marketplace list --json
-codex plugin list --marketplace codex-hud --available --json
-```
-
-第三步，打开一个新的 Codex 会话，在会话中输入：
+启动一个新的 Codex 会话，然后输入：
 
 ```text
 $codex-hud:setup
 ```
 
-也可以输入 `/skills`，然后选择 Codex HUD 的 setup Skill。setup 会安装受管启动器，以 Full 为首次配置基线，并引导选择需要显示的字段。
+也可以输入 `/skills`，选择 Codex HUD 的 setup Skill。它会安装受管 launcher，并打开带实时预览的显示项选择器。
 
-> **当前会话不会立即出现 HUD。** setup 只负责安装启动器和写入配置，无法把 cmux/tmux HUD pane 注入已经运行的 Codex TUI。必须退出当前 Codex，并通过新的 `codex` 或 `codex-hud` 进程启动 HUD。
+> setup 无法把 HUD 注入当前已经运行的 Codex TUI。这是终端 pane 的限制，不是安装失败。
 
-setup 完成后退出并重新启动 Codex：
+### 4. 重启 Codex
+
+setup 完成后退出当前会话，在普通终端执行：
 
 ```bash
 hash -r
 codex
 ```
 
-`hash -r` 只刷新当前 shell 缓存的命令路径，不会重新加载正在运行的 Codex 会话。cmux 用户不需要安装 tmux；其他终端可以安装 tmux 兼容 backend：
+新会话下方出现 HUD pane 即表示安装完成。需要检查环境时运行：
 
 ```bash
-brew install tmux
-hash -r
-tmux -V
-codex
+codex-hud doctor
 ```
 
-完整安装流程：
+### 5. 更新版本
+
+在 Codex 中直接输入：
 
 ```text
-添加 marketplace → 安装 plugin → 运行 setup Skill → 重启 Codex
+请帮我把 Codex HUD 更新到最新版，保留现有配置，并在完成后运行 doctor 检查。
 ```
 
-> 安装命令读取的是 GitHub 远端内容，而不是当前机器尚未提交的工作区。维护者必须先提交并推送 `.agents/plugins/marketplace.json`、`plugins/codex-hud/` 和构建后的 runtime，用户才能安装到最新版本。
+AI 会刷新 marketplace、重新安装插件、更新受管 runtime，并检查安装状态。更新不会删除 `${CODEX_HOME:-~/.codex}/codex-hud/config.json`。
 
-如果之前安装过旧的 `personal` marketplace，可以先移除后重新添加：
+> 当前会话无法加载刚安装的新 Skill，也无法立即获得新版 HUD pane。更新完成后仍需退出并重新启动 Codex。
 
-```bash
-codex plugin remove codex-hud@personal
-codex plugin marketplace remove personal
-codex plugin marketplace add konnga/codex-hud
-codex plugin add codex-hud@codex-hud
-```
+<details>
+<summary><strong>手动更新命令</strong></summary>
 
-### 插件 Skills
-
-插件提供三个 Skill，可以直接输入名称，也可以从 `/skills` 中选择：
-
-- `$codex-hud:setup`：安装或升级受管 launcher，并启动首次显示配置。
-- `$codex-hud:configure`：打开显示项选择器，同时保留高级配置覆盖。
-- `$codex-hud:doctor`：检查 launcher、backend、配置、插件和当前 session。
-
-底层 `codex-hud configure` CLI 提供相同的交互式选择器，以及确定性的 `--enable` 和 `--disable` 更新方式。
-
-HUD 默认使用英文，不会根据 README 的语言或系统区域设置自动切换。可以在 setup 时明确指定语言，也可以之后运行 `codex-hud configure` 修改：
-
-```bash
-codex-hud setup --language zh-Hans  # 简体中文
-codex-hud setup --language zh-Hant  # 繁体中文
-```
-
-### 更新版本
-
-以下命令都在普通终端中执行。Codex 当前提供 `marketplace upgrade`，但没有独立的 `plugin upgrade` 命令。已经注册的 marketplace 应使用 `marketplace upgrade`；`marketplace add` 只用于首次添加。
+Codex 目前没有单独的 plugin upgrade 命令，因此需要刷新 marketplace 后重新安装插件：
 
 ```bash
 codex plugin marketplace upgrade codex-hud
-codex plugin list --marketplace codex-hud --available --json
 codex plugin remove codex-hud@codex-hud
 codex plugin add codex-hud@codex-hud
 ```
 
-如果 Codex 提示 marketplace `codex-hud` 已从其他来源添加，或者刷新后仍然没有发现可用插件，请使用规范的 Git URL 重建 marketplace 注册。如果 `codex plugin list --json` 仍显示已经安装的插件，应先将该插件移除。
+随后启动 Codex，运行 `$codex-hud:setup`，完成后再重启一次 Codex。
+
+如果 marketplace 来源冲突或刷新后找不到插件，可以重建注册：
 
 ```bash
-# 仅在插件当前已经安装时先执行：
 codex plugin remove codex-hud@codex-hud
 codex plugin marketplace remove codex-hud
 codex plugin marketplace add https://github.com/konnga/codex-hud.git
 codex plugin add codex-hud@codex-hud
 ```
 
-退出当前 Codex 会话，重新启动 `codex`，然后运行：
+移除插件或 marketplace 不会删除已有 HUD 配置。
 
-```text
-$codex-hud:setup
-```
+</details>
 
-setup 完成后再次退出并启动 Codex，使更新后的 launcher 使用新版 runtime 创建 HUD。移除 plugin 或 marketplace 不会删除 `${CODEX_HOME:-~/.codex}/codex-hud/config.json`；已有配置会保留，除非明确选择新的 preset。如果 shell 仍然解析到旧 launcher，可以在启动 Codex 前运行 `hash -r`。
+## 常用操作
 
-## 从源码安装（开发者）
+| 在哪里   | 命令或按键                                          | 用途                                   |
+| -------- | --------------------------------------------------- | -------------------------------------- |
+| Codex 内 | `$codex-hud:configure`                            | 选择要显示的字段并实时预览             |
+| Codex 内 | `$codex-hud:doctor`                               | 检查 launcher、backend、配置和当前会话 |
+| HUD pane | `n`                                               | 打开会话历史导航器                     |
+| 普通终端 | `codex`                                           | 使用 HUD 启动交互式 Codex              |
+| 普通终端 | `codex --no-hud`                                  | 临时绕过 HUD，直接运行官方 Codex       |
+| 普通终端 | `codex-hud render --once --cwd "$PWD" --no-color` | 查看一次纯文本渲染结果                 |
 
-```bash
-cd codex-hud
-pnpm install
-pnpm build
-node dist/cli.mjs setup --codex-shim --language zh-Hans
-hash -r
-```
-
-`setup` 是推荐入口，它会：
-
-1. 安装受管的 `codex-hud` 与 `codex-hud-render` 启动器。
-2. 使用 `--codex-shim` 时安装透明的 `codex` 启动器。
-3. 首次配置以 Full 为基线打开显示项选择面板。
-4. 显示实时预览并保存到 `${CODEX_HOME:-~/.codex}/codex-hud/config.json`。
-
-受管 launcher 使用 `${CODEX_HOME:-~/.codex}/codex-hud/runtime` 中的私有运行时副本，不会直接引用带版本号的 Codex 插件缓存。因此 marketplace 升级或缓存清理不会让 `codex`、`codex-hud`、`codex-hud-render` 指向已经删除的文件。
-
-如果 `~/.local/bin` 不在 `PATH` 中，将下面一行加入 shell 配置：
-
-```bash
-export PATH="$HOME/.local/bin:$PATH"
-```
-
-之后正常运行：
-
-```bash
-codex
-```
-
-Codex 参数保持原样，例如：
-
-```bash
-codex --model gpt-5.5
-codex -C /path/to/project
-codex resume --last
-```
-
-受管 shim 对 `codex plugin`、`exec`、`login`、`mcp`、`completion`、`--version` 等非互动命令自动直通官方 Codex，只为互动 TUI 会话创建 HUD。
-
-不希望替换 `codex` 命令时，省略 `--codex-shim`，改用：
-
-```bash
-node dist/cli.mjs setup --language zh-Hans
-hash -r
-codex-hud
-codex-hud -- --model gpt-5.5
-```
-
-`setup` 会保留已经存在的配置；只有显式指定 `--preset` 才会重置常用显示项。自动化或非交互安装可以使用：
-
-```bash
-codex-hud setup --codex-shim --preset full --language zh-Hans --yes
-```
-
-只安装启动器而不打开配置流程时，可以使用底层命令：
-
-```bash
-codex-hud install --codex-shim
-```
-
-安装器不会覆盖未被 Codex HUD 管理的文件。
-
-## 日常使用
-
-安装 `codex` shim 后，正常使用 Codex 即可：
-
-```bash
-codex
-codex resume --last
-codex -C /path/to/project
-```
-
-只为互动 TUI 会话创建 HUD。`codex exec`、`plugin`、`login`、`mcp`、`completion`、`--help` 和 `--version` 等命令会直接运行官方 Codex。
-
-临时绕过 HUD：
-
-```bash
-codex --no-hud
-codex-hud --no-hud -- --model gpt-5.5
-```
-
-指定工作目录和 HUD 最大高度：
-
-```bash
-codex-hud --cwd /path/to/project --hud-height 12
-codex-hud --backend cmux
-codex-hud --backend tmux
-```
-
-单次查看当前 HUD 的纯文本渲染：
-
-```bash
-codex-hud render --once --cwd "$PWD" --no-color
-```
-
-### 会话历史导航
-
-HUD 出现“轮次”行后，点击 HUD pane 并按 `n`，HUD 会展开为会话历史导航器。导航器读取当前 Codex rollout，只列出真实的用户提交，不会把注入的环境上下文或 developer 指令当作用户输入。
-
-- `j` / `k` 或方向键：选择上一轮、下一轮用户输入
-- `Enter` 或右方向键：打开选中的完整轮次
-- `/`：搜索用户输入和助手回复
-- `j` / `k`、Page Up、Page Down：滚动已打开的轮次
-- `Esc`：先返回轮次列表，再关闭导航器
-- `q`：立即关闭导航器
-
-导航器标题行会显示当前 Codex 会话的完整 session id，方便把打开的轮次与具体的 rollout 文件对应起来。
-
-关闭后 HUD 会恢复原来的紧凑高度，并把焦点交回 Codex pane。导航器不会控制或改变 Codex 原生 TUI 的滚动位置。
-
-数据来源、隐私边界、backend 行为和当前限制见[会话历史导航文档](./docs/conversation-navigator.md)。
-
-`--detach` 主要用于自动化和烟雾测试，它会在后台启动会话而不附加当前终端。
+`codex exec`、`plugin`、`login`、`mcp`、`completion`、`--help` 和 `--version` 等非交互命令会自动直通官方 Codex。
 
 ## 配置显示内容
 
-默认配置：
+随时打开交互式选择器：
 
-```text
-${CODEX_HOME:-~/.codex}/codex-hud/config.json
+```bash
+codex-hud configure
 ```
 
-快速预设：
+也可以直接应用预设：
+
+| 预设          | 适合场景                            |
+| ------------- | ----------------------------------- |
+| `full`      | 第一次使用，展示日常可用的完整信息  |
+| `essential` | 只保留项目、Context、额度和主要活动 |
+| `minimal`   | 适合窄终端的最小信息集              |
 
 ```bash
 codex-hud configure --preset full --yes
@@ -363,145 +176,152 @@ codex-hud configure --preset essential --yes
 codex-hud configure --preset minimal --yes
 ```
 
-Full 预设现在默认显示会话累计 Token。已有配置会保留之前保存的值；如需单独开启，可以运行 `codex-hud configure --enable sessionTokens --yes`。
-
-首次运行 `codex-hud setup` 会以 Full 为基线打开显示项选择面板并提供实时预览。之后直接运行 `codex-hud configure` 会从当前配置开始编辑。也可以查询或精确更新指定字段：
+精确打开或关闭字段：
 
 ```bash
-codex-hud configure --status --json
-codex-hud configure --enable tools,skills,agents --disable memory --yes
-```
-
-选择面板按 Project、Usage、Activity、Environment 和 Session 分类。可用于 `--enable` / `--disable` 的字段名称如下：
-
-| 名称            | 显示内容                                                                      |
-| --------------- | ----------------------------------------------------------------------------- |
-| `git`           | Git 分支和工作区状态                                                          |
-| `usage`         | 额度窗口、reset 时间和 credits                                                |
-| `promptCache`   | Prompt Cache 倒计时                                                           |
-| `tools`         | 工具调用活动                                                                  |
-| `skills`        | Skills 活动                                                                   |
-| `mcp`           | MCP server 活动                                                               |
-| `agents`        | 子 Agent 状态                                                                 |
-| `todos`         | 计划与任务进度                                                                |
-| `goal`          | 持久 Goal                                                                     |
-| `turns`         | 会话轮次数量与导航提示                                                        |
-| `configCounts`  | 配置、规则、Skill 和 MCP 数量                                                 |
-| `auth`          | 认证方式（ChatGPT 套餐，或 API key 场景下当前会话实际连接的 endpoint 主机名） |
-| `memory`        | 近似系统内存                                                                  |
-| `duration`      | 会话持续时间                                                                  |
-| `speed`         | 上一次回复的输出速度                                                          |
-| `sessionName`   | 显式命名的会话标题                                                            |
-| `sessionTokens` | 会话累计 Token                                                                |
-| `compactions`   | Context 压缩次数                                                              |
-
-示例：
-
-```bash
-# 打开工具、Skills 和 Agent，关闭内存与输出速度
 codex-hud configure --enable tools,skills,agents --disable memory,speed --yes
-
-# 切换布局或语言，同时保留其他配置
-codex-hud configure --layout compact --language zh-Hans
-
-# 重置为 Full 后再进入选择面板
-codex-hud configure --preset full
+codex-hud configure --status --json
 ```
 
-配置保存后，**已经存在 HUD pane** 的会话会监听配置目录并自动刷新，无需重启 Codex。配置热更新不能为未经过 Codex HUD launcher 启动的现有会话创建 HUD pane；这种情况仍然需要退出并重新启动 Codex。
+HUD 默认使用英文，不会自动跟随 README 或系统语言：
 
-默认 `auto` backend 选择顺序是：交互式 cmux surface 且 control socket 健康时使用 cmux 原生 split；已经位于用户 tmux 中时使用该 tmux；其他终端使用私有 tmux 兼容 backend。cmux socket 异常时会直接运行原生 Codex，不会静默回退到 tmux。可以使用 `--backend cmux|tmux|none` 显式覆盖。
+```bash
+codex-hud configure --language zh-Hans
+codex-hud configure --language zh-Hant
+```
 
-cmux backend 让 Codex 保持在原 surface，只在下方创建不抢焦点的 HUD split，因此保留原生 scrollback、选择和复制。HUD 初始高度会贴合渲染内容；手动拖拽分隔线后，本次 HUD 会话的高度控制权会交给用户，后续刷新不会再把高度改回去。tmux backend 无法提供完全一致的终端原生语义；在用户自己的 tmux 中启动时，Codex HUD 不修改其 tmux 选项。
+配置保存在 `${CODEX_HOME:-~/.codex}/codex-hud/config.json`。已经存在 HUD pane 的会话会自动加载保存后的配置；没有通过 Codex HUD launcher 启动的旧会话仍需重启。
 
-Codex HUD 使用 cmux 0.64 的方向式 pane resize API（`--pane`、`-U` / `-D` 和 `--amount`）。仍调用 tmux 风格 `-t ... -y ...` 参数的旧版 Codex HUD 会以 `Pane has no adjacent border in direction right` 错误安全降级为无 HUD 的原生 Codex；遇到该错误时应先重新构建或升级 Codex HUD，再启动新会话。
+<details>
+<summary><strong>全部可配置字段和环境变量</strong></summary>
+
+可用于 `--enable` / `--disable` 的名称：
+
+| 名称                                | 内容                                       |
+| ----------------------------------- | ------------------------------------------ |
+| `git`                             | Git 分支和工作区状态                       |
+| `usage`                           | 额度窗口、reset 时间和 credits             |
+| `promptCache`                     | Prompt Cache 倒计时                        |
+| `tools` / `skills` / `mcp`    | 工具、Skill 和 MCP 活动                    |
+| `agents`                          | 子 Agent 状态                              |
+| `todos` / `goal`                | 计划、任务和持久 Goal                      |
+| `turns`                           | 会话轮次和导航提示                         |
+| `configCounts`                    | 配置、规则、Skill 和 MCP 数量              |
+| `auth`                            | ChatGPT 套餐或当前会话实际 endpoint 主机名 |
+| `memory`                          | 近似系统内存                               |
+| `duration` / `speed`            | 会话时长和回复速度                         |
+| `sessionName` / `sessionTokens` | 会话标题和累计 Token                       |
+| `compactions`                     | Context 压缩次数                           |
 
 常用环境变量：
 
-| 变量                  | 作用                                                             |
-| --------------------- | ---------------------------------------------------------------- |
-| `CODEX_HOME`          | Codex 数据与配置目录                                             |
-| `CODEX_HUD_CONFIG`    | 覆盖 HUD 配置路径                                                |
-| `CODEX_HUD_CODEX_BIN` | 指定真实 Codex 可执行文件，避免 shim 递归                        |
-| `CODEX_HUD_BIN_DIR`   | 安装启动器的目录，默认`~/.local/bin`                             |
-| `CODEX_HUD_HEIGHT`    | HUD pane 最大高度，默认 30；pane 从 5 行启动并按完整内容自动适配 |
-| `NO_COLOR`            | 禁用 ANSI 颜色                                                   |
+| 变量                    | 作用                                    |
+| ----------------------- | --------------------------------------- |
+| `CODEX_HOME`          | Codex 数据与配置目录                    |
+| `CODEX_HUD_CONFIG`    | 覆盖 HUD 配置路径                       |
+| `CODEX_HUD_CODEX_BIN` | 指定真实 Codex 可执行文件               |
+| `CODEX_HUD_BIN_DIR`   | launcher 安装目录，默认`~/.local/bin` |
+| `CODEX_HUD_HEIGHT`    | HUD pane 最大高度，默认 30              |
+| `NO_COLOR`            | 禁用 ANSI 颜色                          |
 
-`zh` 与 `zh-TW` language 别名也可直接使用，保存时会规范化为 `zh-Hans` 与 `zh-Hant`。完整高级配置项与支持边界见功能对照表。
+</details>
 
-## 诊断
+<details>
+<summary><strong>Git 状态标记</strong></summary>
 
-检查 Codex、tmux、配置、插件、当前 session，以及该 session 实际连接的 endpoint 及其来源：
+例如 `git:(main* ↑1) M2 A1 ?1` 表示分支为 `main`、有未提交改动、领先上游 1 个提交，并包含 2 个修改文件、1 个已暂存新增文件和 1 个未跟踪文件。
+
+| 标记  | 含义           |
+| ----- | -------------- |
+| `M` | 已修改         |
+| `A` | 新增（已暂存） |
+| `D` | 已删除         |
+| `R` | 重命名         |
+| `C` | 复制           |
+| `T` | 类型变更       |
+| `?` | 未跟踪         |
+| `!` | 冲突（未合并） |
+
+</details>
+
+## 会话历史导航
+
+当 HUD 显示“轮次”行时，点击 HUD pane 并按 `n`：
+
+- `j` / `k` 或方向键：选择上一轮、下一轮
+- `Enter` 或右方向键：打开完整轮次
+- `/`：搜索用户输入和助手回复
+- Page Up / Page Down：滚动当前轮次
+- `Esc`：返回列表，再次按下关闭
+- `q`：立即关闭
+
+导航器只列出真实的用户提交，不会把注入的环境上下文或 developer 指令当作用户输入。详细的数据来源和隐私边界见[会话历史导航文档](./docs/conversation-navigator.md)。
+
+## 系统支持
+
+| 系统或环境       | 支持状态      | 要求与说明                                                         |
+| ---------------- | ------------- | ------------------------------------------------------------------ |
+| macOS            | 支持          | 使用 cmux 0.64+ 或 tmux；cmux 可保留原生滚动、选择和复制           |
+| Linux            | 支持          | 需要 tmux 作为 HUD pane backend                                    |
+| WSL2             | 支持          | Node.js、Codex、tmux 和 Codex HUD 必须安装在同一个 Linux distribution |
+| 原生 Windows     | 不支持完整 HUD | PowerShell、CMD 和原生 Windows Terminal 无法创建受支持的 HUD pane  |
+
+所有受支持环境都需要 Node.js 20 或更高版本，以及可以正常运行的官方 Codex CLI。`sqlite3` 是可选依赖，用于读取会话标题和实际连接的 endpoint。
+
+如果系统缺少可用的 cmux/tmux 环境，或 HUD 启动失败，Codex HUD 会直接运行官方 Codex，不会阻断命令，但不会显示 HUD。
+
+## 故障排查
+
+先运行：
 
 ```bash
 codex-hud doctor
-codex-hud doctor --json --cwd "$PWD"
-```
-
-HUD 没有内容时，可以先检查一次渲染结果：
-
-```bash
 codex-hud render --once --cwd "$PWD" --no-color
 ```
 
 常见情况：
 
-- `tmux: not found`：安装 tmux 后重新启动 Codex。
-- setup 成功但当前会话没有 HUD：这是正常行为；退出当前 Codex，再运行 `codex` 或 `codex-hud`。
-- `Session: not found`：确保 Codex 与 doctor 使用相同的真实项目目录。
-- 安装后命令仍指向旧路径：运行 `hash -r` 或打开新终端。
-- 需要临时恢复原生行为：使用 `codex --no-hud`。
+| 现象                           | 处理方法                                          |
+| ------------------------------ | ------------------------------------------------- |
+| setup 成功，但当前会话没有 HUD | 退出当前 Codex，运行`hash -r`，再启动 `codex` |
+| `tmux: not found`            | 安装 tmux；cmux 用户无需安装                      |
+| `Session: not found`         | 确保 Codex 和 doctor 使用同一个真实项目目录       |
+| 命令仍指向旧 launcher          | 运行`hash -r` 或打开新终端                      |
+| 想确认问题是否来自 HUD         | 使用`codex --no-hud` 临时绕过                   |
+
+## 开发
+
+从源码构建需要 pnpm 10：
+
+```bash
+pnpm install
+pnpm build
+node dist/cli.mjs setup --codex-shim --language zh-Hans
+hash -r
+codex
+```
+
+受管 runtime 安装在 `${CODEX_HOME:-~/.codex}/codex-hud/runtime`，不会依赖可能被插件升级清理的缓存目录。
 
 ## 卸载
 
-卸载只删除 `install.json` 中登记且仍带有 Codex HUD 标记的启动器：
+先删除受管 launcher，再按需移除插件和 marketplace：
 
 ```bash
-codex-hud uninstall
 codex-hud uninstall --dry-run
-```
-
-配置文件和 Codex 自身数据不会被删除。
-
-如果通过 Codex plugin 安装，还可以继续移除插件和 marketplace：
-
-```bash
+codex-hud uninstall
 codex plugin remove codex-hud@codex-hud
 codex plugin marketplace remove codex-hud
 ```
 
-插件移除不会自动删除 setup 创建的启动器，因此建议先运行 `codex-hud uninstall`。
-
-## 为什么使用独立 pane
-
-Claude Code 提供可执行自定义 statusline renderer；Codex CLI 当前只提供固定字段的 `tui.status_line`，插件不能直接注入任意多行 TUI footer。Codex HUD 因此使用独立 pane：cmux 中使用原生 split，其他环境使用 tmux 兼容 backend，同时保持官方 Codex 二进制不变。
-
-HUD 是纯附加层：backend 不可用、pane 创建失败或 renderer 异常时，启动器会直接运行官方 Codex 并保留原始参数与退出码。Full 预设默认聚焦日常信息并显示会话累计 Token；系统内存、配置计数、Session ID 和开始日期等诊断字段仍可在配置中单独开启。
+卸载不会删除 HUD 配置或 Codex 自身数据，也不会删除不受 Codex HUD 管理的文件。
 
 ## 隐私与安全
 
 - HUD 只读取本地 Codex rollout、配置元数据和 Git 状态。
-- 渲染器不显示用户 prompt、模型回复正文或工具输出正文。
-- 所有显示文本都会移除终端控制字符。
-- 安装器只删除 `install.json` 中记录的受管文件。
-- `--no-hud` 可绕过 tmux 并直接运行官方 Codex。
+- 常驻 HUD 不显示用户 prompt、模型回复正文或工具输出正文。
+- 会话正文只会在用户主动打开导航器时显示，数据始终保留在本机。
+- 所有渲染文本都会移除终端控制字符。
+- Codex HUD 不修改官方 Codex 二进制；`--no-hud` 可以随时绕过 HUD。
 
-## 开发与验证
-
-```bash
-pnpm release:check
-pnpm lint --fix
-pnpm typecheck
-pnpm test
-pnpm build
-
-node dist/render-cli.mjs --once --cwd "$PWD" --no-color
-node dist/cli.mjs doctor --json
-node dist/cli.mjs start --detach -- "Reply with exactly HUD-OK"
-```
-
-维护者发布新版本时应遵循 [版本与发布流程](./docs/releasing.zh.md)，统一更新 SemVer、插件 cachebuster、CHANGELOG 与 Git tag。
-
-## 开源协议
-
-Codex HUD 基于 [MIT License](./LICENSE) 开源。改编内容的署名信息请参阅 [NOTICE](./NOTICE)。
+Codex HUD 基于 [MIT License](./LICENSE) 开源。改编内容的署名信息见 [NOTICE](./NOTICE)。
