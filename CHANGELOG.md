@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## 0.3.3 - 2026-07-30
+
 ### Fixed
 
 - Existing unversioned configurations now enable per-status Git file counts during managed runtime upgrades, matching the 0.3 default. The one-time migration is versioned so later user changes remain respected.
