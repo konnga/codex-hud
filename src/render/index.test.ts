@@ -82,6 +82,7 @@ function state(): HudState {
       { id: '1', name: 'exec_command', target: 'pnpm test', status: 'running', startTime: new Date('2026-07-16T08:59:55Z') },
       { id: '2', name: 'view_image', status: 'completed', startTime: new Date('2026-07-16T08:55:00Z'), endTime: new Date('2026-07-16T08:55:01Z') },
     ],
+    images: [],
     skills: ['openai-docs', 'plugin-creator'],
     mcpServers: ['github'],
     agents: [

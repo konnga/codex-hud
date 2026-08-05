@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+## 0.4.0 - 2026-08-05
+
+### Added
+
+- Added a session-scoped image gallery for local paths emitted by `view_image` and image-generation tools. The HUD can list images, render inline terminal previews through optional `chafa`, open files with the system image viewer, and copy paths without mixing images from concurrent Codex sessions in the same project.
+
+### Docs
+
+- Documented image gallery controls, optional `chafa` installation, system-viewer behavior, and fallback limitations in both README files and the dedicated image viewer guide.
+
+---
+
+### 新增
+
+- 新增按会话隔离的图片画廊，用于展示 `view_image` 和图片生成工具产生的本地路径。HUD 支持图片列表、通过可选 `chafa` 进行终端内联预览、调用系统图片查看器打开，以及复制路径；同一项目中的并发 Codex 会话不会混用图片。
+
+### 文档
+
+- 在中英文 README 和图片查看器专门文档中补充了图片画廊快捷键、可选 `chafa` 安装、系统查看器行为和降级限制。
+
 ## 0.3.3 - 2026-07-30
 
 ### Fixed

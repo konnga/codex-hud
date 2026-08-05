@@ -36,6 +36,7 @@ export function buildHudState(
     usage,
     sessionTokens: rollout.sessionTokens,
     tools: rollout.tools,
+    images: rollout.images,
     skills: rollout.skills,
     mcpServers: rollout.mcpServers,
     agents: config.display.showAgents ? collectAgentEntries(session) : [],

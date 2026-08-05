@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { A as RolloutParser, C as findActiveSession, D as getConfigPath, E as getCodexHome, O as getHudStateDirectory, S as DEFAULT_CONFIG, T as resolveSessionEndpoint, a as waitForNewRootSession, b as applyConfigMigrations, i as snapshotRootSessions, k as getLegacyStateDirectory, m as renderHud, n as createSessionBindingPath, o as writeSessionBinding, s as buildHudState, t as acquireSessionDiscoveryLock, w as findCodexLogDatabase, x as rawConfigVersion, y as loadConfig } from "./session-binding-at9jgMbt.mjs";
+import { A as getLegacyStateDirectory, C as findActiveSession, D as getCodexHome, E as resolveSessionEndpoint, O as getConfigPath, S as DEFAULT_CONFIG, a as waitForNewRootSession, b as applyConfigMigrations, i as snapshotRootSessions, j as RolloutParser, k as getHudStateDirectory, m as renderHud, n as createSessionBindingPath, o as writeSessionBinding, s as buildHudState, t as acquireSessionDiscoveryLock, w as findCodexLogDatabase, x as rawConfigVersion, y as loadConfig } from "./session-binding-CFN6lpi3.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import process$1, { stdin, stdout } from "node:process";
@@ -2209,7 +2209,7 @@ function launchNewTmuxSession(options, runner = createTmuxRunner(options.env, op
 		"-t",
 		sessionName,
 		"mouse",
-		"on"
+		"off"
 	]);
 	runner.run([
 		"set-option",
@@ -2273,6 +2273,18 @@ function launchNewTmuxSession(options, runner = createTmuxRunner(options.env, op
 		]);
 		ensureSuccess(split, "tmux split-window");
 	}
+	const hudPaneId = split.stdout.trim() || null;
+	if (hudPaneId) runner.run([
+		"bind-key",
+		"-T",
+		"root",
+		"F12",
+		"if-shell",
+		"-F",
+		`#{==:#{pane_id},${hudPaneId}}`,
+		`select-pane -t ${sessionName}:0.0`,
+		`select-pane -t ${hudPaneId}`
+	]);
 	runner.run([
 		"select-pane",
 		"-t",
@@ -2286,14 +2298,14 @@ function launchNewTmuxSession(options, runner = createTmuxRunner(options.env, op
 		], "inherit");
 		return {
 			sessionName,
-			hudPaneId: split.stdout.trim() || null,
+			hudPaneId,
 			socketPath: options.socketPath ?? null,
 			exitCode: attached.status ?? 1
 		};
 	}
 	return {
 		sessionName,
-		hudPaneId: split.stdout.trim() || null,
+		hudPaneId,
 		socketPath: options.socketPath ?? null,
 		exitCode: 0
 	};

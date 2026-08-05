@@ -163,7 +163,10 @@ export function launchNewTmuxSession(
   runner.run(['set-option', '-t', sessionName, 'remain-on-exit', 'off'])
   runner.run(['set-option', '-t', sessionName, 'pane-border-status', 'off'])
   runner.run(['set-option', '-t', sessionName, 'status', 'off'])
-  runner.run(['set-option', '-t', sessionName, 'mouse', 'on'])
+  // Keep native terminal drag-selection and Cmd-C available. The HUD uses
+  // keyboard input for its interactive views, so tmux mouse capture is not
+  // required for the managed session.
+  runner.run(['set-option', '-t', sessionName, 'mouse', 'off'])
   runner.run(['set-option', '-t', sessionName, 'prefix', 'None'])
   runner.run(['set-option', '-t', sessionName, 'prefix2', 'None'])
   runner.run(['set-option', '-s', 'focus-events', 'on'])
@@ -190,13 +193,27 @@ export function launchNewTmuxSession(
     runner.run(['kill-session', '-t', sessionName])
     ensureSuccess(split, 'tmux split-window')
   }
+  const hudPaneId = split.stdout.trim() || null
+  if (hudPaneId) {
+    runner.run([
+      'bind-key',
+      '-T',
+      'root',
+      'F12',
+      'if-shell',
+      '-F',
+      `#{==:#{pane_id},${hudPaneId}}`,
+      `select-pane -t ${sessionName}:0.0`,
+      `select-pane -t ${hudPaneId}`,
+    ])
+  }
   runner.run(['select-pane', '-t', `${sessionName}:0.0`])
 
   if (!options.detached) {
     const attached = runner.run(['attach-session', '-t', sessionName], 'inherit')
     return {
       sessionName,
-      hudPaneId: split.stdout.trim() || null,
+      hudPaneId,
       socketPath: options.socketPath ?? null,
       exitCode: attached.status ?? 1,
     }
@@ -204,7 +221,7 @@ export function launchNewTmuxSession(
 
   return {
     sessionName,
-    hudPaneId: split.stdout.trim() || null,
+    hudPaneId,
     socketPath: options.socketPath ?? null,
     exitCode: 0,
   }

@@ -14,6 +14,15 @@ export interface ToolEntry {
   durationMs?: number
 }
 
+export type SessionImageSource = 'view_image' | 'generated_image'
+
+export interface SessionImage {
+  path: string
+  source: SessionImageSource
+  createdAt: Date
+  callId?: string
+}
+
 export interface AgentEntry {
   id: string
   type: string
@@ -159,6 +168,7 @@ export interface HudState {
   usage: UsageData | null
   sessionTokens: SessionTokenUsage | null
   tools: ToolEntry[]
+  images: SessionImage[]
   skills: string[]
   mcpServers: string[]
   agents: AgentEntry[]

@@ -2,6 +2,7 @@ import type { HudElement } from '../types/config.js'
 import type { RenderContext } from '../types/render.js'
 import {
   renderAgentsLine,
+  renderImagesLine,
   renderMcpLine,
   renderSkillsLine,
   renderTodosLine,
@@ -83,6 +84,10 @@ function expandedLines(ctx: RenderContext): string[] {
       lines.push(...line.split('\n'))
     }
   }
+  const images = renderImagesLine(ctx)
+  if (images) {
+    lines.push(images)
+  }
   return lines
 }
 
@@ -113,6 +118,7 @@ function compactLines(ctx: RenderContext): string[] {
     renderAgentsLine(ctx),
     renderTodosLine(ctx),
     renderTurnsLine(ctx),
+    renderImagesLine(ctx),
   ]
     .filter((line): line is string => Boolean(line))
     .flatMap(line => line.split('\n'))

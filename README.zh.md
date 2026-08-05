@@ -67,6 +67,8 @@ sudo apt install tmux
 
 `sqlite3` 是可选依赖，用于读取会话标题和会话实际连接的 endpoint。
 
+`chafa` 是可选依赖，用于在终端内联预览图片。macOS 可执行 `brew install chafa` 安装。未安装时，图片画廊仍会显示图片路径，并可以调用系统默认图片查看器打开文件。
+
 ### 2. 安装 Codex HUD 插件
 
 在普通终端执行：
@@ -143,11 +145,12 @@ codex plugin add codex-hud@codex-hud
 
 ## 常用操作
 
-| 在哪里   | 命令或按键                                          | 用途                                   |
-| -------- | --------------------------------------------------- | -------------------------------------- |
+| 在哪里   | 命令或按键                                        | 用途                                   |
+| -------- | ------------------------------------------------- | -------------------------------------- |
 | Codex 内 | `$codex-hud:configure`                            | 选择要显示的字段并实时预览             |
 | Codex 内 | `$codex-hud:doctor`                               | 检查 launcher、backend、配置和当前会话 |
 | HUD pane | `n`                                               | 打开会话历史导航器                     |
+| HUD pane | `i`                                               | 打开当前会话的图片画廊                 |
 | 普通终端 | `codex`                                           | 使用 HUD 启动交互式 Codex              |
 | 普通终端 | `codex --no-hud`                                  | 临时绕过 HUD，直接运行官方 Codex       |
 | 普通终端 | `codex-hud render --once --cwd "$PWD" --no-color` | 查看一次纯文本渲染结果                 |
@@ -164,8 +167,8 @@ codex-hud configure
 
 也可以直接应用预设：
 
-| 预设          | 适合场景                            |
-| ------------- | ----------------------------------- |
+| 预设        | 适合场景                            |
+| ----------- | ----------------------------------- |
 | `full`      | 第一次使用，展示日常可用的完整信息  |
 | `essential` | 只保留项目、Context、额度和主要活动 |
 | `minimal`   | 适合窄终端的最小信息集              |
@@ -197,32 +200,32 @@ codex-hud configure --language zh-Hant
 
 可用于 `--enable` / `--disable` 的名称：
 
-| 名称                                | 内容                                       |
-| ----------------------------------- | ------------------------------------------ |
-| `git`                             | Git 分支和工作区状态                       |
-| `usage`                           | 额度窗口、reset 时间和 credits             |
-| `promptCache`                     | Prompt Cache 倒计时                        |
-| `tools` / `skills` / `mcp`    | 工具、Skill 和 MCP 活动                    |
-| `agents`                          | 子 Agent 状态                              |
+| 名称                            | 内容                                       |
+| ------------------------------- | ------------------------------------------ |
+| `git`                           | Git 分支和工作区状态                       |
+| `usage`                         | 额度窗口、reset 时间和 credits             |
+| `promptCache`                   | Prompt Cache 倒计时                        |
+| `tools` / `skills` / `mcp`      | 工具、Skill 和 MCP 活动                    |
+| `agents`                        | 子 Agent 状态                              |
 | `todos` / `goal`                | 计划、任务和持久 Goal                      |
-| `turns`                           | 会话轮次和导航提示                         |
-| `configCounts`                    | 配置、规则、Skill 和 MCP 数量              |
-| `auth`                            | ChatGPT 套餐或当前会话实际 endpoint 主机名 |
-| `memory`                          | 近似系统内存                               |
+| `turns`                         | 会话轮次和导航提示                         |
+| `configCounts`                  | 配置、规则、Skill 和 MCP 数量              |
+| `auth`                          | ChatGPT 套餐或当前会话实际 endpoint 主机名 |
+| `memory`                        | 近似系统内存                               |
 | `duration` / `speed`            | 会话时长和回复速度                         |
 | `sessionName` / `sessionTokens` | 会话标题和累计 Token                       |
-| `compactions`                     | Context 压缩次数                           |
+| `compactions`                   | Context 压缩次数                           |
 
 常用环境变量：
 
-| 变量                    | 作用                                    |
-| ----------------------- | --------------------------------------- |
-| `CODEX_HOME`          | Codex 数据与配置目录                    |
-| `CODEX_HUD_CONFIG`    | 覆盖 HUD 配置路径                       |
-| `CODEX_HUD_CODEX_BIN` | 指定真实 Codex 可执行文件               |
+| 变量                  | 作用                                  |
+| --------------------- | ------------------------------------- |
+| `CODEX_HOME`          | Codex 数据与配置目录                  |
+| `CODEX_HUD_CONFIG`    | 覆盖 HUD 配置路径                     |
+| `CODEX_HUD_CODEX_BIN` | 指定真实 Codex 可执行文件             |
 | `CODEX_HUD_BIN_DIR`   | launcher 安装目录，默认`~/.local/bin` |
-| `CODEX_HUD_HEIGHT`    | HUD pane 最大高度，默认 30              |
-| `NO_COLOR`            | 禁用 ANSI 颜色                          |
+| `CODEX_HUD_HEIGHT`    | HUD pane 最大高度，默认 30            |
+| `NO_COLOR`            | 禁用 ANSI 颜色                        |
 
 </details>
 
@@ -231,16 +234,16 @@ codex-hud configure --language zh-Hant
 
 例如 `git:(main* ↑1) M2 A1 ?1` 表示分支为 `main`、有未提交改动、领先上游 1 个提交，并包含 2 个修改文件、1 个已暂存新增文件和 1 个未跟踪文件。
 
-| 标记  | 含义           |
-| ----- | -------------- |
-| `M` | 已修改         |
-| `A` | 新增（已暂存） |
-| `D` | 已删除         |
-| `R` | 重命名         |
-| `C` | 复制           |
-| `T` | 类型变更       |
-| `?` | 未跟踪         |
-| `!` | 冲突（未合并） |
+| 标记 | 含义           |
+| ---- | -------------- |
+| `M`  | 已修改         |
+| `A`  | 新增（已暂存） |
+| `D`  | 已删除         |
+| `R`  | 重命名         |
+| `C`  | 复制           |
+| `T`  | 类型变更       |
+| `?`  | 未跟踪         |
+| `!`  | 冲突（未合并） |
 
 </details>
 
@@ -257,14 +260,48 @@ codex-hud configure --language zh-Hant
 
 导航器只列出真实的用户提交，不会把注入的环境上下文或 developer 指令当作用户输入。详细的数据来源和隐私边界见[会话历史导航文档](./docs/conversation-navigator.md)。
 
+## 图片画廊
+
+当前 Codex 会话通过 `view_image` 或图片生成工具引用图片时，HUD 会增加 `Images` 行。点击 HUD pane 使其获得焦点，然后按 `i` 打开画廊。画廊只属于当前绑定的 Codex 会话；同一项目中其他会话的图片不会混入。
+
+<div align="center">
+<figure>
+<img src="./.github/assets/gallery3.png" alt="Codex HUD 图片提示行" width="820">
+<figcaption>HUD 显示图片数量和 <code>i gallery</code> 入口。</figcaption>
+</figure>
+<figure>
+<img src="./.github/assets/gallery1.png" alt="Codex HUD 图片画廊列表" width="820">
+<figcaption>画廊列出当前 Codex 会话中的图片。</figcaption>
+</figure>
+<figure>
+<img src="./.github/assets/gallery2.png" alt="Codex HUD 图片预览降级界面" width="820">
+<figcaption>未安装 <code>chafa</code> 时，预览显示元信息，并保留系统查看器入口。</figcaption>
+</figure>
+</div>
+
+- `j` / `k` 或方向键：选择图片
+- `Enter` 或右方向键：在终端内联预览
+- `o`：使用系统默认图片查看器打开选中的文件
+- `y`：复制选中文件路径
+- `Esc` 或 `q`：关闭画廊，或从预览返回列表
+
+内联预览使用可选的 [`chafa`](https://github.com/hpjansson/chafa) 命令。未安装时，预览会显示文件路径和元信息。安装方式：
+
+```bash
+# macOS
+brew install chafa
+```
+
+详细的图片来源、快捷键和降级行为见[图片查看器文档](./docs/image-viewer.md)。
+
 ## 系统支持
 
-| 系统或环境       | 支持状态      | 要求与说明                                                         |
-| ---------------- | ------------- | ------------------------------------------------------------------ |
-| macOS            | 支持          | 使用 cmux 0.64+ 或 tmux；cmux 可保留原生滚动、选择和复制           |
-| Linux            | 支持          | 需要 tmux 作为 HUD pane backend                                    |
-| WSL2             | 支持          | Node.js、Codex、tmux 和 Codex HUD 必须安装在同一个 Linux distribution |
-| 原生 Windows     | 不支持完整 HUD | PowerShell、CMD 和原生 Windows Terminal 无法创建受支持的 HUD pane  |
+| 系统或环境   | 支持状态       | 要求与说明                                                            |
+| ------------ | -------------- | --------------------------------------------------------------------- |
+| macOS        | 支持           | 使用 cmux 0.64+ 或 tmux；cmux 可保留原生滚动、选择和复制              |
+| Linux        | 支持           | 需要 tmux 作为 HUD pane backend                                       |
+| WSL2         | 支持           | Node.js、Codex、tmux 和 Codex HUD 必须安装在同一个 Linux distribution |
+| 原生 Windows | 不支持完整 HUD | PowerShell、CMD 和原生 Windows Terminal 无法创建受支持的 HUD pane     |
 
 所有受支持环境都需要 Node.js 20 或更高版本，以及可以正常运行的官方 Codex CLI。`sqlite3` 是可选依赖，用于读取会话标题和实际连接的 endpoint。
 
@@ -281,13 +318,13 @@ codex-hud render --once --cwd "$PWD" --no-color
 
 常见情况：
 
-| 现象                           | 处理方法                                          |
-| ------------------------------ | ------------------------------------------------- |
+| 现象                           | 处理方法                                      |
+| ------------------------------ | --------------------------------------------- |
 | setup 成功，但当前会话没有 HUD | 退出当前 Codex，运行`hash -r`，再启动 `codex` |
-| `tmux: not found`            | 安装 tmux；cmux 用户无需安装                      |
-| `Session: not found`         | 确保 Codex 和 doctor 使用同一个真实项目目录       |
-| 命令仍指向旧 launcher          | 运行`hash -r` 或打开新终端                      |
-| 想确认问题是否来自 HUD         | 使用`codex --no-hud` 临时绕过                   |
+| `tmux: not found`              | 安装 tmux；cmux 用户无需安装                  |
+| `Session: not found`           | 确保 Codex 和 doctor 使用同一个真实项目目录   |
+| 命令仍指向旧 launcher          | 运行`hash -r` 或打开新终端                    |
+| 想确认问题是否来自 HUD         | 使用`codex --no-hud` 临时绕过                 |
 
 ## 开发
 

@@ -133,6 +133,17 @@ function normalizeRateLimits(raw) {
 //#endregion
 //#region src/codex/rollout-parser.ts
 const MAX_TARGET_LENGTH = 80;
+const IMAGE_EXTENSIONS = /* @__PURE__ */ new Set([
+	".png",
+	".jpg",
+	".jpeg",
+	".webp",
+	".gif",
+	".bmp",
+	".tif",
+	".tiff"
+]);
+const IMAGE_PATH_PATTERN = /(?:^|[\s"'`(])(\/[^\s"'`),;]+\.(?:png|jpe?g|webp|gif|bmp|tiff?)|[a-z]:[\\/][^\s"'`),;]+\.(?:png|jpe?g|webp|gif|bmp|tiff?))(?:$|[\s"'`),;.])/gi;
 function initialState() {
 	return {
 		session: null,
@@ -140,6 +151,7 @@ function initialState() {
 		usage: null,
 		sessionTokens: null,
 		tools: [],
+		images: [],
 		skills: [],
 		mcpServers: [],
 		todos: [],
@@ -209,6 +221,56 @@ function isErrorOutput(output) {
 	}
 	return false;
 }
+function imageIsAvailable(value) {
+	try {
+		return fs.statSync(value).isFile() && IMAGE_EXTENSIONS.has(path.extname(value).toLowerCase());
+	} catch {
+		return false;
+	}
+}
+function normalizeImagePath(value) {
+	const candidate = value.trim().replace(/[.,;)]+$/, "");
+	if (!path.isAbsolute(candidate) || !IMAGE_EXTENSIONS.has(path.extname(candidate).toLowerCase())) return null;
+	return path.normalize(candidate);
+}
+function imagePathsFromValue(value) {
+	const result = /* @__PURE__ */ new Set();
+	const visit = (current, depth) => {
+		if (depth > 3 || result.size >= 20) return;
+		if (typeof current === "string") {
+			try {
+				const parsed = JSON.parse(current);
+				if (parsed !== current) visit(parsed, depth + 1);
+			} catch {}
+			for (const match of current.matchAll(IMAGE_PATH_PATTERN)) {
+				const normalized = normalizeImagePath(match[1]);
+				if (normalized) result.add(normalized);
+			}
+			const direct = normalizeImagePath(current);
+			if (direct) result.add(direct);
+			return;
+		}
+		if (Array.isArray(current)) {
+			current.forEach((item) => visit(item, depth + 1));
+			return;
+		}
+		if (current && typeof current === "object") Object.values(current).forEach((item) => visit(item, depth + 1));
+	};
+	visit(value, 0);
+	return [...result];
+}
+function imageSourceForTool(name) {
+	if (name === "view_image") return "view_image";
+	return /image|img|picture|photo/i.test(name) && /imagegen|generate|create|edit|save|output/i.test(name) ? "generated_image" : null;
+}
+function registerImagePaths(images, paths, source, createdAt, callId) {
+	for (const imagePath of paths) if (!images.has(imagePath)) images.set(imagePath, {
+		path: imagePath,
+		source,
+		createdAt,
+		callId
+	});
+}
 function toSessionTokens(usage) {
 	if (!usage) return null;
 	return {
@@ -247,6 +309,7 @@ var RolloutParser = class {
 	state = initialState();
 	filePath = null;
 	runningTools = /* @__PURE__ */ new Map();
+	images = /* @__PURE__ */ new Map();
 	latestTokenUsage = null;
 	setFile(filePath) {
 		if (filePath === this.filePath) return;
@@ -257,9 +320,11 @@ var RolloutParser = class {
 		this.tail.reset();
 		this.state = initialState();
 		this.runningTools.clear();
+		this.images.clear();
 		this.latestTokenUsage = null;
 	}
 	getState() {
+		this.state.images = Array.from(this.images.values()).filter((image) => imageIsAvailable(image.path));
 		return structuredClone(this.state);
 	}
 	parse() {
@@ -268,6 +333,7 @@ var RolloutParser = class {
 		if (result.reset) {
 			this.state = initialState();
 			this.runningTools.clear();
+			this.images.clear();
 			this.latestTokenUsage = null;
 		}
 		for (const line of result.lines) this.parseLine(line);
@@ -334,6 +400,8 @@ var RolloutParser = class {
 			this.runningTools.set(id, tool);
 			this.state.tools.push(tool);
 			this.state.tools = this.state.tools.slice(-100);
+			const imageSource = imageSourceForTool(payload.name);
+			if (imageSource) registerImagePaths(this.images, imagePathsFromValue(payload.arguments), imageSource, timestamp, id);
 			if (tool.name === "Skill" && tool.target) this.state.skills = Array.from(/* @__PURE__ */ new Set([...this.state.skills, tool.target]));
 			const mcp = /^mcp__(.+?)__/.exec(tool.name)?.[1];
 			if (mcp) this.state.mcpServers = Array.from(/* @__PURE__ */ new Set([...this.state.mcpServers, mcp]));
@@ -345,10 +413,15 @@ var RolloutParser = class {
 			running.status = isErrorOutput(payload.output) ? "error" : "completed";
 			running.endTime = timestamp;
 			running.durationMs = Math.max(0, timestamp.getTime() - running.startTime.getTime());
+			const imageSource = imageSourceForTool(running.name);
+			if (imageSource) registerImagePaths(this.images, imagePathsFromValue(payload.output), imageSource, timestamp, payload.call_id);
 			this.runningTools.delete(payload.call_id);
 			return;
 		}
-		if (payload.type === "message" && payload.role === "assistant" && this.state.session) this.state.session.lastResponseAt = timestamp;
+		if (payload.type === "message" && payload.role === "assistant" && this.state.session) {
+			registerImagePaths(this.images, imagePathsFromValue(payload.content), "generated_image", timestamp, payload.id);
+			this.state.session.lastResponseAt = timestamp;
+		}
 	}
 	onEvent(payload, timestamp) {
 		if (payload.type === "mcp_tool_call_end" || payload.type === "mcp_tool_call_begin") {
@@ -473,9 +546,12 @@ function getLegacyStateDirectory(env = process.env) {
 const SESSION_ID_PATTERN = /^[\w-]{1,128}$/;
 const LOG_DATABASE_PATTERN = /^logs(?:_(\d+))?\.sqlite$/;
 const QUERY_TIMEOUT_MS = 750;
+const PROCESS_SESSION_QUERY_TIMEOUT_MS = 3e3;
 const ENDPOINT_CACHE_MS = 3e4;
+const PROCESS_SESSION_CACHE_MS = 1e3;
 const NEWEST_FIRST = "ORDER BY ts DESC, id DESC LIMIT 1";
 const endpointCache = /* @__PURE__ */ new Map();
+const processSessionCache = /* @__PURE__ */ new Map();
 /**
 * Codex writes its tracing log to `logs_<schema>.sqlite`; pick the newest
 * schema so a Codex upgrade that bumps the suffix keeps working.
@@ -499,7 +575,7 @@ function findCodexLogDatabase(codexHome = getCodexHome()) {
 	}
 	return best?.file ?? null;
 }
-function query(database, sql) {
+function query(database, sql, timeout = QUERY_TIMEOUT_MS) {
 	const result = spawnSync("sqlite3", [
 		"-readonly",
 		"-noheader",
@@ -513,7 +589,7 @@ function query(database, sql) {
 			"pipe",
 			"ignore"
 		],
-		timeout: QUERY_TIMEOUT_MS
+		timeout
 	});
 	return typeof result.stdout === "string" ? result.stdout.split("\n") : [];
 }
@@ -547,6 +623,62 @@ function processFamily(pid) {
 		timeout: QUERY_TIMEOUT_MS
 	});
 	return [pid, ...typeof result.stdout === "string" ? result.stdout.split("\n").map((line) => Number.parseInt(line.trim(), 10)).filter(Number.isInteger) : []];
+}
+function shellSql(value) {
+	return value.replaceAll("'", "''");
+}
+/**
+* Resolve a session from the Codex process that owns it. This is needed before
+* a HUD binding has a rollout path: selecting by cwd at that point can borrow a
+* different concurrent session in the same project.
+*/
+function resolveProcessSession(codexPid, cwd, since, env = process.env, now = Date.now()) {
+	if (!Number.isInteger(codexPid) || codexPid <= 0) return null;
+	const cacheKey = `${getCodexHome(env)}:${codexPid}:${cwd}`;
+	const cached = processSessionCache.get(cacheKey);
+	if (cached && now - cached.at < PROCESS_SESSION_CACHE_MS) return cached.value ? { ...cached.value } : null;
+	const remember = (value) => {
+		processSessionCache.set(cacheKey, {
+			at: now,
+			value
+		});
+		return value ? { ...value } : null;
+	};
+	const database = findCodexLogDatabase(getCodexHome(env));
+	if (!database) return remember(null);
+	const ranges = processFamily(codexPid).map(processRange).join(" OR ");
+	if (!ranges) return remember(null);
+	const ids = query(database, [
+		"SELECT DISTINCT thread_id",
+		"  FROM logs",
+		" WHERE thread_id IS NOT NULL",
+		`   AND ts >= ${Math.floor(since.getTime() / 1e3) - 60}`,
+		`   AND (${ranges})`,
+		" ORDER BY ts ASC, id ASC;"
+	].join("\n"), PROCESS_SESSION_QUERY_TIMEOUT_MS).filter((id) => SESSION_ID_PATTERN.test(id.trim()));
+	if (ids.length === 0) return remember(null);
+	const candidates = ids.map((id) => `'${shellSql(id.trim())}'`).join(",");
+	const rows = query(path.join(getCodexHome(env), "state_5.sqlite"), [
+		"SELECT id || '|' || rollout_path",
+		"  FROM threads",
+		` WHERE id IN (${candidates})`,
+		`   AND cwd = '${shellSql(path.resolve(cwd))}'`,
+		"   AND (thread_source = 'user' OR thread_source IS NULL)",
+		"   AND (agent_path IS NULL OR agent_path = '')",
+		" ORDER BY created_at_ms ASC, id ASC",
+		" LIMIT 1;"
+	].join("\n"), PROCESS_SESSION_QUERY_TIMEOUT_MS);
+	for (const row of rows) {
+		const separator = row.indexOf("|");
+		if (separator < 0) continue;
+		const sessionId = row.slice(0, separator);
+		const rolloutPath = row.slice(separator + 1);
+		if (SESSION_ID_PATTERN.test(sessionId) && fs.existsSync(rolloutPath)) return remember({
+			sessionId,
+			rolloutPath
+		});
+	}
+	return remember(null);
 }
 /**
 * The endpoint of a Codex process that has not created a session yet. Codex
@@ -2965,7 +3097,7 @@ const MESSAGES = {
 		cache: "cache",
 		output: "out",
 		turns: "Turns",
-		navigate: "click HUD and press n"
+		navigate: "click HUD or press F12, then n"
 	},
 	"zh-Hans": {
 		context: "上下文",
@@ -2996,7 +3128,7 @@ const MESSAGES = {
 		cache: "缓存",
 		output: "输出",
 		turns: "轮次",
-		navigate: "点击 HUD 后按 n 导航"
+		navigate: "点击 HUD 或按 F12，再按 n 导航"
 	},
 	"zh-Hant": {
 		context: "上下文",
@@ -3027,7 +3159,7 @@ const MESSAGES = {
 		cache: "快取",
 		output: "輸出",
 		turns: "輪次",
-		navigate: "點擊 HUD 後按 n 導航"
+		navigate: "點擊 HUD 或按 F12，再按 n 導航"
 	}
 };
 const ICONS = {
@@ -3072,6 +3204,13 @@ function renderToolsLine(ctx) {
 	const visible = Array.from(counts.entries()).sort((left, right) => right[1] - left[1]).slice(0, ctx.config.display.toolsMaxVisible || void 0);
 	for (const [name, count] of visible) parts.push(`${color("✓", "green", ctx.options.color)} ${safeText(toolName(ctx, name))} ×${count}`);
 	return parts.length > 0 ? `${icon("tools")} ${message(ctx.config.language, "tools")}: ${parts.join(" │ ")}` : null;
+}
+function renderImagesLine(ctx) {
+	if (ctx.state.images.length === 0) return null;
+	const latest = ctx.state.images.at(-1);
+	const filename = latest ? path.basename(latest.path) : "";
+	const suffix = filename ? ` · ${safeText(filename)}` : "";
+	return `🖼 Images: ${ctx.state.images.length}${suffix} · i gallery`;
 }
 function renderNames(ctx, title, names) {
 	if (names.length === 0) return null;
@@ -3428,6 +3567,8 @@ function expandedLines(ctx) {
 		const line = renderElement(ctx, element);
 		if (line) lines.push(...line.split("\n"));
 	}
+	const images = renderImagesLine(ctx);
+	if (images) lines.push(images);
 	return lines;
 }
 function compactLines(ctx) {
@@ -3454,7 +3595,8 @@ function compactLines(ctx) {
 		renderMcpLine(ctx),
 		renderAgentsLine(ctx),
 		renderTodosLine(ctx),
-		renderTurnsLine(ctx)
+		renderTurnsLine(ctx),
+		renderImagesLine(ctx)
 	].filter((line) => Boolean(line)).flatMap((line) => line.split("\n"));
 	return [
 		combined,
@@ -5092,6 +5234,7 @@ function buildHudState(cwd, rollout, sessionStart, config, now = /* @__PURE__ */
 		usage,
 		sessionTokens: rollout.sessionTokens,
 		tools: rollout.tools,
+		images: rollout.images,
 		skills: rollout.skills,
 		mcpServers: rollout.mcpServers,
 		agents: config.display.showAgents ? collectAgentEntries(session) : [],
@@ -5224,5 +5367,5 @@ async function waitForNewRootSession(cwd, snapshot, codexHome = getCodexHome(), 
 }
 
 //#endregion
-export { RolloutParser as A, findActiveSession as C, getConfigPath as D, getCodexHome as E, getHudStateDirectory as O, DEFAULT_CONFIG as S, resolveSessionEndpoint as T, visibleWidth as _, waitForNewRootSession as a, applyConfigMigrations as b, desiredPaneHeight as c, resizeCmuxPane as d, resizeHudPane as f, truncateAnsi as g, safeText as h, snapshotRootSessions as i, getLegacyStateDirectory as k, hudRenderHeight as l, renderHud as m, createSessionBindingPath as n, writeSessionBinding as o, settleCmuxPaneHeight as p, readSessionBinding as r, buildHudState as s, acquireSessionDiscoveryLock as t, readCmuxPaneGeometry as u, sliceAnsi as v, findCodexLogDatabase as w, rawConfigVersion as x, loadConfig as y };
-//# sourceMappingURL=session-binding-at9jgMbt.mjs.map
+export { getLegacyStateDirectory as A, findActiveSession as C, getCodexHome as D, resolveSessionEndpoint as E, getConfigPath as O, DEFAULT_CONFIG as S, resolveProcessSession as T, visibleWidth as _, waitForNewRootSession as a, applyConfigMigrations as b, desiredPaneHeight as c, resizeCmuxPane as d, resizeHudPane as f, truncateAnsi as g, safeText as h, snapshotRootSessions as i, RolloutParser as j, getHudStateDirectory as k, hudRenderHeight as l, renderHud as m, createSessionBindingPath as n, writeSessionBinding as o, settleCmuxPaneHeight as p, readSessionBinding as r, buildHudState as s, acquireSessionDiscoveryLock as t, readCmuxPaneGeometry as u, sliceAnsi as v, findCodexLogDatabase as w, rawConfigVersion as x, loadConfig as y };
+//# sourceMappingURL=session-binding-CFN6lpi3.mjs.map

@@ -3,7 +3,12 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { findCodexLogDatabase, resolveProcessEndpoint, resolveSessionEndpoint } from './session-endpoint.js'
+import {
+  findCodexLogDatabase,
+  resolveProcessEndpoint,
+  resolveProcessSession,
+  resolveSessionEndpoint,
+} from './session-endpoint.js'
 
 const directories: string[] = []
 let clock = 1_000_000
@@ -38,6 +43,32 @@ function codexHomeWithLogs(rows: LogRow[], databaseName = 'logs_2.sqlite'): stri
     ...values.map(value => `INSERT INTO logs VALUES (${value});`),
   ].join('\n')])
   return codexHome
+}
+
+interface StateThread {
+  id: string
+  rolloutPath: string
+  cwd: string
+  threadSource?: string | null
+  agentPath?: string | null
+  createdAtMs?: number
+}
+
+function addStateThreads(codexHome: string, threads: StateThread[]): void {
+  const sqlValue = (value: string | null): string => value === null
+    ? 'NULL'
+    : `'${value.replaceAll('\'', '\'\'')}'`
+  execFileSync('sqlite3', [path.join(codexHome, 'state_5.sqlite'), [
+    'CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT NOT NULL, cwd TEXT NOT NULL, thread_source TEXT, agent_path TEXT, created_at_ms INTEGER);',
+    ...threads.map(thread => `INSERT INTO threads VALUES (${[
+      sqlValue(thread.id),
+      sqlValue(thread.rolloutPath),
+      sqlValue(thread.cwd),
+      sqlValue(thread.threadSource === undefined ? 'user' : thread.threadSource),
+      sqlValue(thread.agentPath ?? null),
+      thread.createdAtMs ?? 1,
+    ].join(', ')});`),
+  ].join('\n')])
 }
 
 function request(ts: number, threadId: string, url: string): LogRow {
@@ -178,6 +209,52 @@ describe('session endpoint resolution', () => {
       url: 'https://mine.example.com/v1',
       source: 'log-init',
     })
+  })
+
+  it('resolves the root session owned by the Codex process', () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-project-'))
+    directories.push(cwd)
+    const mine = path.join(cwd, 'rollout-mine.jsonl')
+    const theirs = path.join(cwd, 'rollout-theirs.jsonl')
+    fs.writeFileSync(mine, '')
+    fs.writeFileSync(theirs, '')
+    const codexHome = codexHomeWithLogs([
+      { ts: 2_000, processUuid: `pid:${process.pid}:mine`, threadId: 'thread-mine', target: 'session', body: '' },
+      { ts: 2_001, processUuid: 'pid:999999:theirs', threadId: 'thread-theirs', target: 'session', body: '' },
+    ])
+    addStateThreads(codexHome, [
+      { id: 'thread-mine', rolloutPath: mine, cwd, createdAtMs: 2_000_000 },
+      { id: 'thread-theirs', rolloutPath: theirs, cwd, createdAtMs: 2_001_000 },
+    ])
+    clock += 2_000
+    expect(resolveProcessSession(
+      process.pid,
+      cwd,
+      new Date(1_000_000),
+      { CODEX_HOME: codexHome },
+      clock,
+    )).toEqual({ sessionId: 'thread-mine', rolloutPath: mine })
+  })
+
+  it('does not borrow another process session from the same cwd', () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-project-'))
+    directories.push(cwd)
+    const theirs = path.join(cwd, 'rollout-theirs.jsonl')
+    fs.writeFileSync(theirs, '')
+    const codexHome = codexHomeWithLogs([
+      { ts: 2_000, processUuid: 'pid:999999:theirs', threadId: 'thread-theirs', target: 'session', body: '' },
+    ])
+    addStateThreads(codexHome, [
+      { id: 'thread-theirs', rolloutPath: theirs, cwd, createdAtMs: 2_000_000 },
+    ])
+    clock += 2_000
+    expect(resolveProcessSession(
+      process.pid,
+      cwd,
+      new Date(1_000_000),
+      { CODEX_HOME: codexHome },
+      clock,
+    )).toBeNull()
   })
 
   it('ignores a process launched before this HUD pane', () => {

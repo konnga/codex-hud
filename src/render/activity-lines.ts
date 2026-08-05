@@ -1,5 +1,6 @@
 import type { RenderContext } from '../types/render.js'
 import type { AgentEntry } from '../types/state.js'
+import path from 'node:path'
 import { color } from './colors.js'
 import { formatDuration, safeText, truncateAnsi } from './format.js'
 import { icon, message } from './i18n.js'
@@ -43,6 +44,16 @@ export function renderToolsLine(ctx: RenderContext): string | null {
     parts.push(`${color('✓', 'green', ctx.options.color)} ${safeText(toolName(ctx, name))} ×${count}`)
   }
   return parts.length > 0 ? `${icon('tools')} ${message(ctx.config.language, 'tools')}: ${parts.join(' │ ')}` : null
+}
+
+export function renderImagesLine(ctx: RenderContext): string | null {
+  if (ctx.state.images.length === 0) {
+    return null
+  }
+  const latest = ctx.state.images.at(-1)
+  const filename = latest ? path.basename(latest.path) : ''
+  const suffix = filename ? ` · ${safeText(filename)}` : ''
+  return `🖼 Images: ${ctx.state.images.length}${suffix} · i gallery`
 }
 
 function renderNames(ctx: RenderContext, title: 'skills' | 'mcps', names: string[]): string | null {

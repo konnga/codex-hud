@@ -12,6 +12,8 @@ import type {
   ContextUsage,
   ConversationTurn,
   GoalState,
+  SessionImage,
+  SessionImageSource,
   SessionInfo,
   SessionTokenUsage,
   TodoItem,
@@ -19,6 +21,8 @@ import type {
   UsageData,
 } from '../types/state.js'
 // @env node
+import fs from 'node:fs'
+import path from 'node:path'
 import process from 'node:process'
 import { calculateContextUsage } from './context-usage.js'
 import { JsonlTail } from './jsonl-tail.js'
@@ -26,6 +30,8 @@ import { normalizeRateLimits } from './rate-limits.js'
 
 const MAX_RECENT_TOOLS = 100
 const MAX_TARGET_LENGTH = 80
+const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.tif', '.tiff'])
+const IMAGE_PATH_PATTERN = /(?:^|[\s"'`(])(\/[^\s"'`),;]+\.(?:png|jpe?g|webp|gif|bmp|tiff?)|[a-z]:[\\/][^\s"'`),;]+\.(?:png|jpe?g|webp|gif|bmp|tiff?))(?:$|[\s"'`),;.])/gi
 
 export interface ParsedRolloutState {
   session: SessionInfo | null
@@ -33,6 +39,7 @@ export interface ParsedRolloutState {
   usage: UsageData | null
   sessionTokens: SessionTokenUsage | null
   tools: ToolEntry[]
+  images: SessionImage[]
   skills: string[]
   mcpServers: string[]
   todos: TodoItem[]
@@ -48,6 +55,7 @@ function initialState(): ParsedRolloutState {
     usage: null,
     sessionTokens: null,
     tools: [],
+    images: [],
     skills: [],
     mcpServers: [],
     todos: [],
@@ -153,6 +161,86 @@ function isErrorOutput(output: unknown): boolean {
   return false
 }
 
+function imageIsAvailable(value: string): boolean {
+  try {
+    return fs.statSync(value).isFile() && IMAGE_EXTENSIONS.has(path.extname(value).toLowerCase())
+  }
+  catch {
+    return false
+  }
+}
+
+function normalizeImagePath(value: string): string | null {
+  const candidate = value.trim().replace(/[.,;)]+$/, '')
+  if (!path.isAbsolute(candidate) || !IMAGE_EXTENSIONS.has(path.extname(candidate).toLowerCase())) {
+    return null
+  }
+  return path.normalize(candidate)
+}
+
+function imagePathsFromValue(value: unknown): string[] {
+  const result = new Set<string>()
+  const visit = (current: unknown, depth: number): void => {
+    if (depth > 3 || result.size >= 20) {
+      return
+    }
+    if (typeof current === 'string') {
+      try {
+        const parsed = JSON.parse(current) as unknown
+        if (parsed !== current) {
+          visit(parsed, depth + 1)
+        }
+      }
+      catch {
+        // Plain tool output is handled by the path matcher below.
+      }
+      for (const match of current.matchAll(IMAGE_PATH_PATTERN)) {
+        const normalized = normalizeImagePath(match[1])
+        if (normalized) {
+          result.add(normalized)
+        }
+      }
+      const direct = normalizeImagePath(current)
+      if (direct) {
+        result.add(direct)
+      }
+      return
+    }
+    if (Array.isArray(current)) {
+      current.forEach(item => visit(item, depth + 1))
+      return
+    }
+    if (current && typeof current === 'object') {
+      Object.values(current).forEach(item => visit(item, depth + 1))
+    }
+  }
+  visit(value, 0)
+  return [...result]
+}
+
+function imageSourceForTool(name: string): SessionImageSource | null {
+  if (name === 'view_image') {
+    return 'view_image'
+  }
+  return /image|img|picture|photo/i.test(name) && /imagegen|generate|create|edit|save|output/i.test(name)
+    ? 'generated_image'
+    : null
+}
+
+function registerImagePaths(
+  images: Map<string, SessionImage>,
+  paths: string[],
+  source: SessionImageSource,
+  createdAt: Date,
+  callId?: string,
+): void {
+  for (const imagePath of paths) {
+    if (!images.has(imagePath)) {
+      images.set(imagePath, { path: imagePath, source, createdAt, callId })
+    }
+  }
+}
+
 function toSessionTokens(usage: TokenUsage | undefined): SessionTokenUsage | null {
   if (!usage) {
     return null
@@ -207,6 +295,7 @@ export class RolloutParser {
   private state: ParsedRolloutState = initialState()
   private filePath: string | null = null
   private readonly runningTools = new Map<string, ToolEntry>()
+  private readonly images = new Map<string, SessionImage>()
   private latestTokenUsage: TokenUsageInfo | null = null
 
   setFile(filePath: string | null): void {
@@ -221,10 +310,12 @@ export class RolloutParser {
     this.tail.reset()
     this.state = initialState()
     this.runningTools.clear()
+    this.images.clear()
     this.latestTokenUsage = null
   }
 
   getState(): ParsedRolloutState {
+    this.state.images = Array.from(this.images.values()).filter(image => imageIsAvailable(image.path))
     return structuredClone(this.state)
   }
 
@@ -236,6 +327,7 @@ export class RolloutParser {
     if (result.reset) {
       this.state = initialState()
       this.runningTools.clear()
+      this.images.clear()
       this.latestTokenUsage = null
     }
     for (const line of result.lines) {
@@ -321,6 +413,16 @@ export class RolloutParser {
       this.runningTools.set(id, tool)
       this.state.tools.push(tool)
       this.state.tools = this.state.tools.slice(-MAX_RECENT_TOOLS)
+      const imageSource = imageSourceForTool(payload.name)
+      if (imageSource) {
+        registerImagePaths(
+          this.images,
+          imagePathsFromValue(payload.arguments),
+          imageSource,
+          timestamp,
+          id,
+        )
+      }
       if (tool.name === 'Skill' && tool.target) {
         this.state.skills = Array.from(new Set([...this.state.skills, tool.target]))
       }
@@ -339,11 +441,28 @@ export class RolloutParser {
       running.status = isErrorOutput(payload.output) ? 'error' : 'completed'
       running.endTime = timestamp
       running.durationMs = Math.max(0, timestamp.getTime() - running.startTime.getTime())
+      const imageSource = imageSourceForTool(running.name)
+      if (imageSource) {
+        registerImagePaths(
+          this.images,
+          imagePathsFromValue(payload.output),
+          imageSource,
+          timestamp,
+          payload.call_id,
+        )
+      }
       this.runningTools.delete(payload.call_id)
       return
     }
 
     if (payload.type === 'message' && payload.role === 'assistant' && this.state.session) {
+      registerImagePaths(
+        this.images,
+        imagePathsFromValue(payload.content),
+        'generated_image',
+        timestamp,
+        payload.id,
+      )
       this.state.session.lastResponseAt = timestamp
     }
   }

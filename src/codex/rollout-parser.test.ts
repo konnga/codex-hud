@@ -142,6 +142,55 @@ describe('rollout parser', () => {
     expect(parser.parse().mcpServers).toEqual(['github', 'node_repl'])
   })
 
+  it('collects existing image paths from image tool calls and outputs', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-images-'))
+    temporaryDirectories.push(directory)
+    const filePath = path.join(directory, 'rollout.jsonl')
+    const viewed = path.join(directory, 'viewed.png')
+    const generated = path.join(directory, 'generated.webp')
+    fs.writeFileSync(viewed, 'png')
+    fs.writeFileSync(generated, 'webp')
+    fs.copyFileSync(fixturePath, filePath)
+    fs.appendFileSync(filePath, [
+      JSON.stringify({
+        timestamp: '2026-07-16T08:04:00Z',
+        type: 'response_item',
+        payload: {
+          type: 'function_call',
+          name: 'view_image',
+          call_id: 'view-1',
+          arguments: JSON.stringify({ path: viewed }),
+        },
+      }),
+      JSON.stringify({
+        timestamp: '2026-07-16T08:04:01Z',
+        type: 'response_item',
+        payload: {
+          type: 'function_call',
+          name: 'imagegen',
+          call_id: 'gen-1',
+          arguments: '{}',
+        },
+      }),
+      JSON.stringify({
+        timestamp: '2026-07-16T08:04:02Z',
+        type: 'response_item',
+        payload: {
+          type: 'function_call_output',
+          call_id: 'gen-1',
+          output: `Image saved to ${generated}`,
+        },
+      }),
+      '',
+    ].join('\n'))
+    const parser = new RolloutParser()
+    parser.setFile(filePath)
+    expect(parser.parse().images).toEqual([
+      { path: viewed, source: 'view_image', createdAt: new Date('2026-07-16T08:04:00Z'), callId: 'view-1' },
+      { path: generated, source: 'generated_image', createdAt: new Date('2026-07-16T08:04:02Z'), callId: 'gen-1' },
+    ])
+  })
+
   it('suppresses implausible output-speed samples', () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-rollout-'))
     temporaryDirectories.push(directory)

@@ -20,12 +20,20 @@ export interface SessionEndpoint {
 const SESSION_ID_PATTERN = /^[\w-]{1,128}$/
 const LOG_DATABASE_PATTERN = /^logs(?:_(\d+))?\.sqlite$/
 const QUERY_TIMEOUT_MS = 750
+const PROCESS_SESSION_QUERY_TIMEOUT_MS = 3_000
 const ENDPOINT_CACHE_MS = 30_000
+const PROCESS_SESSION_CACHE_MS = 1_000
 // `ts` stores whole seconds, so several rows routinely share one value; the
 // rowid tiebreak keeps "newest" meaning insertion order rather than scan order.
 const NEWEST_FIRST = 'ORDER BY ts DESC, id DESC LIMIT 1'
 
 const endpointCache = new Map<string, { at: number, value: SessionEndpoint | null }>()
+const processSessionCache = new Map<string, { at: number, value: ProcessSession | null }>()
+
+export interface ProcessSession {
+  sessionId: string
+  rolloutPath: string
+}
 
 /**
  * Codex writes its tracing log to `logs_<schema>.sqlite`; pick the newest
@@ -53,11 +61,11 @@ export function findCodexLogDatabase(codexHome: string = getCodexHome()): string
   return best?.file ?? null
 }
 
-function query(database: string, sql: string): string[] {
+function query(database: string, sql: string, timeout = QUERY_TIMEOUT_MS): string[] {
   const result = spawnSync('sqlite3', ['-readonly', '-noheader', '-batch', database, sql], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'ignore'],
-    timeout: QUERY_TIMEOUT_MS,
+    timeout,
   })
   // sqlite3 aborts on the first failing statement but keeps whatever earlier
   // ones already printed, so a broken fallback query must not discard a good
@@ -97,6 +105,78 @@ function processFamily(pid: number): number[] {
     ? result.stdout.split('\n').map(line => Number.parseInt(line.trim(), 10)).filter(Number.isInteger)
     : []
   return [pid, ...children]
+}
+
+function shellSql(value: string): string {
+  return value.replaceAll('\'', '\'\'')
+}
+
+/**
+ * Resolve a session from the Codex process that owns it. This is needed before
+ * a HUD binding has a rollout path: selecting by cwd at that point can borrow a
+ * different concurrent session in the same project.
+ */
+export function resolveProcessSession(
+  codexPid: number,
+  cwd: string,
+  since: Date,
+  env: NodeJS.ProcessEnv = process.env,
+  now = Date.now(),
+): ProcessSession | null {
+  if (!Number.isInteger(codexPid) || codexPid <= 0) {
+    return null
+  }
+  const cacheKey = `${getCodexHome(env)}:${codexPid}:${cwd}`
+  const cached = processSessionCache.get(cacheKey)
+  if (cached && now - cached.at < PROCESS_SESSION_CACHE_MS) {
+    return cached.value ? { ...cached.value } : null
+  }
+  const remember = (value: ProcessSession | null): ProcessSession | null => {
+    processSessionCache.set(cacheKey, { at: now, value })
+    return value ? { ...value } : null
+  }
+  const database = findCodexLogDatabase(getCodexHome(env))
+  if (!database) {
+    return remember(null)
+  }
+  const ranges = processFamily(codexPid).map(processRange).join(' OR ')
+  if (!ranges) {
+    return remember(null)
+  }
+  const ids = query(database, [
+    'SELECT DISTINCT thread_id',
+    '  FROM logs',
+    ' WHERE thread_id IS NOT NULL',
+    `   AND ts >= ${Math.floor(since.getTime() / 1_000) - 60}`,
+    `   AND (${ranges})`,
+    ' ORDER BY ts ASC, id ASC;',
+  ].join('\n'), PROCESS_SESSION_QUERY_TIMEOUT_MS).filter(id => SESSION_ID_PATTERN.test(id.trim()))
+  if (ids.length === 0) {
+    return remember(null)
+  }
+  const candidates = ids.map(id => `'${shellSql(id.trim())}'`).join(',')
+  const stateDatabase = path.join(getCodexHome(env), 'state_5.sqlite')
+  const rows = query(stateDatabase, [
+    'SELECT id || \'|\' || rollout_path',
+    '  FROM threads',
+    ` WHERE id IN (${candidates})`,
+    `   AND cwd = '${shellSql(path.resolve(cwd))}'`,
+    '   AND (thread_source = \'user\' OR thread_source IS NULL)',
+    '   AND (agent_path IS NULL OR agent_path = \'\')',
+    ' ORDER BY created_at_ms ASC, id ASC',
+    ' LIMIT 1;',
+  ].join('\n'), PROCESS_SESSION_QUERY_TIMEOUT_MS)
+  for (const row of rows) {
+    const separator = row.indexOf('|')
+    if (separator < 0)
+      continue
+    const sessionId = row.slice(0, separator)
+    const rolloutPath = row.slice(separator + 1)
+    if (SESSION_ID_PATTERN.test(sessionId) && fs.existsSync(rolloutPath)) {
+      return remember({ sessionId, rolloutPath })
+    }
+  }
+  return remember(null)
 }
 
 /**

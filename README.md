@@ -29,13 +29,13 @@ It does not replace or modify the official Codex binary. Instead, it reads local
 
 Only rows with available telemetry are rendered; unavailable data stays out of the way.
 
-| Category | Examples |
-| --- | --- |
-| Model and project | Model, reasoning effort, project path, Git branch, and file status |
+| Category          | Examples                                                                             |
+| ----------------- | ------------------------------------------------------------------------------------ |
+| Model and project | Model, reasoning effort, project path, Git branch, and file status                   |
 | Context and quota | Context usage, cumulative tokens, cache ratio, weekly limit, reset time, and credits |
-| Live activity | Tool calls, Skills, MCP servers, subagents, plan items, and durable goals |
-| Environment | Approval policy, sandbox, permissions, and collaboration mode |
-| Session | Session title, duration, output speed, compactions, and turn navigation |
+| Live activity     | Tool calls, Skills, MCP servers, subagents, plan items, and durable goals            |
+| Environment       | Approval policy, sandbox, permissions, and collaboration mode                        |
+| Session           | Session title, duration, output speed, compactions, and turn navigation              |
 
 See the audited [feature and telemetry support matrix](./docs/claude-hud-parity.md) for exact data sources and fallback behavior.
 
@@ -66,6 +66,8 @@ sudo apt install tmux
 ```
 
 `sqlite3` is optional and enables session titles and per-session endpoint detection.
+
+`chafa` is optional and enables inline image previews in the terminal. Install it on macOS with `brew install chafa`. Without it, the image gallery still lists image paths and can open files with the system image viewer.
 
 ### 2. Install the Codex HUD plugin
 
@@ -143,14 +145,15 @@ Removing the plugin or marketplace does not delete the existing HUD configuratio
 
 ## Everyday commands
 
-| Where | Command or key | Purpose |
-| --- | --- | --- |
-| Inside Codex | `$codex-hud:configure` | Choose visible fields with a live preview |
-| Inside Codex | `$codex-hud:doctor` | Check the launcher, backend, configuration, and active session |
-| HUD pane | `n` | Open the conversation navigator |
-| Terminal | `codex` | Start interactive Codex with the HUD |
-| Terminal | `codex --no-hud` | Temporarily bypass the HUD and run official Codex directly |
-| Terminal | `codex-hud render --once --cwd "$PWD" --no-color` | Print one plain-text HUD frame |
+| Where        | Command or key                                    | Purpose                                                        |
+| ------------ | ------------------------------------------------- | -------------------------------------------------------------- |
+| Inside Codex | `$codex-hud:configure`                            | Choose visible fields with a live preview                      |
+| Inside Codex | `$codex-hud:doctor`                               | Check the launcher, backend, configuration, and active session |
+| HUD pane     | `n`                                               | Open the conversation navigator                                |
+| HUD pane     | `i`                                               | Open the current session's image gallery                       |
+| Terminal     | `codex`                                           | Start interactive Codex with the HUD                           |
+| Terminal     | `codex --no-hud`                                  | Temporarily bypass the HUD and run official Codex directly     |
+| Terminal     | `codex-hud render --once --cwd "$PWD" --no-color` | Print one plain-text HUD frame                                 |
 
 Non-interactive commands such as `codex exec`, `plugin`, `login`, `mcp`, `completion`, `--help`, and `--version` pass directly to the official Codex executable.
 
@@ -164,11 +167,11 @@ codex-hud configure
 
 Or apply a preset directly:
 
-| Preset | Best for |
-| --- | --- |
-| `full` | First-time use and complete day-to-day information |
+| Preset      | Best for                                           |
+| ----------- | -------------------------------------------------- |
+| `full`      | First-time use and complete day-to-day information |
 | `essential` | Project, context, quota, and primary activity only |
-| `minimal` | A small information set for narrow terminals |
+| `minimal`   | A small information set for narrow terminals       |
 
 ```bash
 codex-hud configure --preset full --yes
@@ -197,32 +200,32 @@ Configuration is stored at `${CODEX_HOME:-~/.codex}/codex-hud/config.json`. Sess
 
 Names accepted by `--enable` and `--disable`:
 
-| Name | Content |
-| --- | --- |
-| `git` | Git branch and working-tree status |
-| `usage` | Usage windows, reset times, and credits |
-| `promptCache` | Prompt-cache countdown |
-| `tools` / `skills` / `mcp` | Tool, Skill, and MCP activity |
-| `agents` | Subagent status |
-| `todos` / `goal` | Plans, tasks, and durable goals |
-| `turns` | Conversation count and navigator hint |
-| `configCounts` | Config, rule, Skill, and MCP counts |
-| `auth` | ChatGPT plan or the actual endpoint host for the current session |
-| `memory` | Approximate system memory |
-| `duration` / `speed` | Session duration and output speed |
-| `sessionName` / `sessionTokens` | Session title and cumulative tokens |
-| `compactions` | Context compaction count |
+| Name                            | Content                                                          |
+| ------------------------------- | ---------------------------------------------------------------- |
+| `git`                           | Git branch and working-tree status                               |
+| `usage`                         | Usage windows, reset times, and credits                          |
+| `promptCache`                   | Prompt-cache countdown                                           |
+| `tools` / `skills` / `mcp`      | Tool, Skill, and MCP activity                                    |
+| `agents`                        | Subagent status                                                  |
+| `todos` / `goal`                | Plans, tasks, and durable goals                                  |
+| `turns`                         | Conversation count and navigator hint                            |
+| `configCounts`                  | Config, rule, Skill, and MCP counts                              |
+| `auth`                          | ChatGPT plan or the actual endpoint host for the current session |
+| `memory`                        | Approximate system memory                                        |
+| `duration` / `speed`            | Session duration and output speed                                |
+| `sessionName` / `sessionTokens` | Session title and cumulative tokens                              |
+| `compactions`                   | Context compaction count                                         |
 
 Common environment variables:
 
-| Variable | Purpose |
-| --- | --- |
-| `CODEX_HOME` | Codex data and configuration directory |
-| `CODEX_HUD_CONFIG` | Override the HUD configuration path |
-| `CODEX_HUD_CODEX_BIN` | Point to the real Codex executable |
-| `CODEX_HUD_BIN_DIR` | Launcher directory, default `~/.local/bin` |
-| `CODEX_HUD_HEIGHT` | Maximum HUD pane height, default 30 |
-| `NO_COLOR` | Disable ANSI colors |
+| Variable              | Purpose                                    |
+| --------------------- | ------------------------------------------ |
+| `CODEX_HOME`          | Codex data and configuration directory     |
+| `CODEX_HUD_CONFIG`    | Override the HUD configuration path        |
+| `CODEX_HUD_CODEX_BIN` | Point to the real Codex executable         |
+| `CODEX_HUD_BIN_DIR`   | Launcher directory, default `~/.local/bin` |
+| `CODEX_HUD_HEIGHT`    | Maximum HUD pane height, default 30        |
+| `NO_COLOR`            | Disable ANSI colors                        |
 
 </details>
 
@@ -231,16 +234,16 @@ Common environment variables:
 
 For example, `git:(main* ↑1) M2 A1 ?1` means branch `main` has uncommitted changes, is one commit ahead of upstream, and contains two modified files, one staged addition, and one untracked file.
 
-| Marker | Meaning |
-| --- | --- |
-| `M` | Modified |
-| `A` | Added (staged) |
-| `D` | Deleted |
-| `R` | Renamed |
-| `C` | Copied |
-| `T` | Type changed |
-| `?` | Untracked |
-| `!` | Conflict (unmerged) |
+| Marker | Meaning             |
+| ------ | ------------------- |
+| `M`    | Modified            |
+| `A`    | Added (staged)      |
+| `D`    | Deleted             |
+| `R`    | Renamed             |
+| `C`    | Copied              |
+| `T`    | Type changed        |
+| `?`    | Untracked           |
+| `!`    | Conflict (unmerged) |
 
 </details>
 
@@ -257,14 +260,48 @@ When the HUD shows a `Turns` row, click the HUD pane and press `n`:
 
 The navigator lists real user submissions only; injected environment context and developer instructions are excluded. See [Conversation navigator](./docs/conversation-navigator.md) for its data model, privacy behavior, and limitations.
 
+## Image gallery
+
+When the current Codex session references images from `view_image` or image-generation tools, the HUD adds an `Images` row. Click the HUD pane to focus it, then press `i` to open the gallery. The gallery is scoped to the currently bound Codex session; images from another session in the same project are not included.
+
+<div align="center">
+<figure>
+<img src="./.github/assets/gallery3.png" alt="Codex HUD image row" width="820">
+<figcaption>The HUD shows the image count and the <code>i gallery</code> entry point.</figcaption>
+</figure>
+<figure>
+<img src="./.github/assets/gallery1.png" alt="Codex HUD image gallery list" width="820">
+<figcaption>The gallery lists images from the current Codex session.</figcaption>
+</figure>
+<figure>
+<img src="./.github/assets/gallery2.png" alt="Codex HUD image preview fallback" width="820">
+<figcaption>Without <code>chafa</code>, preview mode shows metadata and keeps the system-viewer action.</figcaption>
+</figure>
+</div>
+
+- `j` / `k` or arrow keys: select an image
+- `Enter` or right arrow: render an inline terminal preview
+- `o`: open the selected file with the system default image viewer
+- `y`: copy the selected file path
+- `Esc` or `q`: close the gallery or return from the preview
+
+Inline previews use the optional [`chafa`](https://github.com/hpjansson/chafa) command. If it is unavailable, the preview shows the file path and metadata instead. Install it with:
+
+```bash
+# macOS
+brew install chafa
+```
+
+See [Image viewer](./docs/image-viewer.md) for supported image sources, controls, and fallback behavior.
+
 ## System support
 
-| System or environment | Support | Requirements and notes |
-| --- | --- | --- |
-| macOS | Supported | Use cmux 0.64+ or tmux; cmux preserves native scrolling, selection, and copying |
-| Linux | Supported | Requires tmux as the HUD pane backend |
-| WSL2 | Supported | Node.js, Codex, tmux, and Codex HUD must be installed in the same Linux distribution |
-| Native Windows | Full HUD unsupported | PowerShell, Command Prompt, and native Windows Terminal cannot create a supported HUD pane |
+| System or environment | Support              | Requirements and notes                                                                     |
+| --------------------- | -------------------- | ------------------------------------------------------------------------------------------ |
+| macOS                 | Supported            | Use cmux 0.64+ or tmux; cmux preserves native scrolling, selection, and copying            |
+| Linux                 | Supported            | Requires tmux as the HUD pane backend                                                      |
+| WSL2                  | Supported            | Node.js, Codex, tmux, and Codex HUD must be installed in the same Linux distribution       |
+| Native Windows        | Full HUD unsupported | PowerShell, Command Prompt, and native Windows Terminal cannot create a supported HUD pane |
 
 Every supported environment requires Node.js 20 or newer and a working official Codex CLI installation. `sqlite3` is optional and enables session titles and actual endpoint detection.
 
@@ -281,13 +318,13 @@ codex-hud render --once --cwd "$PWD" --no-color
 
 Common cases:
 
-| Symptom | Fix |
-| --- | --- |
-| Setup succeeded, but the current session has no HUD | Exit Codex, run `hash -r`, and start `codex` again |
-| `tmux: not found` | Install tmux; cmux users do not need it |
-| `Session: not found` | Run Codex and doctor with the same real project directory |
-| The command still resolves to an old launcher | Run `hash -r` or open a new terminal |
-| You want to confirm whether the HUD is involved | Temporarily use `codex --no-hud` |
+| Symptom                                             | Fix                                                       |
+| --------------------------------------------------- | --------------------------------------------------------- |
+| Setup succeeded, but the current session has no HUD | Exit Codex, run `hash -r`, and start `codex` again        |
+| `tmux: not found`                                   | Install tmux; cmux users do not need it                   |
+| `Session: not found`                                | Run Codex and doctor with the same real project directory |
+| The command still resolves to an old launcher       | Run `hash -r` or open a new terminal                      |
+| You want to confirm whether the HUD is involved     | Temporarily use `codex --no-hud`                          |
 
 ## Development
 

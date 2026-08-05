@@ -7,7 +7,7 @@ The conversation navigator expands the persistent Codex HUD pane into a terminal
 In its normal state, the HUD shows only the number of recorded user turns and an activation hint:
 
 ```text
-↕ Turns: 6 · click HUD and press n
+↕ Turns: 6 · click HUD or press F12, then n
 ```
 
 After activation, the same HUD pane expands and displays a searchable list:

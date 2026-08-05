@@ -6,8 +6,16 @@ import fs from 'node:fs'
 import process from 'node:process'
 import { pathToFileURL } from 'node:url'
 import { RolloutParser } from './codex/rollout-parser.js'
+import { resolveProcessSession } from './codex/session-endpoint.js'
 import { findActiveSession } from './codex/session-finder.js'
 import { loadConfig } from './config/load.js'
+import {
+  copyImagePath,
+  createImagePreview,
+  createImageViewerState,
+  openImage,
+  renderImageViewer,
+} from './images/viewer.js'
 import {
   createNavigatorState,
   matchingTurnIndices,
@@ -27,7 +35,7 @@ import {
   resizeHudPane,
   settleCmuxPaneHeight,
 } from './runtime/pane-size.js'
-import { readSessionBinding } from './runtime/session-binding.js'
+import { readSessionBinding, writeSessionBinding } from './runtime/session-binding.js'
 import { buildHudState } from './runtime/state.js'
 
 interface RenderCliOptions {
@@ -106,6 +114,7 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
   let loaded = loadConfig()
   const parser = new RolloutParser()
   const navigator = createNavigatorState()
+  const imageViewer = createImageViewerState()
   let currentSessionPath = options.sessionPath
   let lastDiscoveryAt = 0
   let sessionWatcher: fs.FSWatcher | null = null
@@ -120,6 +129,7 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
   let cmuxResizePending = false
   let cmuxSelfFraction: number | null = null
   let latestTurns = parser.getState().conversationTurns
+  let latestImages = parser.getState().images
   let codexPid: number | null = null
   const paneId = process.env.TMUX_PANE ?? null
   const configMtime = (): number => {
@@ -146,14 +156,27 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
         ? readSessionBinding(options.sessionBindingPath)
         : null
       codexPid = binding?.codexPid ?? codexPid
-      const bound = binding?.rolloutPath ?? null
+      let bound = binding?.rolloutPath ?? null
+      if (!bound && options.sessionBindingPath && codexPid) {
+        const processSession = resolveProcessSession(
+          codexPid,
+          options.cwd,
+          options.launchedAfter ?? startedAt,
+        )
+        if (processSession) {
+          bound = processSession.rolloutPath
+          writeSessionBinding(options.sessionBindingPath, bound, codexPid)
+        }
+      }
       const discovered = bound
         ? { path: bound }
-        : findActiveSession({
-            cwd: options.cwd,
-            launchedAfter: options.launchedAfter,
-            allowModifiedBeforeLaunch: options.allowModifiedSession,
-          })
+        : options.sessionBindingPath
+          ? null
+          : findActiveSession({
+              cwd: options.cwd,
+              launchedAfter: options.launchedAfter,
+              allowModifiedBeforeLaunch: options.allowModifiedSession,
+            })
       if (discovered?.path !== currentSessionPath) {
         currentSessionPath = discovered?.path ?? null
         parser.setFile(currentSessionPath)
@@ -178,34 +201,42 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
     const codexProcess = codexPid ? { pid: codexPid, launchedAt: options.launchedAfter ?? startedAt } : null
     const state = buildHudState(options.cwd, rollout, startedAt, loaded.config, new Date(), codexProcess)
     latestTurns = state.conversationTurns
+    latestImages = state.images
     const width = process.stdout.columns || Number(process.env.COLUMNS) || loaded.config.maxWidth || 120
     const constrainToViewport = options.once
       || Boolean(options.cmuxPaneId && (cmuxManualHeight || cmuxResizePending))
     const height = hudRenderHeight(options.maxHeight, process.stdout.rows, constrainToViewport)
-    const lines = navigator.active
-      ? renderNavigator(latestTurns, navigator, {
+    const lines = imageViewer.active
+      ? renderImageViewer(latestImages, imageViewer, {
           width,
           height,
           color: options.color,
           language: loaded.config.language,
-          sessionId: state.session?.id ?? null,
         })
-      : renderHud({
-          config: loaded.config,
-          state,
-          options: {
+      : navigator.active
+        ? renderNavigator(latestTurns, navigator, {
             width,
             height,
             color: options.color,
-          },
-          now: new Date(),
-        })
+            language: loaded.config.language,
+            sessionId: state.session?.id ?? null,
+          })
+        : renderHud({
+            config: loaded.config,
+            state,
+            options: {
+              width,
+              height,
+              color: options.color,
+            },
+            now: new Date(),
+          })
     const frame = lines.join('\n')
     if (options.once) {
       process.stdout.write(`${frame}\n`)
       return
     }
-    const desiredHeight = navigator.active
+    const desiredHeight = imageViewer.active || navigator.active
       ? options.maxHeight
       : desiredPaneHeight(lines.length, options.maxHeight)
     if (options.cmuxPaneId) {
@@ -296,6 +327,35 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
     render()
     focusCodexPane()
   }
+  const closeImageViewer = (): void => {
+    imageViewer.active = false
+    imageViewer.view = 'list'
+    imageViewer.previewScroll = 0
+    imageViewer.previewPath = null
+    imageViewer.previewLines = []
+    render()
+    focusCodexPane()
+  }
+  const selectedImage = () => latestImages[imageViewer.selectedIndex]
+  const loadImagePreview = (): void => {
+    const image = selectedImage()
+    if (!image) {
+      imageViewer.previewLines = []
+      imageViewer.previewPath = null
+      return
+    }
+    imageViewer.previewPath = image.path
+    imageViewer.previewScroll = 0
+    imageViewer.previewLines = createImagePreview(image, process.stdout.columns || 120, options.maxHeight)
+  }
+  const moveImageSelection = (delta: number): void => {
+    if (latestImages.length === 0)
+      return
+    imageViewer.selectedIndex = Math.min(
+      latestImages.length - 1,
+      Math.max(0, imageViewer.selectedIndex + delta),
+    )
+  }
   const moveSelection = (delta: number): void => {
     const matches = normalizeNavigatorSelection(navigator, latestTurns)
     if (matches.length === 0) {
@@ -312,7 +372,16 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
       shutdown()
       return
     }
-    if (!navigator.active) {
+    if (!navigator.active && !imageViewer.active) {
+      if (key === 'i' || key === 'I') {
+        if (latestImages.length === 0)
+          return
+        imageViewer.active = true
+        imageViewer.view = 'list'
+        imageViewer.selectedIndex = latestImages.length - 1
+        render()
+        return
+      }
       if (
         loaded.config.display.showTurns
         && (key === 'n' || key === 'N' || key === '\r')
@@ -325,6 +394,71 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
         navigator.selectedIndex = latestTurns.length - 1
         render()
       }
+      return
+    }
+    if (imageViewer.active) {
+      if (key === 'q' || key === 'Q') {
+        closeImageViewer()
+        return
+      }
+      if (imageViewer.view === 'preview') {
+        if (key === '\u001B' || key === 'h') {
+          imageViewer.view = 'list'
+          imageViewer.previewScroll = 0
+        }
+        else if (key === 'o' || key === 'O') {
+          const image = selectedImage()
+          if (image)
+            openImage(image)
+        }
+        else if (key === 'y' || key === 'Y') {
+          const image = selectedImage()
+          if (image)
+            copyImagePath(image)
+        }
+        else if (key === 'j' || key === '\u001B[B') {
+          imageViewer.previewScroll += 1
+        }
+        else if (key === 'k' || key === '\u001B[A') {
+          imageViewer.previewScroll = Math.max(0, imageViewer.previewScroll - 1)
+        }
+        else if (key === '\u001B[C') {
+          moveImageSelection(1)
+          loadImagePreview()
+        }
+        else if (key === '\u001B[D') {
+          moveImageSelection(-1)
+          loadImagePreview()
+        }
+        render()
+        return
+      }
+      if (key === '\u001B') {
+        closeImageViewer()
+      }
+      else if (key === 'j' || key === '\u001B[B') {
+        moveImageSelection(1)
+      }
+      else if (key === 'k' || key === '\u001B[A') {
+        moveImageSelection(-1)
+      }
+      else if (key === 'o' || key === 'O') {
+        const image = selectedImage()
+        if (image)
+          openImage(image)
+      }
+      else if (key === 'y' || key === 'Y') {
+        const image = selectedImage()
+        if (image)
+          copyImagePath(image)
+      }
+      else if (key === '\r' || key === 'l' || key === '\u001B[C') {
+        if (selectedImage()) {
+          imageViewer.view = 'preview'
+          loadImagePreview()
+        }
+      }
+      render()
       return
     }
     if (navigator.searchMode) {

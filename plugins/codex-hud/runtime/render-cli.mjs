@@ -1,11 +1,169 @@
 #!/usr/bin/env node
-import { A as RolloutParser, C as findActiveSession, _ as visibleWidth, c as desiredPaneHeight, d as resizeCmuxPane, f as resizeHudPane, g as truncateAnsi, h as safeText, l as hudRenderHeight, m as renderHud, p as settleCmuxPaneHeight, r as readSessionBinding, s as buildHudState, u as readCmuxPaneGeometry, v as sliceAnsi, y as loadConfig } from "./session-binding-at9jgMbt.mjs";
+import { C as findActiveSession, T as resolveProcessSession, _ as visibleWidth, c as desiredPaneHeight, d as resizeCmuxPane, f as resizeHudPane, g as truncateAnsi, h as safeText, j as RolloutParser, l as hudRenderHeight, m as renderHud, o as writeSessionBinding, p as settleCmuxPaneHeight, r as readSessionBinding, s as buildHudState, u as readCmuxPaneGeometry, v as sliceAnsi, y as loadConfig } from "./session-binding-CFN6lpi3.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 
+//#region src/images/viewer.ts
+const LABELS$1 = {
+	"en": {
+		title: "Image gallery",
+		images: "images",
+		noImages: "No available images",
+		missing: "Image file is no longer available",
+		listHelp: "j/k move · Enter preview · o open · y copy path · q/Esc close",
+		previewHelp: "←/→ previous/next · j/k scroll · o open · y copy path · q/Esc back",
+		open: "Open",
+		copied: "Path copied"
+	},
+	"zh-Hans": {
+		title: "图片画廊",
+		images: "张图片",
+		noImages: "没有可用图片",
+		missing: "图片文件已不存在",
+		listHelp: "j/k 选择 · Enter 预览 · o 打开 · y 复制路径 · q/Esc 关闭",
+		previewHelp: "←/→ 上一张/下一张 · j/k 滚动 · o 打开 · y 复制路径 · q/Esc 返回",
+		open: "打开",
+		copied: "路径已复制"
+	},
+	"zh-Hant": {
+		title: "圖片畫廊",
+		images: "張圖片",
+		noImages: "沒有可用圖片",
+		missing: "圖片檔案已不存在",
+		listHelp: "j/k 選擇 · Enter 預覽 · o 開啟 · y 複製路徑 · q/Esc 關閉",
+		previewHelp: "←/→ 上一張/下一張 · j/k 捲動 · o 開啟 · y 複製路徑 · q/Esc 返回",
+		open: "開啟",
+		copied: "路徑已複製"
+	}
+};
+function createImageViewerState() {
+	return {
+		active: false,
+		view: "list",
+		selectedIndex: 0,
+		previewScroll: 0,
+		previewPath: null,
+		previewLines: []
+	};
+}
+function imageInfo(image) {
+	try {
+		const stat = fs.statSync(image.path);
+		const size = stat.size < 1024 * 1024 ? `${Math.max(1, Math.round(stat.size / 1024))} KB` : `${(stat.size / (1024 * 1024)).toFixed(1)} MB`;
+		return `${path.extname(image.path).slice(1).toUpperCase()} · ${size}`;
+	} catch {
+		return "unavailable";
+	}
+}
+function timeLabel$1(image) {
+	return image.createdAt.toLocaleTimeString([], {
+		hour: "2-digit",
+		minute: "2-digit"
+	});
+}
+function padLine$1(value, width) {
+	const line = truncateAnsi(value, width);
+	return `${line}${" ".repeat(Math.max(0, width - visibleWidth(line)))}`;
+}
+function selectedIndex(state, images) {
+	if (images.length === 0) {
+		state.selectedIndex = 0;
+		return 0;
+	}
+	state.selectedIndex = Math.min(images.length - 1, Math.max(0, state.selectedIndex));
+	return state.selectedIndex;
+}
+function renderImageViewer(images, state, options) {
+	const labels = LABELS$1[options.language];
+	const width = Math.max(24, options.width);
+	const height = Math.max(8, options.height);
+	if (state.view === "preview" && images.length > 0) {
+		const image = images[selectedIndex(state, images)];
+		const header = `${labels.title} · ${String(state.selectedIndex + 1)}/${String(images.length)} · ${path.basename(image.path)}`;
+		const bodyHeight = Math.max(1, height - 2);
+		const maximumScroll = Math.max(0, state.previewLines.length - bodyHeight);
+		state.previewScroll = Math.min(maximumScroll, Math.max(0, state.previewScroll));
+		return [
+			truncateAnsi(header, width),
+			...state.previewLines.slice(state.previewScroll, state.previewScroll + bodyHeight).map((line) => truncateAnsi(line, width)),
+			truncateAnsi(labels.previewHelp, width)
+		].slice(0, height);
+	}
+	const header = `${labels.title} · ${String(images.length)} ${labels.images}`;
+	if (images.length === 0) return [
+		header,
+		labels.noImages,
+		labels.listHelp
+	].map((line) => truncateAnsi(line, width));
+	const rows = Math.max(1, height - 2);
+	const start = Math.max(0, Math.min(state.selectedIndex - Math.floor(rows / 2), images.length - rows));
+	const lines = [truncateAnsi(header, width)];
+	for (let index = start; index < Math.min(images.length, start + rows); index += 1) {
+		const image = images[index];
+		const row = `${index === selectedIndex(state, images) ? "> " : "  "}#${String(index + 1).padStart(2, "0")} ${timeLabel$1(image)} ${path.basename(image.path)} · ${imageInfo(image)}`;
+		lines.push(padLine$1(row, width));
+	}
+	lines.push(truncateAnsi(labels.listHelp, width));
+	return lines.slice(0, height);
+}
+function createImagePreview(image, width, height) {
+	const maxWidth = Math.max(20, width);
+	const maxHeight = Math.max(4, height - 3);
+	const result = spawnSync("chafa", [
+		"--format",
+		"symbols",
+		"--colors",
+		"256",
+		"--size",
+		`${String(maxWidth)}x${String(maxHeight)}`,
+		"--animate",
+		"off",
+		image.path
+	], {
+		encoding: "utf8",
+		stdio: [
+			"ignore",
+			"pipe",
+			"ignore"
+		],
+		timeout: 2e3
+	});
+	if (result.status === 0 && result.stdout.trim()) return result.stdout.replace(/\r/g, "").trimEnd().split("\n");
+	return [
+		`Path: ${image.path}`,
+		`Info: ${imageInfo(image)}`,
+		"",
+		"Inline preview requires chafa.",
+		"Press o to open with the system image viewer."
+	];
+}
+function openImage(image) {
+	if (process.platform === "darwin") spawnSync("open", [image.path], { stdio: "ignore" });
+	else if (process.platform === "win32") spawnSync("cmd", [
+		"/c",
+		"start",
+		"",
+		image.path
+	], { stdio: "ignore" });
+	else spawnSync("xdg-open", [image.path], { stdio: "ignore" });
+}
+function copyImagePath(image) {
+	const commands = process.platform === "darwin" ? [["pbcopy", []]] : [["wl-copy", []], ["xclip", ["-selection", "clipboard"]]];
+	for (const [command, args] of commands) if (spawnSync(command, args, {
+		input: image.path,
+		stdio: [
+			"pipe",
+			"ignore",
+			"ignore"
+		]
+	}).status === 0) return true;
+	return false;
+}
+
+//#endregion
 //#region src/navigator/index.ts
 const LABELS = {
 	"en": {
@@ -234,6 +392,7 @@ async function runRenderCli(args = process.argv.slice(2)) {
 	let loaded = loadConfig();
 	const parser = new RolloutParser();
 	const navigator = createNavigatorState();
+	const imageViewer = createImageViewerState();
 	let currentSessionPath = options.sessionPath;
 	let lastDiscoveryAt = 0;
 	let sessionWatcher = null;
@@ -248,6 +407,7 @@ async function runRenderCli(args = process.argv.slice(2)) {
 	let cmuxResizePending = false;
 	let cmuxSelfFraction = null;
 	let latestTurns = parser.getState().conversationTurns;
+	let latestImages = parser.getState().images;
 	let codexPid = null;
 	const paneId = process.env.TMUX_PANE ?? null;
 	const configMtime = () => {
@@ -270,8 +430,15 @@ async function runRenderCli(args = process.argv.slice(2)) {
 			lastDiscoveryAt = nowMs;
 			const binding = options.sessionBindingPath ? readSessionBinding(options.sessionBindingPath) : null;
 			codexPid = binding?.codexPid ?? codexPid;
-			const bound = binding?.rolloutPath ?? null;
-			const discovered = bound ? { path: bound } : findActiveSession({
+			let bound = binding?.rolloutPath ?? null;
+			if (!bound && options.sessionBindingPath && codexPid) {
+				const processSession = resolveProcessSession(codexPid, options.cwd, options.launchedAfter ?? startedAt);
+				if (processSession) {
+					bound = processSession.rolloutPath;
+					writeSessionBinding(options.sessionBindingPath, bound, codexPid);
+				}
+			}
+			const discovered = bound ? { path: bound } : options.sessionBindingPath ? null : findActiveSession({
 				cwd: options.cwd,
 				launchedAfter: options.launchedAfter,
 				allowModifiedBeforeLaunch: options.allowModifiedSession
@@ -298,10 +465,16 @@ async function runRenderCli(args = process.argv.slice(2)) {
 		} : null;
 		const state = buildHudState(options.cwd, rollout, startedAt, loaded.config, /* @__PURE__ */ new Date(), codexProcess);
 		latestTurns = state.conversationTurns;
+		latestImages = state.images;
 		const width = process.stdout.columns || Number(process.env.COLUMNS) || loaded.config.maxWidth || 120;
 		const constrainToViewport = options.once || Boolean(options.cmuxPaneId && (cmuxManualHeight || cmuxResizePending));
 		const height = hudRenderHeight(options.maxHeight, process.stdout.rows, constrainToViewport);
-		const lines = navigator.active ? renderNavigator(latestTurns, navigator, {
+		const lines = imageViewer.active ? renderImageViewer(latestImages, imageViewer, {
+			width,
+			height,
+			color: options.color,
+			language: loaded.config.language
+		}) : navigator.active ? renderNavigator(latestTurns, navigator, {
 			width,
 			height,
 			color: options.color,
@@ -322,7 +495,7 @@ async function runRenderCli(args = process.argv.slice(2)) {
 			process.stdout.write(`${frame}\n`);
 			return;
 		}
-		const desiredHeight = navigator.active ? options.maxHeight : desiredPaneHeight(lines.length, options.maxHeight);
+		const desiredHeight = imageViewer.active || navigator.active ? options.maxHeight : desiredPaneHeight(lines.length, options.maxHeight);
 		if (options.cmuxPaneId) {
 			if (!cmuxManualHeight && !cmuxResizePending) {
 				const resized = resizeCmuxPane(options.cmuxPaneId, options.cmuxSourcePaneId, options.cmuxWorkspaceId, desiredHeight, process.stdout.rows, paneHeight);
@@ -387,6 +560,31 @@ async function runRenderCli(args = process.argv.slice(2)) {
 		render();
 		focusCodexPane();
 	};
+	const closeImageViewer = () => {
+		imageViewer.active = false;
+		imageViewer.view = "list";
+		imageViewer.previewScroll = 0;
+		imageViewer.previewPath = null;
+		imageViewer.previewLines = [];
+		render();
+		focusCodexPane();
+	};
+	const selectedImage = () => latestImages[imageViewer.selectedIndex];
+	const loadImagePreview = () => {
+		const image = selectedImage();
+		if (!image) {
+			imageViewer.previewLines = [];
+			imageViewer.previewPath = null;
+			return;
+		}
+		imageViewer.previewPath = image.path;
+		imageViewer.previewScroll = 0;
+		imageViewer.previewLines = createImagePreview(image, process.stdout.columns || 120, options.maxHeight);
+	};
+	const moveImageSelection = (delta) => {
+		if (latestImages.length === 0) return;
+		imageViewer.selectedIndex = Math.min(latestImages.length - 1, Math.max(0, imageViewer.selectedIndex + delta));
+	};
 	const moveSelection = (delta) => {
 		const matches = normalizeNavigatorSelection(navigator, latestTurns);
 		if (matches.length === 0) return;
@@ -401,7 +599,15 @@ async function runRenderCli(args = process.argv.slice(2)) {
 			shutdown();
 			return;
 		}
-		if (!navigator.active) {
+		if (!navigator.active && !imageViewer.active) {
+			if (key === "i" || key === "I") {
+				if (latestImages.length === 0) return;
+				imageViewer.active = true;
+				imageViewer.view = "list";
+				imageViewer.selectedIndex = latestImages.length - 1;
+				render();
+				return;
+			}
 			if (loaded.config.display.showTurns && (key === "n" || key === "N" || key === "\r") && latestTurns.length > 0) {
 				navigator.active = true;
 				navigator.view = "list";
@@ -410,6 +616,51 @@ async function runRenderCli(args = process.argv.slice(2)) {
 				navigator.selectedIndex = latestTurns.length - 1;
 				render();
 			}
+			return;
+		}
+		if (imageViewer.active) {
+			if (key === "q" || key === "Q") {
+				closeImageViewer();
+				return;
+			}
+			if (imageViewer.view === "preview") {
+				if (key === "\x1B" || key === "h") {
+					imageViewer.view = "list";
+					imageViewer.previewScroll = 0;
+				} else if (key === "o" || key === "O") {
+					const image = selectedImage();
+					if (image) openImage(image);
+				} else if (key === "y" || key === "Y") {
+					const image = selectedImage();
+					if (image) copyImagePath(image);
+				} else if (key === "j" || key === "\x1B[B") imageViewer.previewScroll += 1;
+				else if (key === "k" || key === "\x1B[A") imageViewer.previewScroll = Math.max(0, imageViewer.previewScroll - 1);
+				else if (key === "\x1B[C") {
+					moveImageSelection(1);
+					loadImagePreview();
+				} else if (key === "\x1B[D") {
+					moveImageSelection(-1);
+					loadImagePreview();
+				}
+				render();
+				return;
+			}
+			if (key === "\x1B") closeImageViewer();
+			else if (key === "j" || key === "\x1B[B") moveImageSelection(1);
+			else if (key === "k" || key === "\x1B[A") moveImageSelection(-1);
+			else if (key === "o" || key === "O") {
+				const image = selectedImage();
+				if (image) openImage(image);
+			} else if (key === "y" || key === "Y") {
+				const image = selectedImage();
+				if (image) copyImagePath(image);
+			} else if (key === "\r" || key === "l" || key === "\x1B[C") {
+				if (selectedImage()) {
+					imageViewer.view = "preview";
+					loadImagePreview();
+				}
+			}
+			render();
 			return;
 		}
 		if (navigator.searchMode) {

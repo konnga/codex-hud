@@ -89,7 +89,7 @@ describe('tmux launcher', () => {
     expect(calls.some(call => call[0] === 'split-window')).toBe(true)
     expect(calls.find(call => call[0] === 'split-window')).toContain('5')
     expect(calls.some(call => call.includes('status') && call.includes('off'))).toBe(true)
-    expect(calls).toContainEqual(['set-option', '-t', launched.sessionName!, 'mouse', 'on'])
+    expect(calls).toContainEqual(['set-option', '-t', launched.sessionName!, 'mouse', 'off'])
     expect(calls).toContainEqual(['set-option', '-t', launched.sessionName!, 'prefix', 'None'])
     expect(calls).toContainEqual(['set-option', '-t', launched.sessionName!, 'prefix2', 'None'])
     expect(calls).toContainEqual(['set-option', '-s', 'focus-events', 'on'])
@@ -101,6 +101,17 @@ describe('tmux launcher', () => {
       `${launched.sessionName}:0`,
       'allow-passthrough',
       'on',
+    ])
+    expect(calls).toContainEqual([
+      'bind-key',
+      '-T',
+      'root',
+      'F12',
+      'if-shell',
+      '-F',
+      '#{==:#{pane_id},%2}',
+      `select-pane -t ${launched.sessionName}:0.0`,
+      'select-pane -t %2',
     ])
     expect(calls.find(call => call[0] === 'new-session')?.at(-1)).not.toContain('--wait-for-client')
     expect(calls.find(call => call[0] === 'new-session')?.at(-1)).toContain('/tmp/codex-hud-binding.json')
