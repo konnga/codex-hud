@@ -2209,7 +2209,7 @@ function launchNewTmuxSession(options, runner = createTmuxRunner(options.env, op
 		"-t",
 		sessionName,
 		"mouse",
-		"off"
+		"on"
 	]);
 	runner.run([
 		"set-option",

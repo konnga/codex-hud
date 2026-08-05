@@ -163,10 +163,10 @@ export function launchNewTmuxSession(
   runner.run(['set-option', '-t', sessionName, 'remain-on-exit', 'off'])
   runner.run(['set-option', '-t', sessionName, 'pane-border-status', 'off'])
   runner.run(['set-option', '-t', sessionName, 'status', 'off'])
-  // Keep native terminal drag-selection and Cmd-C available. The HUD uses
-  // keyboard input for its interactive views, so tmux mouse capture is not
-  // required for the managed session.
-  runner.run(['set-option', '-t', sessionName, 'mouse', 'off'])
+  // Let tmux own wheel scrolling and pane selection in HUD-managed sessions.
+  // Native terminal selection remains available through the terminal's
+  // mouse-bypass modifier (for example Option in macOS Terminal).
+  runner.run(['set-option', '-t', sessionName, 'mouse', 'on'])
   runner.run(['set-option', '-t', sessionName, 'prefix', 'None'])
   runner.run(['set-option', '-t', sessionName, 'prefix2', 'None'])
   runner.run(['set-option', '-s', 'focus-events', 'on'])

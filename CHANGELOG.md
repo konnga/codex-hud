@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## 0.4.1 - 2026-08-05
+
+### Fixed
+
+- Restored tmux mouse handling in HUD-managed sessions so wheel scrolling uses tmux history and clicking the HUD pane allows its navigator and image-gallery shortcuts to receive input.
+
+---
+
+### 修复
+
+- 恢复 HUD 托管 tmux 会话的鼠标处理，使滚轮查看 tmux 历史，并允许点击 HUD pane 后使用导航器和图片画廊快捷键。
+
 ## 0.4.0 - 2026-08-05
 
 ### Added

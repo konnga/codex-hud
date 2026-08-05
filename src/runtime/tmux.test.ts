@@ -89,7 +89,7 @@ describe('tmux launcher', () => {
     expect(calls.some(call => call[0] === 'split-window')).toBe(true)
     expect(calls.find(call => call[0] === 'split-window')).toContain('5')
     expect(calls.some(call => call.includes('status') && call.includes('off'))).toBe(true)
-    expect(calls).toContainEqual(['set-option', '-t', launched.sessionName!, 'mouse', 'off'])
+    expect(calls).toContainEqual(['set-option', '-t', launched.sessionName!, 'mouse', 'on'])
     expect(calls).toContainEqual(['set-option', '-t', launched.sessionName!, 'prefix', 'None'])
     expect(calls).toContainEqual(['set-option', '-t', launched.sessionName!, 'prefix2', 'None'])
     expect(calls).toContainEqual(['set-option', '-s', 'focus-events', 'on'])
