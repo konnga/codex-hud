@@ -3,6 +3,7 @@ import type { HudConfig, Language, LineLayout } from '../types/config.js'
 // @env node
 import process from 'node:process'
 import * as prompts from '@clack/prompts'
+import { readLatestLoggedRateLimits } from '../codex/log-rate-limits.js'
 import { RolloutParser } from '../codex/rollout-parser.js'
 import { findActiveSession } from '../codex/session-finder.js'
 import {
@@ -89,7 +90,9 @@ function preview(config: HudConfig): string {
   const candidate = findActiveSession({ cwd: process.cwd() })
   parser.setFile(candidate?.path ?? null)
   const now = new Date()
-  const state = buildHudState(process.cwd(), parser.parse(), now, config, now)
+  const rollout = parser.parse()
+  const loggedUsage = readLatestLoggedRateLimits(process.env, now.getTime())?.usage ?? null
+  const state = buildHudState(process.cwd(), rollout, now, config, now, null, loggedUsage)
   return renderHud({
     config,
     state,

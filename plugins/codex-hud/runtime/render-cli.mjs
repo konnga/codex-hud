@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { C as findActiveSession, T as resolveProcessSession, _ as visibleWidth, c as desiredPaneHeight, d as resizeCmuxPane, f as resizeHudPane, g as truncateAnsi, h as safeText, j as RolloutParser, l as hudRenderHeight, m as renderHud, o as writeSessionBinding, p as settleCmuxPaneHeight, r as readSessionBinding, s as buildHudState, u as readCmuxPaneGeometry, v as sliceAnsi, y as loadConfig } from "./session-binding-CFN6lpi3.mjs";
+import { C as readLatestLoggedRateLimits, E as resolveProcessSession, M as RolloutParser, _ as visibleWidth, c as desiredPaneHeight, d as resizeCmuxPane, f as resizeHudPane, g as truncateAnsi, h as safeText, l as hudRenderHeight, m as renderHud, o as writeSessionBinding, p as settleCmuxPaneHeight, r as readSessionBinding, s as buildHudState, u as readCmuxPaneGeometry, v as sliceAnsi, w as findActiveSession, y as loadConfig } from "./session-binding-CpXPrdLv.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -463,7 +463,9 @@ async function runRenderCli(args = process.argv.slice(2)) {
 			pid: codexPid,
 			launchedAt: options.launchedAfter ?? startedAt
 		} : null;
-		const state = buildHudState(options.cwd, rollout, startedAt, loaded.config, /* @__PURE__ */ new Date(), codexProcess);
+		const now = /* @__PURE__ */ new Date();
+		const loggedUsage = loaded.config.display.showUsage || loaded.config.display.showAuth ? readLatestLoggedRateLimits(process.env, now.getTime())?.usage ?? null : null;
+		const state = buildHudState(options.cwd, rollout, startedAt, loaded.config, now, codexProcess, loggedUsage);
 		latestTurns = state.conversationTurns;
 		latestImages = state.images;
 		const width = process.stdout.columns || Number(process.env.COLUMNS) || loaded.config.maxWidth || 120;

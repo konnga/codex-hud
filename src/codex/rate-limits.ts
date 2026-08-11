@@ -85,3 +85,56 @@ export function normalizeRateLimits(raw: RawRateLimits | null | undefined): Usag
       : raw.spend_control_reached === true ? 'spend_control_reached' : null,
   }
 }
+
+function sameWindow(left: UsageWindow, right: UsageWindow): boolean {
+  if (left.windowMinutes !== null && left.windowMinutes !== undefined
+    && right.windowMinutes !== null && right.windowMinutes !== undefined) {
+    return left.windowMinutes === right.windowMinutes
+  }
+  if (left.label !== 'limit' && right.label !== 'limit' && left.label === right.label) {
+    return true
+  }
+  return Boolean(
+    left.resetAt
+    && right.resetAt
+    && Math.abs(left.resetAt.getTime() - right.resetAt.getTime()) <= 60_000,
+  )
+}
+
+function mergeWindows(current: UsageData, observed: UsageData): [UsageWindow | null, UsageWindow | null] {
+  const windows = [current.primary, current.secondary]
+    .filter((window): window is UsageWindow => Boolean(window))
+  for (const window of [observed.primary, observed.secondary]) {
+    if (!window) {
+      continue
+    }
+    const index = windows.findIndex(candidate => sameWindow(candidate, window))
+    if (index >= 0) {
+      windows[index] = window
+    }
+    else {
+      windows.push(window)
+    }
+  }
+  windows.sort((left, right) => (left.windowMinutes ?? Number.MAX_SAFE_INTEGER) - (right.windowMinutes ?? Number.MAX_SAFE_INTEGER))
+  return [windows[0] ?? null, windows[1] ?? null]
+}
+
+/** Merge a newer account-wide observation without confusing its window slots. */
+export function mergeUsageData(current: UsageData | null, observed: UsageData | null): UsageData | null {
+  if (!current) {
+    return observed
+  }
+  if (!observed) {
+    return current
+  }
+  const [primary, secondary] = mergeWindows(current, observed)
+  return {
+    primary,
+    secondary,
+    individual: observed.individual ?? current.individual,
+    planType: observed.planType ?? current.planType,
+    balanceLabel: observed.balanceLabel ?? current.balanceLabel,
+    limitReachedType: observed.limitReachedType ?? current.limitReachedType,
+  }
+}

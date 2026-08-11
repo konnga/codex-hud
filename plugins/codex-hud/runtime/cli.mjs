@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { A as getLegacyStateDirectory, C as findActiveSession, D as getCodexHome, E as resolveSessionEndpoint, O as getConfigPath, S as DEFAULT_CONFIG, a as waitForNewRootSession, b as applyConfigMigrations, i as snapshotRootSessions, j as RolloutParser, k as getHudStateDirectory, m as renderHud, n as createSessionBindingPath, o as writeSessionBinding, s as buildHudState, t as acquireSessionDiscoveryLock, w as findCodexLogDatabase, x as rawConfigVersion, y as loadConfig } from "./session-binding-CFN6lpi3.mjs";
+import { A as getHudStateDirectory, C as readLatestLoggedRateLimits, D as resolveSessionEndpoint, M as RolloutParser, O as getCodexHome, S as DEFAULT_CONFIG, T as findCodexLogDatabase, a as waitForNewRootSession, b as applyConfigMigrations, i as snapshotRootSessions, j as getLegacyStateDirectory, k as getConfigPath, m as renderHud, n as createSessionBindingPath, o as writeSessionBinding, s as buildHudState, t as acquireSessionDiscoveryLock, w as findActiveSession, x as rawConfigVersion, y as loadConfig } from "./session-binding-CpXPrdLv.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import process$1, { stdin, stdout } from "node:process";
@@ -1375,9 +1375,11 @@ function preview(config) {
 	const candidate = findActiveSession({ cwd: process$1.cwd() });
 	parser.setFile(candidate?.path ?? null);
 	const now = /* @__PURE__ */ new Date();
+	const rollout = parser.parse();
+	const loggedUsage = readLatestLoggedRateLimits(process$1.env, now.getTime())?.usage ?? null;
 	return renderHud({
 		config,
-		state: buildHudState(process$1.cwd(), parser.parse(), now, config, now),
+		state: buildHudState(process$1.cwd(), rollout, now, config, now, null, loggedUsage),
 		options: {
 			width: Math.min(process$1.stdout.columns || 120, 140),
 			height: 30,

@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## 0.4.2 - 2026-08-11
+
+### Fixed
+
+- Kept the weekly account quota synchronized across open HUD sessions, including custom providers whose rollout token-count events contain null rate limits. The HUD now consumes Codex's account-level rate-limit events, merges updates by window duration so 5h and 1w limits remain distinct, and shares a private cached snapshot across renderer processes and log rotation.
+
+---
+
+### 修复
+
+- 修复多个已打开 HUD 会话之间的周额度同步，包括 rollout token-count 事件中额度为空的自定义 provider。HUD 现在读取 Codex 的账户级额度事件，按窗口时长合并更新以避免混淆 5h 与 1w，并通过私有缓存快照在多个 renderer 进程及日志轮转后继续共享最新额度。
+
 ## 0.4.1 - 2026-08-05
 
 ### Fixed

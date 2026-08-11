@@ -129,6 +129,36 @@ function normalizeRateLimits(raw) {
 		limitReachedType: typeof raw.rate_limit_reached_type === "string" ? raw.rate_limit_reached_type : raw.spend_control_reached === true ? "spend_control_reached" : null
 	};
 }
+function sameWindow(left, right) {
+	if (left.windowMinutes !== null && left.windowMinutes !== void 0 && right.windowMinutes !== null && right.windowMinutes !== void 0) return left.windowMinutes === right.windowMinutes;
+	if (left.label !== "limit" && right.label !== "limit" && left.label === right.label) return true;
+	return Boolean(left.resetAt && right.resetAt && Math.abs(left.resetAt.getTime() - right.resetAt.getTime()) <= 6e4);
+}
+function mergeWindows(current, observed) {
+	const windows = [current.primary, current.secondary].filter((window) => Boolean(window));
+	for (const window of [observed.primary, observed.secondary]) {
+		if (!window) continue;
+		const index = windows.findIndex((candidate) => sameWindow(candidate, window));
+		if (index >= 0) windows[index] = window;
+		else windows.push(window);
+	}
+	windows.sort((left, right) => (left.windowMinutes ?? Number.MAX_SAFE_INTEGER) - (right.windowMinutes ?? Number.MAX_SAFE_INTEGER));
+	return [windows[0] ?? null, windows[1] ?? null];
+}
+/** Merge a newer account-wide observation without confusing its window slots. */
+function mergeUsageData(current, observed) {
+	if (!current) return observed;
+	if (!observed) return current;
+	const [primary, secondary] = mergeWindows(current, observed);
+	return {
+		primary,
+		secondary,
+		individual: observed.individual ?? current.individual,
+		planType: observed.planType ?? current.planType,
+		balanceLabel: observed.balanceLabel ?? current.balanceLabel,
+		limitReachedType: observed.limitReachedType ?? current.limitReachedType
+	};
+}
 
 //#endregion
 //#region src/codex/rollout-parser.ts
@@ -545,7 +575,7 @@ function getLegacyStateDirectory(env = process.env) {
 //#region src/codex/session-endpoint.ts
 const SESSION_ID_PATTERN = /^[\w-]{1,128}$/;
 const LOG_DATABASE_PATTERN = /^logs(?:_(\d+))?\.sqlite$/;
-const QUERY_TIMEOUT_MS = 750;
+const QUERY_TIMEOUT_MS$1 = 750;
 const PROCESS_SESSION_QUERY_TIMEOUT_MS = 3e3;
 const ENDPOINT_CACHE_MS = 3e4;
 const PROCESS_SESSION_CACHE_MS = 1e3;
@@ -575,7 +605,7 @@ function findCodexLogDatabase(codexHome = getCodexHome()) {
 	}
 	return best?.file ?? null;
 }
-function query(database, sql, timeout = QUERY_TIMEOUT_MS) {
+function query(database, sql, timeout = QUERY_TIMEOUT_MS$1) {
 	const result = spawnSync("sqlite3", [
 		"-readonly",
 		"-noheader",
@@ -620,7 +650,7 @@ function processFamily(pid) {
 			"pipe",
 			"ignore"
 		],
-		timeout: QUERY_TIMEOUT_MS
+		timeout: QUERY_TIMEOUT_MS$1
 	});
 	return [pid, ...typeof result.stdout === "string" ? result.stdout.split("\n").map((line) => Number.parseInt(line.trim(), 10)).filter(Number.isInteger) : []];
 }
@@ -896,6 +926,182 @@ function findActiveSession(options) {
 	const launchedAfterMs = options.launchedAfter?.getTime() ?? 0;
 	const allowModifiedBeforeLaunch = options.allowModifiedBeforeLaunch ?? true;
 	return listSessionCandidates(options.codexHome).filter((candidate) => !isSubagentSource(candidate.source)).filter((candidate) => isWithinProject(candidate.cwd, options.cwd)).filter((candidate) => candidate.mtimeMs >= now.getTime() - maxAgeMs).filter((candidate) => candidate.startTime.getTime() >= launchedAfterMs || allowModifiedBeforeLaunch && candidate.mtimeMs >= launchedAfterMs).sort((left, right) => right.mtimeMs - left.mtimeMs)[0] ?? null;
+}
+
+//#endregion
+//#region src/codex/log-rate-limits.ts
+const EVENT_PREFIX = "SSE event: ";
+const QUERY_TIMEOUT_MS = 750;
+const CACHE_MS$2 = 15e3;
+const MAX_EVENT_AGE_SECONDS = 11520 * 60;
+const RESETLESS_FRESHNESS_MS = 360 * 60 * 1e3;
+const MAX_ROW_LOOKBACK = 2e5;
+const SNAPSHOT_FILE_NAME = "account-usage.json";
+const MAX_STORED_BODY_LENGTH = 16384;
+const cache$3 = /* @__PURE__ */ new Map();
+function record$1(value) {
+	return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+}
+function decodeHex(value) {
+	if (!value || value.length % 2 !== 0 || !/^[\dA-F]+$/i.test(value)) return null;
+	try {
+		return Buffer.from(value, "hex").toString("utf8");
+	} catch {
+		return null;
+	}
+}
+function parseEvent(body) {
+	const marker = body.indexOf(EVENT_PREFIX);
+	if (marker < 0) return null;
+	try {
+		const event = record$1(JSON.parse(body.slice(marker + 11)));
+		const limits = record$1(event?.rate_limits);
+		if (event?.type !== "codex.rate_limits" || !limits) return null;
+		return normalizeRateLimits({
+			...limits,
+			credits: record$1(event.credits),
+			plan_type: typeof event.plan_type === "string" ? event.plan_type : null,
+			rate_limit_reached_type: limits.limit_reached === true ? "rate_limit_reached" : null
+		});
+	} catch {
+		return null;
+	}
+}
+function freshWindow(window, observedAt, now) {
+	if (!window) return null;
+	if (window.resetAt) return window.resetAt.getTime() > now ? window : null;
+	return now - observedAt.getTime() <= RESETLESS_FRESHNESS_MS ? window : null;
+}
+function freshUsage(usage, observedAt, now) {
+	const primary = freshWindow(usage.primary, observedAt, now);
+	const secondary = freshWindow(usage.secondary, observedAt, now);
+	const individual = freshWindow(usage.individual, observedAt, now);
+	if (!primary && !secondary && !individual && !usage.balanceLabel) return null;
+	return {
+		...usage,
+		primary,
+		secondary,
+		individual
+	};
+}
+function cloneSnapshot(value) {
+	return value ? structuredClone(value) : null;
+}
+function storedSnapshotPath(env) {
+	return path.join(getHudStateDirectory(env), SNAPSHOT_FILE_NAME);
+}
+function readStoredSnapshot(env, now) {
+	try {
+		const stored = record$1(JSON.parse(fs.readFileSync(storedSnapshotPath(env), "utf8")));
+		if (stored?.version !== 1 || typeof stored.body !== "string" || stored.body.length > MAX_STORED_BODY_LENGTH) return null;
+		const observedAt = typeof stored.observed_at === "string" ? new Date(stored.observed_at) : null;
+		if (!observedAt || Number.isNaN(observedAt.getTime()) || now - observedAt.getTime() > MAX_EVENT_AGE_SECONDS * 1e3) return null;
+		const usage = parseEvent(stored.body);
+		const fresh = usage ? freshUsage(usage, observedAt, now) : null;
+		return fresh ? {
+			usage: fresh,
+			observedAt
+		} : null;
+	} catch {
+		return null;
+	}
+}
+function writeStoredSnapshot(env, body, observedAt, now) {
+	if (body.length > MAX_STORED_BODY_LENGTH) return;
+	const existing = readStoredSnapshot(env, now);
+	if (existing && existing.observedAt.getTime() > observedAt.getTime()) return;
+	const filePath = storedSnapshotPath(env);
+	const temporaryPath = `${filePath}.${process.pid}.tmp`;
+	try {
+		fs.mkdirSync(path.dirname(filePath), {
+			recursive: true,
+			mode: 448
+		});
+		fs.writeFileSync(temporaryPath, `${JSON.stringify({
+			version: 1,
+			observed_at: observedAt.toISOString(),
+			body
+		}, null, 2)}\n`, {
+			encoding: "utf8",
+			mode: 384
+		});
+		fs.renameSync(temporaryPath, filePath);
+		fs.chmodSync(filePath, 384);
+	} catch {
+		try {
+			fs.rmSync(temporaryPath, { force: true });
+		} catch {}
+	}
+}
+/**
+* Codex currently logs `codex.rate_limits` SSE events but does not copy them
+* into rollout token-count events for every provider. The newest event under a
+* Codex home is account-wide, so persist it for other open HUD processes too.
+*/
+function readLatestLoggedRateLimits(env = process.env, now = Date.now()) {
+	const codexHome = getCodexHome(env);
+	const cached = cache$3.get(codexHome);
+	if (cached && now - cached.at < CACHE_MS$2) return cloneSnapshot(cached.value);
+	const remember = (value) => {
+		cache$3.set(codexHome, {
+			at: now,
+			value: cloneSnapshot(value)
+		});
+		return cloneSnapshot(value);
+	};
+	let previous = readStoredSnapshot(env, now);
+	if (cached?.value) {
+		const fallback = freshUsage(cached.value.usage, cached.value.observedAt, now);
+		if (fallback) previous = {
+			usage: fallback,
+			observedAt: cached.value.observedAt
+		};
+	}
+	const database = findCodexLogDatabase(codexHome);
+	if (!database) return remember(previous);
+	const since = Math.floor(now / 1e3) - MAX_EVENT_AGE_SECONDS;
+	const result = spawnSync("sqlite3", [
+		"-readonly",
+		"-noheader",
+		"-batch",
+		database,
+		[
+			`SELECT ts || '|' || hex(feedback_log_body)`,
+			"  FROM logs",
+			` WHERE id >= (SELECT max(id) - ${MAX_ROW_LOOKBACK} FROM logs)`,
+			`   AND ts >= ${since}`,
+			`   AND target = 'codex_api::sse::responses'`,
+			`   AND instr(feedback_log_body, '"type":"codex.rate_limits"') > 0`,
+			" ORDER BY id DESC",
+			" LIMIT 1;"
+		].join("\n")
+	], {
+		encoding: "utf8",
+		stdio: [
+			"ignore",
+			"pipe",
+			"ignore"
+		],
+		timeout: QUERY_TIMEOUT_MS
+	});
+	if (typeof result.stdout !== "string") return remember(previous);
+	for (const line of result.stdout.split("\n")) {
+		const [timestampValue, bodyValue] = line.split("|");
+		const timestamp = Number(timestampValue);
+		const body = decodeHex(bodyValue ?? "");
+		if (!Number.isFinite(timestamp) || !body) continue;
+		const observedAt = /* @__PURE__ */ new Date(timestamp * 1e3);
+		const usage = parseEvent(body);
+		const fresh = usage ? freshUsage(usage, observedAt, now) : null;
+		if (fresh) {
+			writeStoredSnapshot(env, body, observedAt, now);
+			return remember({
+				usage: fresh,
+				observedAt
+			});
+		}
+	}
+	return remember(previous);
 }
 
 //#endregion
@@ -5218,9 +5424,9 @@ function collectSessionTitle(session, env = process.env) {
 
 //#endregion
 //#region src/runtime/state.ts
-function buildHudState(cwd, rollout, sessionStart, config, now = /* @__PURE__ */ new Date(), codexProcess = null) {
+function buildHudState(cwd, rollout, sessionStart, config, now = /* @__PURE__ */ new Date(), codexProcess = null, loggedUsage = null) {
 	const workspaceRoots = rollout.session?.workspaceRoots ?? [];
-	const usage = resolveUsageData(rollout.usage, config.display, now);
+	const usage = resolveUsageData(mergeUsageData(rollout.usage, loggedUsage), config.display, now);
 	const title = config.display.showSessionName ? collectSessionTitle(rollout.session) : null;
 	const session = rollout.session ? {
 		...rollout.session,
@@ -5367,5 +5573,5 @@ async function waitForNewRootSession(cwd, snapshot, codexHome = getCodexHome(), 
 }
 
 //#endregion
-export { getLegacyStateDirectory as A, findActiveSession as C, getCodexHome as D, resolveSessionEndpoint as E, getConfigPath as O, DEFAULT_CONFIG as S, resolveProcessSession as T, visibleWidth as _, waitForNewRootSession as a, applyConfigMigrations as b, desiredPaneHeight as c, resizeCmuxPane as d, resizeHudPane as f, truncateAnsi as g, safeText as h, snapshotRootSessions as i, RolloutParser as j, getHudStateDirectory as k, hudRenderHeight as l, renderHud as m, createSessionBindingPath as n, writeSessionBinding as o, settleCmuxPaneHeight as p, readSessionBinding as r, buildHudState as s, acquireSessionDiscoveryLock as t, readCmuxPaneGeometry as u, sliceAnsi as v, findCodexLogDatabase as w, rawConfigVersion as x, loadConfig as y };
-//# sourceMappingURL=session-binding-CFN6lpi3.mjs.map
+export { getHudStateDirectory as A, readLatestLoggedRateLimits as C, resolveSessionEndpoint as D, resolveProcessSession as E, RolloutParser as M, getCodexHome as O, DEFAULT_CONFIG as S, findCodexLogDatabase as T, visibleWidth as _, waitForNewRootSession as a, applyConfigMigrations as b, desiredPaneHeight as c, resizeCmuxPane as d, resizeHudPane as f, truncateAnsi as g, safeText as h, snapshotRootSessions as i, getLegacyStateDirectory as j, getConfigPath as k, hudRenderHeight as l, renderHud as m, createSessionBindingPath as n, writeSessionBinding as o, settleCmuxPaneHeight as p, readSessionBinding as r, buildHudState as s, acquireSessionDiscoveryLock as t, readCmuxPaneGeometry as u, sliceAnsi as v, findActiveSession as w, rawConfigVersion as x, loadConfig as y };
+//# sourceMappingURL=session-binding-CpXPrdLv.mjs.map

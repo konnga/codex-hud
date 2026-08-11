@@ -5,6 +5,7 @@ import fs from 'node:fs'
 // @env node
 import process from 'node:process'
 import { pathToFileURL } from 'node:url'
+import { readLatestLoggedRateLimits } from './codex/log-rate-limits.js'
 import { RolloutParser } from './codex/rollout-parser.js'
 import { resolveProcessSession } from './codex/session-endpoint.js'
 import { findActiveSession } from './codex/session-finder.js'
@@ -199,7 +200,11 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
     }
     const rollout = parser.parse()
     const codexProcess = codexPid ? { pid: codexPid, launchedAt: options.launchedAfter ?? startedAt } : null
-    const state = buildHudState(options.cwd, rollout, startedAt, loaded.config, new Date(), codexProcess)
+    const now = new Date()
+    const loggedUsage = loaded.config.display.showUsage || loaded.config.display.showAuth
+      ? readLatestLoggedRateLimits(process.env, now.getTime())?.usage ?? null
+      : null
+    const state = buildHudState(options.cwd, rollout, startedAt, loaded.config, now, codexProcess, loggedUsage)
     latestTurns = state.conversationTurns
     latestImages = state.images
     const width = process.stdout.columns || Number(process.env.COLUMNS) || loaded.config.maxWidth || 120

@@ -2,9 +2,10 @@
 import type { ParsedRolloutState } from '../codex/rollout-parser.js'
 import type { CodexProcess } from '../collectors/session-metadata.js'
 import type { HudConfig } from '../types/config.js'
-import type { HudState } from '../types/state.js'
+import type { HudState, UsageData } from '../types/state.js'
 import process from 'node:process'
 import { resolveUsageData } from '../codex/external-usage.js'
+import { mergeUsageData } from '../codex/rate-limits.js'
 import {
   collectAgentEntries,
   collectAuthInfo,
@@ -21,9 +22,10 @@ export function buildHudState(
   config: HudConfig,
   now = new Date(),
   codexProcess: CodexProcess | null = null,
+  loggedUsage: UsageData | null = null,
 ): HudState {
   const workspaceRoots = rollout.session?.workspaceRoots ?? []
-  const usage = resolveUsageData(rollout.usage, config.display, now)
+  const usage = resolveUsageData(mergeUsageData(rollout.usage, loggedUsage), config.display, now)
   const title = config.display.showSessionName ? collectSessionTitle(rollout.session) : null
   const session = rollout.session
     ? { ...rollout.session, sessionName: title ?? rollout.session.sessionName }
