@@ -82,6 +82,52 @@ describe('configuration validation', () => {
     expect(validateConfig({ language: 'zh' }).language).toBe('zh-Hans')
     expect(validateConfig({ language: 'zh-TW' }).language).toBe('zh-Hant')
   })
+
+  it('validates opt-in external usage queries', () => {
+    const config = validateConfig({
+      display: {
+        externalUsageQueries: [
+          {
+            enabled: true,
+            origin: 'https://Relay.Example.com/v1',
+            template: 'newApi',
+            apiKeyEnv: '',
+            accessTokenEnv: 'RELAY_TOKEN',
+            userIdEnv: 'RELAY_USER',
+            refreshMs: 1,
+            quotaPerCredit: 500_000,
+          },
+          {
+            enabled: true,
+            origin: 'file:///tmp/unsafe',
+            template: 'sub2Api',
+            apiKeyEnv: '',
+            accessTokenEnv: 'SUB2_TOKEN',
+          },
+        ],
+      },
+    })
+
+    expect(config.display.externalUsageQueries).toEqual([{
+      enabled: true,
+      origin: 'https://relay.example.com',
+      template: 'newApi',
+      apiKeyEnv: '',
+      accessTokenEnv: 'RELAY_TOKEN',
+      userIdEnv: 'RELAY_USER',
+      refreshMs: 10_000,
+      quotaPerCredit: 500_000,
+    }])
+    expect(DEFAULT_CONFIG.display.externalUsageQueries).toMatchObject([{
+      enabled: true,
+      origin: '*',
+      template: 'general',
+    }])
+  })
+
+  it('allows the default relay balance query to be explicitly disabled', () => {
+    expect(validateConfig({ display: { externalUsageQueries: [] } }).display.externalUsageQueries).toEqual([])
+  })
 })
 
 describe('configuration persistence', () => {

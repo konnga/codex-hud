@@ -1,8 +1,9 @@
-import type { DisplayConfig } from '../types/config.js'
+import type { DisplayConfig, ExternalUsageQueryConfig } from '../types/config.js'
 import type { UsageData, UsageWindow } from '../types/state.js'
 // @env node
 import fs from 'node:fs'
 import path from 'node:path'
+import { getCodexHome } from '../config/paths.js'
 
 interface SnapshotWindow {
   used_percentage?: number
@@ -21,7 +22,28 @@ interface UsageSnapshot {
 
 const MAX_BALANCE_LABEL = 80
 const WRITE_HEARTBEAT_MS = 60_000
+const QUERY_FAILURE_RETRY_MS = 15_000
 const lastWrites = new Map<string, { fingerprint: string, at: number }>()
+const queryCache = new Map<string, { at: number, failedAt?: number, value: UsageData | null }>()
+
+interface NewApiUserResponse {
+  success?: boolean
+  data?: {
+    quota?: unknown
+    group?: unknown
+  }
+}
+
+interface Sub2ApiUserResponse {
+  code?: unknown
+  data?: {
+    balance?: unknown
+  }
+}
+
+interface GeneralBalanceResponse {
+  balance?: unknown
+}
 
 function safePercent(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value)
@@ -43,6 +65,173 @@ function sanitizeLabel(value: unknown): string | null {
   }
   const label = value.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, ' ').replace(/\s+/g, ' ').trim()
   return label ? label.slice(0, MAX_BALANCE_LABEL) : null
+}
+
+function formatCredits(value: number): string {
+  return Number.isInteger(value) ? value.toString() : value.toFixed(2).replace(/0+$/, '').replace(/\.$/, '')
+}
+
+function newApiUsage(body: unknown, quotaPerCredit: number): UsageData | null {
+  const response = body as NewApiUserResponse
+  const quota = response?.success === true && typeof response.data?.quota === 'number' && Number.isFinite(response.data.quota)
+    ? response.data.quota
+    : null
+  if (quota === null) {
+    return null
+  }
+  const group = sanitizeLabel(response.data?.group)
+  const prefix = group ? `${group}: ` : ''
+  return {
+    primary: null,
+    secondary: null,
+    individual: null,
+    planType: null,
+    balanceLabel: `${prefix}$${formatCredits(Math.max(0, quota) / quotaPerCredit)}`,
+    limitReachedType: null,
+  }
+}
+
+function sub2ApiUsage(body: unknown): UsageData | null {
+  const response = body as Sub2ApiUserResponse
+  const balance = response?.code === 0 && typeof response.data?.balance === 'number' && Number.isFinite(response.data.balance)
+    ? response.data.balance
+    : null
+  if (balance === null) {
+    return null
+  }
+  return {
+    primary: null,
+    secondary: null,
+    individual: null,
+    planType: null,
+    balanceLabel: `$${formatCredits(Math.max(0, balance))}`,
+    limitReachedType: null,
+  }
+}
+
+function generalUsage(body: unknown): UsageData | null {
+  const response = body as GeneralBalanceResponse
+  const balance = typeof response?.balance === 'number' && Number.isFinite(response.balance)
+    ? response.balance
+    : null
+  if (balance === null) {
+    return null
+  }
+  return {
+    primary: null,
+    secondary: null,
+    individual: null,
+    planType: null,
+    balanceLabel: `$${formatCredits(Math.max(0, balance))}`,
+    limitReachedType: null,
+  }
+}
+
+function configuredQuery(
+  queries: ExternalUsageQueryConfig[],
+  endpoint: string | null,
+): ExternalUsageQueryConfig | null {
+  if (!endpoint) {
+    return null
+  }
+  let origin: string
+  try {
+    origin = new URL(endpoint).origin.toLowerCase()
+  }
+  catch {
+    return null
+  }
+  const hostname = new URL(origin).hostname.toLowerCase()
+  if (hostname === 'chatgpt.com' || hostname.endsWith('.chatgpt.com') || hostname === 'api.openai.com') {
+    return null
+  }
+  const query = queries.find(query => query.enabled && query.origin === origin)
+    ?? queries.find(query => query.enabled && query.origin === '*' && query.template === 'general')
+  return query ? { ...query, origin } : null
+}
+
+function inferenceApiKey(env: NodeJS.ProcessEnv): string | null {
+  if (env.OPENAI_API_KEY) {
+    return env.OPENAI_API_KEY
+  }
+  try {
+    const auth = JSON.parse(fs.readFileSync(path.join(getCodexHome(env), 'auth.json'), 'utf8')) as Record<string, unknown>
+    return typeof auth.OPENAI_API_KEY === 'string' && auth.OPENAI_API_KEY ? auth.OPENAI_API_KEY : null
+  }
+  catch {
+    return null
+  }
+}
+
+/**
+ * Query a matching relay balance endpoint. Dedicated credentials are read
+ * only from named environment variables and never persisted.
+ */
+export async function readConfiguredExternalUsage(
+  queries: ExternalUsageQueryConfig[],
+  endpoint: string | null,
+  env: NodeJS.ProcessEnv,
+  now = Date.now(),
+): Promise<UsageData | null> {
+  const query = configuredQuery(queries, endpoint)
+  if (!query) {
+    return null
+  }
+  const credentialEnv = query.template === 'general' ? query.apiKeyEnv : query.accessTokenEnv
+  const accessToken = query.template === 'general'
+    ? (credentialEnv ? env[credentialEnv] : null) ?? inferenceApiKey(env)
+    : env[credentialEnv]
+  const userId = env[query.userIdEnv]
+  if (!accessToken || (query.template === 'newApi' && !userId)) {
+    return null
+  }
+  const cacheKey = `${query.origin}:${query.template}:${credentialEnv}:${query.userIdEnv}`
+  const cached = queryCache.get(cacheKey)
+  if (cached && now - cached.at < query.refreshMs) {
+    return cached.value ? structuredClone(cached.value) : null
+  }
+  if (cached?.failedAt && now - cached.failedAt < QUERY_FAILURE_RETRY_MS) {
+    return cached.value ? structuredClone(cached.value) : null
+  }
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 3_000)
+  let value: UsageData | null = null
+  try {
+    const path = query.template === 'general'
+      ? '/user/balance'
+      : query.template === 'newApi' ? '/api/user/self' : '/api/v1/auth/me'
+    const response = await fetch(`${query.origin}${path}`, {
+      headers: {
+        'Accept': 'application/json',
+        'Authorization': `Bearer ${accessToken}`,
+        'User-Agent': 'codex-hud/0.4',
+        ...(query.template === 'newApi' ? { 'New-Api-User': userId! } : {}),
+      },
+      signal: controller.signal,
+    })
+    if (response.ok) {
+      const body: unknown = await response.json()
+      value = query.template === 'general'
+        ? generalUsage(body)
+        : query.template === 'newApi' ? newApiUsage(body, query.quotaPerCredit) : sub2ApiUsage(body)
+    }
+  }
+  catch {
+    // Queries are optional and must not disrupt local HUD data.
+  }
+  finally {
+    clearTimeout(timeout)
+  }
+  if (value) {
+    queryCache.set(cacheKey, { at: now, value: structuredClone(value) })
+    return structuredClone(value)
+  }
+  queryCache.set(cacheKey, {
+    at: cached?.at ?? 0,
+    failedAt: now,
+    value: cached?.value ? structuredClone(cached.value) : null,
+  })
+  return cached?.value ? structuredClone(cached.value) : null
 }
 
 function snapshotWindow(value: SnapshotWindow | null | undefined, label: string, fallbackMinutes: number): UsageWindow | null {

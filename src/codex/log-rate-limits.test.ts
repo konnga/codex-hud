@@ -66,7 +66,7 @@ function request(ts: number, processUuid: string, endpoint: string): LogRow {
   return {
     ts,
     processUuid,
-    target: 'codex_http_client::default_client',
+    target: 'codex_http_client::client',
     body: `Request completed method=POST url=${endpoint} status=200 OK`,
   }
 }
@@ -80,7 +80,7 @@ describe('logged rate limits', () => {
       request(nowSeconds - 30, 'pid:2:other', 'https://other.example.com/v1/responses'),
     ])
 
-    const snapshot = readLatestLoggedRateLimits({ CODEX_HOME: codexHome }, now)
+    const snapshot = readLatestLoggedRateLimits({ CODEX_HOME: codexHome }, now, 'https://other.example.com/v1')
 
     expect(snapshot).toMatchObject({
       usage: {
@@ -88,10 +88,11 @@ describe('logged rate limits', () => {
         planType: 'team',
       },
       observedAt: new Date((nowSeconds - 30) * 1_000),
+      origin: 'https://other.example.com',
     })
 
     fs.rmSync(path.join(codexHome, 'logs_2.sqlite'))
-    expect(readLatestLoggedRateLimits({ CODEX_HOME: codexHome }, now + 16_000)).toMatchObject({
+    expect(readLatestLoggedRateLimits({ CODEX_HOME: codexHome }, now + 16_000, 'https://other.example.com/v1')).toMatchObject({
       usage: { primary: { percent: 80 } },
     })
     if (process.platform !== 'win32') {
@@ -105,7 +106,7 @@ describe('logged rate limits', () => {
       request(nowSeconds - 60, 'pid:1:mine', 'https://mine.example.com/v1/responses'),
     ])
 
-    expect(readLatestLoggedRateLimits({ CODEX_HOME: codexHome }, now)).toBeNull()
+    expect(readLatestLoggedRateLimits({ CODEX_HOME: codexHome }, now, 'https://mine.example.com/v1')).toBeNull()
   })
 
   it('returns null when the log has no rate-limit event', () => {
@@ -113,6 +114,101 @@ describe('logged rate limits', () => {
       request(nowSeconds - 60, 'pid:1:mine', 'https://mine.example.com/v1/responses'),
     ])
 
-    expect(readLatestLoggedRateLimits({ CODEX_HOME: codexHome }, now)).toBeNull()
+    expect(readLatestLoggedRateLimits({ CODEX_HOME: codexHome }, now, 'https://mine.example.com/v1')).toBeNull()
+  })
+
+  it('does not reuse a newer rate limit from another provider', () => {
+    const codexHome = codexHomeWithLogs([
+      rateLimit(nowSeconds - 60, 'pid:1:mine', 19),
+      request(nowSeconds - 60, 'pid:1:mine', 'https://mine.example.com/v1/responses'),
+      rateLimit(nowSeconds - 30, 'pid:2:other', 80),
+      request(nowSeconds - 30, 'pid:2:other', 'https://other.example.com/v1/responses'),
+    ])
+
+    expect(readLatestLoggedRateLimits({ CODEX_HOME: codexHome }, now, 'https://mine.example.com/v1')).toMatchObject({
+      usage: { primary: { percent: 19 } },
+      origin: 'https://mine.example.com',
+    })
+  })
+
+  it('shares account limits between sessions on the same official endpoint', () => {
+    const codexHome = codexHomeWithLogs([
+      rateLimit(nowSeconds - 30, 'pid:1:chatgpt', 42),
+      request(nowSeconds - 30, 'pid:1:chatgpt', 'https://chatgpt.com/backend-api/codex/responses'),
+    ])
+
+    expect(readLatestLoggedRateLimits(
+      { CODEX_HOME: codexHome },
+      now,
+      'https://chatgpt.com/backend-api/codex/responses',
+    )).toMatchObject({
+      usage: { primary: { percent: 42 }, planType: 'team' },
+      origin: 'https://chatgpt.com',
+    })
+  })
+
+  it('hides usage while the session endpoint is unknown', () => {
+    const codexHome = codexHomeWithLogs([
+      rateLimit(nowSeconds - 30, 'pid:1:mine', 42),
+      request(nowSeconds - 30, 'pid:1:mine', 'https://mine.example.com/v1/responses'),
+    ])
+
+    expect(readLatestLoggedRateLimits({ CODEX_HOME: codexHome }, now, null)).toBeNull()
+    // The unknown-endpoint answer must not be cached for unfiltered callers.
+    expect(readLatestLoggedRateLimits({ CODEX_HOME: codexHome }, now)).toMatchObject({
+      usage: { primary: { percent: 42 } },
+      origin: 'https://mine.example.com',
+    })
+    expect(readLatestLoggedRateLimits({ CODEX_HOME: codexHome }, now, null)).toBeNull()
+  })
+
+  it('returns the newest provider event when no endpoint filter is given', () => {
+    const codexHome = codexHomeWithLogs([
+      rateLimit(nowSeconds - 60, 'pid:1:mine', 19),
+      request(nowSeconds - 60, 'pid:1:mine', 'https://mine.example.com/v1/responses'),
+      rateLimit(nowSeconds - 30, 'pid:2:other', 80),
+      request(nowSeconds - 30, 'pid:2:other', 'https://other.example.com/v1/responses'),
+    ])
+
+    expect(readLatestLoggedRateLimits({ CODEX_HOME: codexHome }, now)).toMatchObject({
+      usage: { primary: { percent: 80 } },
+      origin: 'https://other.example.com',
+    })
+  })
+
+  it('keeps snapshot entries from other providers when writing a new one', () => {
+    const codexHome = codexHomeWithLogs([
+      rateLimit(nowSeconds - 60, 'pid:1:mine', 19),
+      request(nowSeconds - 60, 'pid:1:mine', 'https://mine.example.com/v1/responses'),
+      rateLimit(nowSeconds - 30, 'pid:2:other', 80),
+      request(nowSeconds - 30, 'pid:2:other', 'https://other.example.com/v1/responses'),
+    ])
+
+    expect(readLatestLoggedRateLimits({ CODEX_HOME: codexHome }, now, 'https://mine.example.com/v1'))
+      .toMatchObject({ origin: 'https://mine.example.com' })
+    expect(readLatestLoggedRateLimits({ CODEX_HOME: codexHome }, now, 'https://other.example.com/v1'))
+      .toMatchObject({ origin: 'https://other.example.com' })
+
+    const stored = JSON.parse(fs.readFileSync(path.join(codexHome, 'codex-hud', 'account-usage.json'), 'utf8'))
+    expect(Object.keys(stored.entries).sort()).toEqual(['https://mine.example.com', 'https://other.example.com'])
+
+    fs.rmSync(path.join(codexHome, 'logs_2.sqlite'))
+    expect(readLatestLoggedRateLimits({ CODEX_HOME: codexHome }, now + 16_000, 'https://mine.example.com/v1')).toMatchObject({
+      usage: { primary: { percent: 19 } },
+      origin: 'https://mine.example.com',
+    })
+  })
+
+  it('ignores a legacy snapshot that has no provider origin', () => {
+    const codexHome = codexHomeWithLogs([])
+    const stateDirectory = path.join(codexHome, 'codex-hud')
+    fs.mkdirSync(stateDirectory)
+    fs.writeFileSync(path.join(stateDirectory, 'account-usage.json'), JSON.stringify({
+      version: 1,
+      observed_at: new Date(now - 60_000).toISOString(),
+      body: rateLimit(nowSeconds - 60, 'pid:1:mine', 99).body,
+    }))
+
+    expect(readLatestLoggedRateLimits({ CODEX_HOME: codexHome }, now, 'https://mine.example.com/v1')).toBeNull()
   })
 })

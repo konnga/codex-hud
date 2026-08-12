@@ -1,6 +1,7 @@
 import type {
   ContextValueMode,
   CustomLinePosition,
+  ExternalUsageQueryConfig,
   GitBranchOverflowMode,
   HudColorName,
   HudColorValue,
@@ -68,6 +69,49 @@ function nullablePositiveInteger(value: unknown, fallback: number | null): numbe
     return fallback
   }
   return Math.round(value)
+}
+
+function externalUsageQueries(value: unknown, fallback: ExternalUsageQueryConfig[]): ExternalUsageQueryConfig[] {
+  if (!Array.isArray(value)) {
+    return structuredClone(fallback)
+  }
+  return value.flatMap((item): ExternalUsageQueryConfig[] => {
+    if (!isRecord(item) || typeof item.origin !== 'string') {
+      return []
+    }
+    let origin = '*'
+    if (item.origin !== '*') {
+      let url: URL
+      try {
+        url = new URL(item.origin)
+      }
+      catch {
+        return []
+      }
+      if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+        return []
+      }
+      origin = url.origin.toLowerCase()
+    }
+    const apiKeyEnv = stringValue(item.apiKeyEnv, '')
+    const accessTokenEnv = stringValue(item.accessTokenEnv, '')
+    const userIdEnv = stringValue(item.userIdEnv, '')
+    const template = enumValue(item.template, ['general', 'newApi', 'sub2Api'], 'newApi')
+    if ((template !== 'general' && !accessTokenEnv)
+      || (template === 'newApi' && !userIdEnv)) {
+      return []
+    }
+    return [{
+      enabled: booleanValue(item.enabled, false),
+      origin,
+      template,
+      apiKeyEnv,
+      accessTokenEnv,
+      userIdEnv,
+      refreshMs: numberValue(item.refreshMs, 300_000, 10_000, 86_400_000, true),
+      quotaPerCredit: numberValue(item.quotaPerCredit, 500_000, 1, 1_000_000_000),
+    }]
+  })
 }
 
 function colorValue(value: unknown, fallback: HudColorValue): HudColorValue {
@@ -254,6 +298,7 @@ export function validateConfig(value: unknown): HudConfig {
       externalUsagePath: stringValue(rawDisplay.externalUsagePath, fallback.display.externalUsagePath),
       externalUsageWritePath: stringValue(rawDisplay.externalUsageWritePath, fallback.display.externalUsageWritePath),
       externalUsageFreshnessMs: numberValue(rawDisplay.externalUsageFreshnessMs, fallback.display.externalUsageFreshnessMs, 1_000, 86_400_000, true),
+      externalUsageQueries: externalUsageQueries(rawDisplay.externalUsageQueries, fallback.display.externalUsageQueries),
       modelFormat: enumValue<ModelFormatMode>(rawDisplay.modelFormat, ['full', 'compact', 'short'], fallback.display.modelFormat),
       modelOverride: stringValue(rawDisplay.modelOverride, fallback.display.modelOverride),
       showProvider: booleanValue(rawDisplay.showProvider, fallback.display.showProvider),

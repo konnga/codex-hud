@@ -78,6 +78,15 @@ function firstUrl(value: string): string | null {
   return url.startsWith('http') ? url : null
 }
 
+export function endpointOrigin(value: string): string | null {
+  try {
+    return new URL(value).origin.toLowerCase()
+  }
+  catch {
+    return null
+  }
+}
+
 const INIT_ROW = [
   `SELECT 'init|' || substr(feedback_log_body, instr(feedback_log_body, 'base_url: Some("') + 16, 200)`,
   `  FROM logs`,
@@ -269,7 +278,7 @@ export function resolveSessionEndpoint(
     `SELECT 'request|' || substr(feedback_log_body, instr(feedback_log_body, 'url=') + 4, 200)`,
     `  FROM logs`,
     ` WHERE thread_id = '${sessionId}'`,
-    `   AND target = 'codex_http_client::default_client'`,
+    `   AND target IN ('codex_http_client::default_client', 'codex_http_client::client')`,
     `   AND instr(feedback_log_body, 'url=') > 0`,
     ` ${NEWEST_FIRST};`,
     // One Codex process can host several sessions in turn, each writing its own

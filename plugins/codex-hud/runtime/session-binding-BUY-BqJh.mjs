@@ -627,6 +627,13 @@ function firstUrl(value) {
 	const url = value.trim().split(/[\s"]/)[0];
 	return url.startsWith("http") ? url : null;
 }
+function endpointOrigin(value) {
+	try {
+		return new URL(value).origin.toLowerCase();
+	} catch {
+		return null;
+	}
+}
 const INIT_ROW = [
 	`SELECT 'init|' || substr(feedback_log_body, instr(feedback_log_body, 'base_url: Some("') + 16, 200)`,
 	`  FROM logs`,
@@ -782,7 +789,7 @@ function resolveSessionEndpoint(sessionId, env = process.env, now = Date.now()) 
 		`SELECT 'request|' || substr(feedback_log_body, instr(feedback_log_body, 'url=') + 4, 200)`,
 		`  FROM logs`,
 		` WHERE thread_id = '${sessionId}'`,
-		`   AND target = 'codex_http_client::default_client'`,
+		`   AND target IN ('codex_http_client::default_client', 'codex_http_client::client')`,
 		`   AND instr(feedback_log_body, 'url=') > 0`,
 		` ${NEWEST_FIRST};`,
 		INIT_ROW,
@@ -929,6 +936,234 @@ function findActiveSession(options) {
 }
 
 //#endregion
+//#region src/codex/external-usage.ts
+const MAX_BALANCE_LABEL = 80;
+const WRITE_HEARTBEAT_MS = 6e4;
+const QUERY_FAILURE_RETRY_MS = 15e3;
+const lastWrites = /* @__PURE__ */ new Map();
+const queryCache = /* @__PURE__ */ new Map();
+function safePercent(value) {
+	return typeof value === "number" && Number.isFinite(value) ? Math.min(100, Math.max(0, Math.round(value))) : null;
+}
+function safeReset(value) {
+	if (typeof value !== "string" && typeof value !== "number") return null;
+	const date = new Date(typeof value === "number" && value < 1e10 ? value * 1e3 : value);
+	return Number.isNaN(date.getTime()) ? null : date;
+}
+function sanitizeLabel(value) {
+	if (typeof value !== "string") return null;
+	const label = value.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, " ").replace(/\s+/g, " ").trim();
+	return label ? label.slice(0, MAX_BALANCE_LABEL) : null;
+}
+function formatCredits(value) {
+	return Number.isInteger(value) ? value.toString() : value.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
+}
+function newApiUsage(body, quotaPerCredit) {
+	const response = body;
+	const quota = response?.success === true && typeof response.data?.quota === "number" && Number.isFinite(response.data.quota) ? response.data.quota : null;
+	if (quota === null) return null;
+	const group = sanitizeLabel(response.data?.group);
+	return {
+		primary: null,
+		secondary: null,
+		individual: null,
+		planType: null,
+		balanceLabel: `${group ? `${group}: ` : ""}$${formatCredits(Math.max(0, quota) / quotaPerCredit)}`,
+		limitReachedType: null
+	};
+}
+function sub2ApiUsage(body) {
+	const response = body;
+	const balance = response?.code === 0 && typeof response.data?.balance === "number" && Number.isFinite(response.data.balance) ? response.data.balance : null;
+	if (balance === null) return null;
+	return {
+		primary: null,
+		secondary: null,
+		individual: null,
+		planType: null,
+		balanceLabel: `$${formatCredits(Math.max(0, balance))}`,
+		limitReachedType: null
+	};
+}
+function generalUsage(body) {
+	const response = body;
+	const balance = typeof response?.balance === "number" && Number.isFinite(response.balance) ? response.balance : null;
+	if (balance === null) return null;
+	return {
+		primary: null,
+		secondary: null,
+		individual: null,
+		planType: null,
+		balanceLabel: `$${formatCredits(Math.max(0, balance))}`,
+		limitReachedType: null
+	};
+}
+function configuredQuery(queries, endpoint) {
+	if (!endpoint) return null;
+	let origin;
+	try {
+		origin = new URL(endpoint).origin.toLowerCase();
+	} catch {
+		return null;
+	}
+	const hostname = new URL(origin).hostname.toLowerCase();
+	if (hostname === "chatgpt.com" || hostname.endsWith(".chatgpt.com") || hostname === "api.openai.com") return null;
+	const query = queries.find((query) => query.enabled && query.origin === origin) ?? queries.find((query) => query.enabled && query.origin === "*" && query.template === "general");
+	return query ? {
+		...query,
+		origin
+	} : null;
+}
+function inferenceApiKey(env) {
+	if (env.OPENAI_API_KEY) return env.OPENAI_API_KEY;
+	try {
+		const auth = JSON.parse(fs.readFileSync(path.join(getCodexHome(env), "auth.json"), "utf8"));
+		return typeof auth.OPENAI_API_KEY === "string" && auth.OPENAI_API_KEY ? auth.OPENAI_API_KEY : null;
+	} catch {
+		return null;
+	}
+}
+/**
+* Query a matching relay balance endpoint. Dedicated credentials are read
+* only from named environment variables and never persisted.
+*/
+async function readConfiguredExternalUsage(queries, endpoint, env, now = Date.now()) {
+	const query = configuredQuery(queries, endpoint);
+	if (!query) return null;
+	const credentialEnv = query.template === "general" ? query.apiKeyEnv : query.accessTokenEnv;
+	const accessToken = query.template === "general" ? (credentialEnv ? env[credentialEnv] : null) ?? inferenceApiKey(env) : env[credentialEnv];
+	const userId = env[query.userIdEnv];
+	if (!accessToken || query.template === "newApi" && !userId) return null;
+	const cacheKey = `${query.origin}:${query.template}:${credentialEnv}:${query.userIdEnv}`;
+	const cached = queryCache.get(cacheKey);
+	if (cached && now - cached.at < query.refreshMs) return cached.value ? structuredClone(cached.value) : null;
+	if (cached?.failedAt && now - cached.failedAt < QUERY_FAILURE_RETRY_MS) return cached.value ? structuredClone(cached.value) : null;
+	const controller = new AbortController();
+	const timeout = setTimeout(() => controller.abort(), 3e3);
+	let value = null;
+	try {
+		const path = query.template === "general" ? "/user/balance" : query.template === "newApi" ? "/api/user/self" : "/api/v1/auth/me";
+		const response = await fetch(`${query.origin}${path}`, {
+			headers: {
+				"Accept": "application/json",
+				"Authorization": `Bearer ${accessToken}`,
+				"User-Agent": "codex-hud/0.4",
+				...query.template === "newApi" ? { "New-Api-User": userId } : {}
+			},
+			signal: controller.signal
+		});
+		if (response.ok) {
+			const body = await response.json();
+			value = query.template === "general" ? generalUsage(body) : query.template === "newApi" ? newApiUsage(body, query.quotaPerCredit) : sub2ApiUsage(body);
+		}
+	} catch {} finally {
+		clearTimeout(timeout);
+	}
+	if (value) {
+		queryCache.set(cacheKey, {
+			at: now,
+			value: structuredClone(value)
+		});
+		return structuredClone(value);
+	}
+	queryCache.set(cacheKey, {
+		at: cached?.at ?? 0,
+		failedAt: now,
+		value: cached?.value ? structuredClone(cached.value) : null
+	});
+	return cached?.value ? structuredClone(cached.value) : null;
+}
+function snapshotWindow(value, label, fallbackMinutes) {
+	if (!value || typeof value !== "object") return null;
+	const percent = safePercent(value.used_percentage ?? value.used_percent);
+	if (percent === null) return null;
+	return {
+		label,
+		percent,
+		resetAt: safeReset(value.resets_at),
+		windowMinutes: typeof value.window_minutes === "number" && value.window_minutes > 0 ? value.window_minutes : fallbackMinutes
+	};
+}
+function validSnapshotPath(filePath, write = false) {
+	if (!filePath || !path.isAbsolute(filePath) || !filePath.toLowerCase().endsWith(".json")) return false;
+	if (!write) return true;
+	try {
+		return fs.statSync(path.dirname(filePath)).isDirectory();
+	} catch {
+		return false;
+	}
+}
+function readExternalUsage(filePath, freshnessMs, now = /* @__PURE__ */ new Date()) {
+	if (!validSnapshotPath(filePath)) return null;
+	try {
+		const snapshot = JSON.parse(fs.readFileSync(filePath, "utf8"));
+		const updatedAt = safeReset(snapshot.updated_at);
+		if (!updatedAt || Math.abs(now.getTime() - updatedAt.getTime()) > freshnessMs) return null;
+		const primary = snapshotWindow(snapshot.five_hour, "5h", 300);
+		const secondary = snapshotWindow(snapshot.seven_day, "1w", 10080);
+		const individual = snapshotWindow(snapshot.individual, "spend", 43200);
+		const balanceLabel = sanitizeLabel(snapshot.balance_label);
+		if (!primary && !secondary && !individual && !balanceLabel) return null;
+		return {
+			primary,
+			secondary,
+			individual,
+			planType: null,
+			balanceLabel,
+			limitReachedType: null
+		};
+	} catch {
+		return null;
+	}
+}
+function serializableWindow(window) {
+	if (!window || window.percent === null) return null;
+	return {
+		used_percentage: window.percent,
+		resets_at: window.resetAt?.toISOString() ?? null,
+		window_minutes: window.windowMinutes ?? null
+	};
+}
+function writeExternalUsage(filePath, usage, now = /* @__PURE__ */ new Date()) {
+	if (!validSnapshotPath(filePath, true)) return;
+	const content = {
+		five_hour: serializableWindow(usage.primary),
+		seven_day: serializableWindow(usage.secondary),
+		individual: serializableWindow(usage.individual),
+		balance_label: usage.balanceLabel
+	};
+	const fingerprint = JSON.stringify(content);
+	const previous = lastWrites.get(filePath);
+	if (previous?.fingerprint === fingerprint && now.getTime() - previous.at < WRITE_HEARTBEAT_MS) return;
+	const snapshot = {
+		updated_at: now.toISOString(),
+		...content
+	};
+	try {
+		fs.writeFileSync(filePath, `${JSON.stringify(snapshot, null, 2)}\n`, {
+			encoding: "utf8",
+			mode: 384
+		});
+		fs.chmodSync(filePath, 384);
+		lastWrites.set(filePath, {
+			fingerprint,
+			at: now.getTime()
+		});
+	} catch {}
+}
+function resolveUsageData(nativeUsage, display, now = /* @__PURE__ */ new Date()) {
+	const external = readExternalUsage(display.externalUsagePath, display.externalUsageFreshnessMs, now);
+	if (nativeUsage) {
+		if (display.externalUsageWritePath) writeExternalUsage(display.externalUsageWritePath, nativeUsage, now);
+		return external?.balanceLabel && !nativeUsage.balanceLabel ? {
+			...nativeUsage,
+			balanceLabel: external.balanceLabel
+		} : nativeUsage;
+	}
+	return external;
+}
+
+//#endregion
 //#region src/codex/log-rate-limits.ts
 const EVENT_PREFIX = "SSE event: ";
 const QUERY_TIMEOUT_MS = 750;
@@ -936,6 +1171,7 @@ const CACHE_MS$2 = 15e3;
 const MAX_EVENT_AGE_SECONDS = 11520 * 60;
 const RESETLESS_FRESHNESS_MS = 360 * 60 * 1e3;
 const MAX_ROW_LOOKBACK = 2e5;
+const MAX_EVENT_CANDIDATES = 1e3;
 const SNAPSHOT_FILE_NAME = "account-usage.json";
 const MAX_STORED_BODY_LENGTH = 16384;
 const cache$3 = /* @__PURE__ */ new Map();
@@ -990,37 +1226,56 @@ function cloneSnapshot(value) {
 function storedSnapshotPath(env) {
 	return path.join(getHudStateDirectory(env), SNAPSHOT_FILE_NAME);
 }
-function readStoredSnapshot(env, now) {
+function readStoredSnapshot(env, now, expectedOrigin) {
 	try {
 		const stored = record$1(JSON.parse(fs.readFileSync(storedSnapshotPath(env), "utf8")));
-		if (stored?.version !== 1 || typeof stored.body !== "string" || stored.body.length > MAX_STORED_BODY_LENGTH) return null;
-		const observedAt = typeof stored.observed_at === "string" ? new Date(stored.observed_at) : null;
-		if (!observedAt || Number.isNaN(observedAt.getTime()) || now - observedAt.getTime() > MAX_EVENT_AGE_SECONDS * 1e3) return null;
-		const usage = parseEvent(stored.body);
-		const fresh = usage ? freshUsage(usage, observedAt, now) : null;
-		return fresh ? {
-			usage: fresh,
-			observedAt
-		} : null;
+		const entries = record$1(stored?.entries);
+		if (stored?.version !== 2 || !entries) return null;
+		const candidates = expectedOrigin === void 0 ? Object.entries(entries) : [[expectedOrigin, entries[expectedOrigin]]];
+		let newest = null;
+		for (const [origin, rawEntry] of candidates) {
+			const entry = record$1(rawEntry);
+			const observedAt = typeof entry?.observed_at === "string" ? new Date(entry.observed_at) : null;
+			const body = typeof entry?.body === "string" ? entry.body : null;
+			if (!observedAt || Number.isNaN(observedAt.getTime()) || !body || body.length > MAX_STORED_BODY_LENGTH || now - observedAt.getTime() > MAX_EVENT_AGE_SECONDS * 1e3) continue;
+			const usage = parseEvent(body);
+			const fresh = usage ? freshUsage(usage, observedAt, now) : null;
+			if (fresh && (!newest || observedAt > newest.observedAt)) newest = {
+				usage: fresh,
+				observedAt,
+				origin
+			};
+		}
+		return newest;
 	} catch {
 		return null;
 	}
 }
-function writeStoredSnapshot(env, body, observedAt, now) {
+function writeStoredSnapshot(env, body, observedAt, origin) {
 	if (body.length > MAX_STORED_BODY_LENGTH) return;
-	const existing = readStoredSnapshot(env, now);
-	if (existing && existing.observedAt.getTime() > observedAt.getTime()) return;
 	const filePath = storedSnapshotPath(env);
 	const temporaryPath = `${filePath}.${process.pid}.tmp`;
 	try {
+		let stored = null;
+		try {
+			stored = record$1(JSON.parse(fs.readFileSync(filePath, "utf8")));
+		} catch {}
+		const currentEntries = stored?.version === 2 ? record$1(stored.entries) : null;
+		const entries = currentEntries ? { ...currentEntries } : {};
+		const current = record$1(entries[origin]);
+		const currentObservedAt = typeof current?.observed_at === "string" ? new Date(current.observed_at) : null;
+		if (currentObservedAt && !Number.isNaN(currentObservedAt.getTime()) && currentObservedAt > observedAt) return;
+		entries[origin] = {
+			observed_at: observedAt.toISOString(),
+			body
+		};
 		fs.mkdirSync(path.dirname(filePath), {
 			recursive: true,
 			mode: 448
 		});
 		fs.writeFileSync(temporaryPath, `${JSON.stringify({
-			version: 1,
-			observed_at: observedAt.toISOString(),
-			body
+			version: 2,
+			entries
 		}, null, 2)}\n`, {
 			encoding: "utf8",
 			mode: 384
@@ -1033,46 +1288,20 @@ function writeStoredSnapshot(env, body, observedAt, now) {
 		} catch {}
 	}
 }
-/**
-* Codex currently logs `codex.rate_limits` SSE events but does not copy them
-* into rollout token-count events for every provider. The newest event under a
-* Codex home is account-wide, so persist it for other open HUD processes too.
-*/
-function readLatestLoggedRateLimits(env = process.env, now = Date.now()) {
-	const codexHome = getCodexHome(env);
-	const cached = cache$3.get(codexHome);
-	if (cached && now - cached.at < CACHE_MS$2) return cloneSnapshot(cached.value);
-	const remember = (value) => {
-		cache$3.set(codexHome, {
-			at: now,
-			value: cloneSnapshot(value)
-		});
-		return cloneSnapshot(value);
-	};
-	let previous = readStoredSnapshot(env, now);
-	if (cached?.value) {
-		const fallback = freshUsage(cached.value.usage, cached.value.observedAt, now);
-		if (fallback) previous = {
-			usage: fallback,
-			observedAt: cached.value.observedAt
-		};
-	}
-	const database = findCodexLogDatabase(codexHome);
-	if (!database) return remember(previous);
-	const since = Math.floor(now / 1e3) - MAX_EVENT_AGE_SECONDS;
+function eventOrigin(database, processUuid, timestamp) {
 	const result = spawnSync("sqlite3", [
 		"-readonly",
 		"-noheader",
 		"-batch",
 		database,
 		[
-			`SELECT ts || '|' || hex(feedback_log_body)`,
+			"SELECT feedback_log_body",
 			"  FROM logs",
-			` WHERE id >= (SELECT max(id) - ${MAX_ROW_LOOKBACK} FROM logs)`,
-			`   AND ts >= ${since}`,
-			`   AND target = 'codex_api::sse::responses'`,
-			`   AND instr(feedback_log_body, '"type":"codex.rate_limits"') > 0`,
-			" ORDER BY id DESC",
+			` WHERE process_uuid = '${processUuid.replaceAll("'", "''")}'`,
+			`   AND ts BETWEEN ${timestamp - MAX_EVENT_AGE_SECONDS} AND ${timestamp + 60}`,
+			`   AND target IN ('codex_http_client::default_client', 'codex_http_client::client')`,
+			`   AND instr(feedback_log_body, 'url=') > 0`,
+			` ORDER BY abs(ts - ${timestamp}) ASC, id DESC`,
 			" LIMIT 1;"
 		].join("\n")
 	], {
@@ -1084,22 +1313,88 @@ function readLatestLoggedRateLimits(env = process.env, now = Date.now()) {
 		],
 		timeout: QUERY_TIMEOUT_MS
 	});
+	const match = typeof result.stdout === "string" ? /\burl=(https?:\/\/[^\s"]+)/.exec(result.stdout) : null;
+	return match ? endpointOrigin(match[1]) : null;
+}
+/**
+* Codex currently logs `codex.rate_limits` SSE events but does not copy them
+* into rollout token-count events for every provider. The newest event per
+* provider origin is account-wide, so persist it for other open HUD processes
+* too. `expectedEndpoint` names the provider the caller is bound to; passing
+* null means the endpoint is unknown, and showing no usage beats showing
+* another provider's account.
+*/
+function readLatestLoggedRateLimits(env = process.env, now = Date.now(), expectedEndpoint) {
+	const expectedOrigin = expectedEndpoint === void 0 ? void 0 : expectedEndpoint ? endpointOrigin(expectedEndpoint) : null;
+	if (expectedOrigin === null) return null;
+	const codexHome = getCodexHome(env);
+	const cacheKey = `${codexHome}:${expectedOrigin ?? "*"}`;
+	const cached = cache$3.get(cacheKey);
+	if (cached && now - cached.at < CACHE_MS$2) return cloneSnapshot(cached.value);
+	const remember = (value) => {
+		cache$3.set(cacheKey, {
+			at: now,
+			value: cloneSnapshot(value)
+		});
+		return cloneSnapshot(value);
+	};
+	let previous = readStoredSnapshot(env, now, expectedOrigin);
+	if (cached?.value) {
+		const fallback = freshUsage(cached.value.usage, cached.value.observedAt, now);
+		if (fallback) previous = {
+			usage: fallback,
+			observedAt: cached.value.observedAt,
+			origin: cached.value.origin
+		};
+	}
+	const database = findCodexLogDatabase(codexHome);
+	if (!database) return remember(previous);
+	const since = Math.floor(now / 1e3) - MAX_EVENT_AGE_SECONDS;
+	const result = spawnSync("sqlite3", [
+		"-readonly",
+		"-noheader",
+		"-batch",
+		database,
+		[
+			`SELECT ts || '|' || hex(process_uuid) || '|' || hex(feedback_log_body)`,
+			"  FROM logs",
+			` WHERE id >= (SELECT max(id) - ${MAX_ROW_LOOKBACK} FROM logs)`,
+			`   AND ts >= ${since}`,
+			`   AND target = 'codex_api::sse::responses'`,
+			`   AND instr(feedback_log_body, '"type":"codex.rate_limits"') > 0`,
+			" ORDER BY id DESC",
+			` LIMIT ${MAX_EVENT_CANDIDATES};`
+		].join("\n")
+	], {
+		encoding: "utf8",
+		stdio: [
+			"ignore",
+			"pipe",
+			"ignore"
+		],
+		timeout: QUERY_TIMEOUT_MS
+	});
 	if (typeof result.stdout !== "string") return remember(previous);
+	const origins = /* @__PURE__ */ new Map();
 	for (const line of result.stdout.split("\n")) {
-		const [timestampValue, bodyValue] = line.split("|");
+		const [timestampValue, processValue, bodyValue] = line.split("|");
 		const timestamp = Number(timestampValue);
+		const processUuid = decodeHex(processValue ?? "");
 		const body = decodeHex(bodyValue ?? "");
-		if (!Number.isFinite(timestamp) || !body) continue;
+		if (!Number.isFinite(timestamp) || !processUuid || !body) continue;
 		const observedAt = /* @__PURE__ */ new Date(timestamp * 1e3);
 		const usage = parseEvent(body);
 		const fresh = usage ? freshUsage(usage, observedAt, now) : null;
-		if (fresh) {
-			writeStoredSnapshot(env, body, observedAt, now);
-			return remember({
-				usage: fresh,
-				observedAt
-			});
-		}
+		if (!fresh) continue;
+		const origin = origins.has(processUuid) ? origins.get(processUuid) ?? null : eventOrigin(database, processUuid, timestamp);
+		origins.set(processUuid, origin);
+		if (!origin || expectedOrigin !== void 0 && origin !== expectedOrigin) continue;
+		writeStoredSnapshot(env, body, observedAt, origin);
+		return remember({
+			usage: fresh,
+			observedAt,
+			origin
+		});
 	}
 	return remember(previous);
 }
@@ -1168,7 +1463,7 @@ const DEFAULT_CONFIG = {
 		showGoal: true,
 		showTurns: true,
 		showSessionName: false,
-		showAuth: false,
+		showAuth: true,
 		showAuthUser: false,
 		authUserLength: 8,
 		showCodexVersion: false,
@@ -1194,6 +1489,16 @@ const DEFAULT_CONFIG = {
 		externalUsagePath: "",
 		externalUsageWritePath: "",
 		externalUsageFreshnessMs: 3e5,
+		externalUsageQueries: [{
+			enabled: true,
+			origin: "*",
+			template: "general",
+			apiKeyEnv: "",
+			accessTokenEnv: "",
+			userIdEnv: "",
+			refreshMs: 3e5,
+			quotaPerCredit: 5e5
+		}],
 		modelFormat: "full",
 		modelOverride: "",
 		showProvider: false,
@@ -1245,6 +1550,42 @@ function nullablePositiveInteger(value, fallback) {
 	if (value === null) return null;
 	if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return fallback;
 	return Math.round(value);
+}
+function externalUsageQueries(value, fallback) {
+	if (!Array.isArray(value)) return structuredClone(fallback);
+	return value.flatMap((item) => {
+		if (!isRecord(item) || typeof item.origin !== "string") return [];
+		let origin = "*";
+		if (item.origin !== "*") {
+			let url;
+			try {
+				url = new URL(item.origin);
+			} catch {
+				return [];
+			}
+			if (url.protocol !== "http:" && url.protocol !== "https:") return [];
+			origin = url.origin.toLowerCase();
+		}
+		const apiKeyEnv = stringValue(item.apiKeyEnv, "");
+		const accessTokenEnv = stringValue(item.accessTokenEnv, "");
+		const userIdEnv = stringValue(item.userIdEnv, "");
+		const template = enumValue(item.template, [
+			"general",
+			"newApi",
+			"sub2Api"
+		], "newApi");
+		if (template !== "general" && !accessTokenEnv || template === "newApi" && !userIdEnv) return [];
+		return [{
+			enabled: booleanValue(item.enabled, false),
+			origin,
+			template,
+			apiKeyEnv,
+			accessTokenEnv,
+			userIdEnv,
+			refreshMs: numberValue(item.refreshMs, 3e5, 1e4, 864e5, true),
+			quotaPerCredit: numberValue(item.quotaPerCredit, 5e5, 1, 1e9)
+		}];
+	});
 }
 function colorValue(value, fallback) {
 	if (typeof value === "string" && ([
@@ -1394,6 +1735,7 @@ function validateConfig(value) {
 			externalUsagePath: stringValue(rawDisplay.externalUsagePath, fallback.display.externalUsagePath),
 			externalUsageWritePath: stringValue(rawDisplay.externalUsageWritePath, fallback.display.externalUsageWritePath),
 			externalUsageFreshnessMs: numberValue(rawDisplay.externalUsageFreshnessMs, fallback.display.externalUsageFreshnessMs, 1e3, 864e5, true),
+			externalUsageQueries: externalUsageQueries(rawDisplay.externalUsageQueries, fallback.display.externalUsageQueries),
 			modelFormat: enumValue(rawDisplay.modelFormat, [
 				"full",
 				"compact",
@@ -3593,7 +3935,8 @@ function authSegment(ctx) {
 	const maximum = ctx.config.display.authUserLength;
 	const rawUser = ctx.state.auth.user ?? "";
 	const user = maximum > 0 && rawUser.length > maximum ? `${rawUser.slice(0, Math.max(1, maximum - 1))}…` : rawUser;
-	return ctx.config.display.showAuthUser && user ? `${ctx.state.auth.method} (${user})` : ctx.state.auth.method;
+	const method = ctx.config.display.showAuthUser && user ? `${ctx.state.auth.method} (${user})` : ctx.state.auth.method;
+	return ctx.state.auth.balanceLabel ? `${method} · ${ctx.state.auth.balanceLabel}` : method;
 }
 function renderProjectLine(ctx) {
 	const model = modelName(ctx);
@@ -3953,114 +4296,6 @@ function settleCmuxPaneHeight(currentRows, managedHeight, selfFraction, geometry
 		height: managedHeight,
 		manual: false
 	};
-}
-
-//#endregion
-//#region src/codex/external-usage.ts
-const MAX_BALANCE_LABEL = 80;
-const WRITE_HEARTBEAT_MS = 6e4;
-const lastWrites = /* @__PURE__ */ new Map();
-function safePercent(value) {
-	return typeof value === "number" && Number.isFinite(value) ? Math.min(100, Math.max(0, Math.round(value))) : null;
-}
-function safeReset(value) {
-	if (typeof value !== "string" && typeof value !== "number") return null;
-	const date = new Date(typeof value === "number" && value < 1e10 ? value * 1e3 : value);
-	return Number.isNaN(date.getTime()) ? null : date;
-}
-function sanitizeLabel(value) {
-	if (typeof value !== "string") return null;
-	const label = value.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, " ").replace(/\s+/g, " ").trim();
-	return label ? label.slice(0, MAX_BALANCE_LABEL) : null;
-}
-function snapshotWindow(value, label, fallbackMinutes) {
-	if (!value || typeof value !== "object") return null;
-	const percent = safePercent(value.used_percentage ?? value.used_percent);
-	if (percent === null) return null;
-	return {
-		label,
-		percent,
-		resetAt: safeReset(value.resets_at),
-		windowMinutes: typeof value.window_minutes === "number" && value.window_minutes > 0 ? value.window_minutes : fallbackMinutes
-	};
-}
-function validSnapshotPath(filePath, write = false) {
-	if (!filePath || !path.isAbsolute(filePath) || !filePath.toLowerCase().endsWith(".json")) return false;
-	if (!write) return true;
-	try {
-		return fs.statSync(path.dirname(filePath)).isDirectory();
-	} catch {
-		return false;
-	}
-}
-function readExternalUsage(filePath, freshnessMs, now = /* @__PURE__ */ new Date()) {
-	if (!validSnapshotPath(filePath)) return null;
-	try {
-		const snapshot = JSON.parse(fs.readFileSync(filePath, "utf8"));
-		const updatedAt = safeReset(snapshot.updated_at);
-		if (!updatedAt || Math.abs(now.getTime() - updatedAt.getTime()) > freshnessMs) return null;
-		const primary = snapshotWindow(snapshot.five_hour, "5h", 300);
-		const secondary = snapshotWindow(snapshot.seven_day, "1w", 10080);
-		const individual = snapshotWindow(snapshot.individual, "spend", 43200);
-		const balanceLabel = sanitizeLabel(snapshot.balance_label);
-		if (!primary && !secondary && !individual && !balanceLabel) return null;
-		return {
-			primary,
-			secondary,
-			individual,
-			planType: null,
-			balanceLabel,
-			limitReachedType: null
-		};
-	} catch {
-		return null;
-	}
-}
-function serializableWindow(window) {
-	if (!window || window.percent === null) return null;
-	return {
-		used_percentage: window.percent,
-		resets_at: window.resetAt?.toISOString() ?? null,
-		window_minutes: window.windowMinutes ?? null
-	};
-}
-function writeExternalUsage(filePath, usage, now = /* @__PURE__ */ new Date()) {
-	if (!validSnapshotPath(filePath, true)) return;
-	const content = {
-		five_hour: serializableWindow(usage.primary),
-		seven_day: serializableWindow(usage.secondary),
-		individual: serializableWindow(usage.individual),
-		balance_label: usage.balanceLabel
-	};
-	const fingerprint = JSON.stringify(content);
-	const previous = lastWrites.get(filePath);
-	if (previous?.fingerprint === fingerprint && now.getTime() - previous.at < WRITE_HEARTBEAT_MS) return;
-	const snapshot = {
-		updated_at: now.toISOString(),
-		...content
-	};
-	try {
-		fs.writeFileSync(filePath, `${JSON.stringify(snapshot, null, 2)}\n`, {
-			encoding: "utf8",
-			mode: 384
-		});
-		fs.chmodSync(filePath, 384);
-		lastWrites.set(filePath, {
-			fingerprint,
-			at: now.getTime()
-		});
-	} catch {}
-}
-function resolveUsageData(nativeUsage, display, now = /* @__PURE__ */ new Date()) {
-	const external = readExternalUsage(display.externalUsagePath, display.externalUsageFreshnessMs, now);
-	if (nativeUsage) {
-		if (display.externalUsageWritePath) writeExternalUsage(display.externalUsageWritePath, nativeUsage, now);
-		return external?.balanceLabel && !nativeUsage.balanceLabel ? {
-			...nativeUsage,
-			balanceLabel: external.balanceLabel
-		} : nativeUsage;
-	}
-	return external;
 }
 
 //#endregion
@@ -5306,6 +5541,15 @@ function providerLabel(baseUrl) {
 	if (index < 0) return bare;
 	return index > 0 && GENERIC_SUFFIX.test(labels[index]) ? labels[index - 1] : labels[index];
 }
+function isChatGptEndpoint(baseUrl) {
+	if (!baseUrl) return false;
+	try {
+		const hostname = new URL(baseUrl).hostname.toLowerCase();
+		return hostname === "chatgpt.com" || hostname.endsWith(".chatgpt.com");
+	} catch {
+		return false;
+	}
+}
 /**
 * The endpoint declared in config.toml is only evidence about a session if the
 * file has not been rewritten since Codex read it at session start. Before a
@@ -5341,7 +5585,9 @@ function collectAuthInfo(planType, session = null, env = process.env, codexProce
 		"preferred_username",
 		"username"
 	]))?.split("@")[0];
-	if (planType) {
+	const endpoint = session ? resolveSessionEndpoint(session.id, env) : codexProcess && resolveProcessEndpoint(codexProcess.pid, codexProcess.launchedAt, env);
+	const baseUrl = session ? endpoint?.url ?? configuredBaseUrl(session, env) : endpoint?.url ?? null;
+	if (planType && (isChatGptEndpoint(baseUrl) || !hasApiKey)) {
 		const value = {
 			method: `ChatGPT ${planType}`,
 			user: user ?? void 0
@@ -5353,8 +5599,6 @@ function collectAuthInfo(planType, session = null, env = process.env, codexProce
 		return structuredClone(value);
 	}
 	if (hasApiKey) {
-		const endpoint = session ? resolveSessionEndpoint(session.id, env) : codexProcess && resolveProcessEndpoint(codexProcess.pid, codexProcess.launchedAt, env);
-		const baseUrl = session ? endpoint?.url ?? configuredBaseUrl(session, env) : endpoint?.url ?? null;
 		const value = { method: (baseUrl ? providerLabel(baseUrl) : null) || "API Key" };
 		authCache.set(cacheKey, {
 			at: Date.now(),
@@ -5424,7 +5668,7 @@ function collectSessionTitle(session, env = process.env) {
 
 //#endregion
 //#region src/runtime/state.ts
-function buildHudState(cwd, rollout, sessionStart, config, now = /* @__PURE__ */ new Date(), codexProcess = null, loggedUsage = null) {
+function buildHudState(cwd, rollout, sessionStart, config, now = /* @__PURE__ */ new Date(), codexProcess = null, loggedUsage = null, queriedUsage = null) {
 	const workspaceRoots = rollout.session?.workspaceRoots ?? [];
 	const usage = resolveUsageData(mergeUsageData(rollout.usage, loggedUsage), config.display, now);
 	const title = config.display.showSessionName ? collectSessionTitle(rollout.session) : null;
@@ -5432,6 +5676,7 @@ function buildHudState(cwd, rollout, sessionStart, config, now = /* @__PURE__ */
 		...rollout.session,
 		sessionName: title ?? rollout.session.sessionName
 	} : null;
+	const auth = config.display.showAuth ? collectAuthInfo(usage?.planType ?? null, session, process.env, codexProcess) : null;
 	return {
 		session,
 		project: collectProjectInfo(cwd, workspaceRoots, process.env, config.display.showConfigCounts),
@@ -5449,7 +5694,10 @@ function buildHudState(cwd, rollout, sessionStart, config, now = /* @__PURE__ */
 		conversationTurns: rollout.conversationTurns,
 		compactCount: rollout.compactCount,
 		memory: config.display.showMemoryUsage ? collectMemoryInfo() : null,
-		auth: config.display.showAuth ? collectAuthInfo(usage?.planType ?? null, session, process.env, codexProcess) : null,
+		auth: auth && queriedUsage?.balanceLabel ? {
+			...auth,
+			balanceLabel: queriedUsage.balanceLabel
+		} : auth,
 		sessionStart: session?.startTime ?? sessionStart
 	};
 }
@@ -5573,5 +5821,5 @@ async function waitForNewRootSession(cwd, snapshot, codexHome = getCodexHome(), 
 }
 
 //#endregion
-export { getHudStateDirectory as A, readLatestLoggedRateLimits as C, resolveSessionEndpoint as D, resolveProcessSession as E, RolloutParser as M, getCodexHome as O, DEFAULT_CONFIG as S, findCodexLogDatabase as T, visibleWidth as _, waitForNewRootSession as a, applyConfigMigrations as b, desiredPaneHeight as c, resizeCmuxPane as d, resizeHudPane as f, truncateAnsi as g, safeText as h, snapshotRootSessions as i, getLegacyStateDirectory as j, getConfigPath as k, hudRenderHeight as l, renderHud as m, createSessionBindingPath as n, writeSessionBinding as o, settleCmuxPaneHeight as p, readSessionBinding as r, buildHudState as s, acquireSessionDiscoveryLock as t, readCmuxPaneGeometry as u, sliceAnsi as v, findActiveSession as w, rawConfigVersion as x, loadConfig as y };
-//# sourceMappingURL=session-binding-CpXPrdLv.mjs.map
+export { getCodexHome as A, readLatestLoggedRateLimits as C, resolveProcessEndpoint as D, findCodexLogDatabase as E, getHudStateDirectory as M, getLegacyStateDirectory as N, resolveProcessSession as O, RolloutParser as P, DEFAULT_CONFIG as S, findActiveSession as T, visibleWidth as _, waitForNewRootSession as a, applyConfigMigrations as b, desiredPaneHeight as c, resizeCmuxPane as d, resizeHudPane as f, truncateAnsi as g, safeText as h, snapshotRootSessions as i, getConfigPath as j, resolveSessionEndpoint as k, hudRenderHeight as l, renderHud as m, createSessionBindingPath as n, writeSessionBinding as o, settleCmuxPaneHeight as p, readSessionBinding as r, buildHudState as s, acquireSessionDiscoveryLock as t, readCmuxPaneGeometry as u, sliceAnsi as v, readConfiguredExternalUsage as w, rawConfigVersion as x, loadConfig as y };
+//# sourceMappingURL=session-binding-BUY-BqJh.mjs.map

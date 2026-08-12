@@ -3,8 +3,10 @@ import type { HudConfig, Language, LineLayout } from '../types/config.js'
 // @env node
 import process from 'node:process'
 import * as prompts from '@clack/prompts'
+import { readConfiguredExternalUsage } from '../codex/external-usage.js'
 import { readLatestLoggedRateLimits } from '../codex/log-rate-limits.js'
 import { RolloutParser } from '../codex/rollout-parser.js'
+import { resolveSessionEndpoint } from '../codex/session-endpoint.js'
 import { findActiveSession } from '../codex/session-finder.js'
 import {
   applyGuidedElementChanges,
@@ -69,6 +71,7 @@ function preserveAdvancedSettings(target: HudConfig, source: HudConfig): void {
     'externalUsagePath',
     'externalUsageWritePath',
     'externalUsageFreshnessMs',
+    'externalUsageQueries',
     'modelFormat',
     'modelOverride',
     'showProvider',
@@ -85,14 +88,18 @@ function preserveAdvancedSettings(target: HudConfig, source: HudConfig): void {
   }
 }
 
-function preview(config: HudConfig): string {
+async function preview(config: HudConfig): Promise<string> {
   const parser = new RolloutParser()
   const candidate = findActiveSession({ cwd: process.cwd() })
   parser.setFile(candidate?.path ?? null)
   const now = new Date()
   const rollout = parser.parse()
-  const loggedUsage = readLatestLoggedRateLimits(process.env, now.getTime())?.usage ?? null
-  const state = buildHudState(process.cwd(), rollout, now, config, now, null, loggedUsage)
+  const endpoint = rollout.session ? resolveSessionEndpoint(rollout.session.id) : null
+  const loggedUsage = readLatestLoggedRateLimits(process.env, now.getTime(), endpoint?.url ?? null)?.usage ?? null
+  const queriedUsage = config.display.showAuth
+    ? await readConfiguredExternalUsage(config.display.externalUsageQueries, endpoint?.url ?? null, process.env, now.getTime())
+    : null
+  const state = buildHudState(process.cwd(), rollout, now, config, now, null, loggedUsage, queriedUsage)
   return renderHud({
     config,
     state,
@@ -270,7 +277,7 @@ export async function runConfigure(args: string[]): Promise<number> {
     }
     config.pathLevels = pathLevels as 1 | 2 | 3
 
-    prompts.note(preview(config), 'HUD preview')
+    prompts.note(await preview(config), 'HUD preview')
     const confirmed = await prompts.confirm({
       message: `Save ${base} / ${selectedLanguage} / ${config.lineLayout} configuration?`,
       initialValue: true,

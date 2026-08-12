@@ -110,6 +110,19 @@ function providerLabel(baseUrl: string): string | null {
   return index > 0 && GENERIC_SUFFIX.test(labels[index]) ? labels[index - 1] : labels[index]
 }
 
+function isChatGptEndpoint(baseUrl: string | null): boolean {
+  if (!baseUrl) {
+    return false
+  }
+  try {
+    const hostname = new URL(baseUrl).hostname.toLowerCase()
+    return hostname === 'chatgpt.com' || hostname.endsWith('.chatgpt.com')
+  }
+  catch {
+    return false
+  }
+}
+
 /**
  * The endpoint declared in config.toml is only evidence about a session if the
  * file has not been rewritten since Codex read it at session start. Before a
@@ -158,7 +171,11 @@ export function collectAuthInfo(
   }
   const hasApiKey = typeof auth.OPENAI_API_KEY === 'string' || Boolean(env.OPENAI_API_KEY)
   const user = jwtUser(auth) ?? findString(auth, new Set(['email', 'preferred_username', 'username']))?.split('@')[0]
-  if (planType) {
+  const endpoint = session
+    ? resolveSessionEndpoint(session.id, env)
+    : codexProcess && resolveProcessEndpoint(codexProcess.pid, codexProcess.launchedAt, env)
+  const baseUrl = session ? endpoint?.url ?? configuredBaseUrl(session, env) : endpoint?.url ?? null
+  if (planType && (isChatGptEndpoint(baseUrl) || !hasApiKey)) {
     const value = { method: `ChatGPT ${planType}`, user: user ?? undefined }
     authCache.set(cacheKey, { at: Date.now(), value })
     return structuredClone(value)
@@ -167,10 +184,6 @@ export function collectAuthInfo(
     // Prefer the endpoint this session actually reached, because config.toml
     // may have been rewritten since the session started. When neither source
     // can prove an endpoint, stay generic rather than name the wrong host.
-    const endpoint = session
-      ? resolveSessionEndpoint(session.id, env)
-      : codexProcess && resolveProcessEndpoint(codexProcess.pid, codexProcess.launchedAt, env)
-    const baseUrl = session ? endpoint?.url ?? configuredBaseUrl(session, env) : endpoint?.url ?? null
     const value: AuthInfo = { method: (baseUrl ? providerLabel(baseUrl) : null) || 'API Key' }
     authCache.set(cacheKey, { at: Date.now(), value })
     return value

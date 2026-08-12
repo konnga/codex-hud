@@ -1,13 +1,14 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
-import { readExternalUsage, resolveUsageData } from './external-usage.js'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { readConfiguredExternalUsage, readExternalUsage, resolveUsageData } from './external-usage.js'
 
 const directories: string[] = []
 
 afterEach(() => {
   directories.splice(0).forEach(directory => fs.rmSync(directory, { recursive: true, force: true }))
+  vi.unstubAllGlobals()
 })
 
 describe('external usage snapshots', () => {
@@ -54,5 +55,187 @@ describe('external usage snapshots', () => {
     if (process.platform !== 'win32') {
       expect(fs.statSync(writePath).mode & 0o777).toBe(0o600)
     }
+  })
+
+  it('queries an explicitly enabled New API endpoint with separate management credentials', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      success: true,
+      data: { quota: 6_250_000, group: 'coding' },
+    })))
+    vi.stubGlobal('fetch', fetchMock)
+    const query = {
+      enabled: true,
+      origin: 'https://relay.example.com',
+      template: 'newApi' as const,
+      apiKeyEnv: '',
+      accessTokenEnv: 'RELAY_ACCESS_TOKEN',
+      userIdEnv: 'RELAY_USER_ID',
+      refreshMs: 300_000,
+      quotaPerCredit: 500_000,
+    }
+
+    await expect(readConfiguredExternalUsage(
+      [query],
+      'https://relay.example.com/v1/responses',
+      { RELAY_ACCESS_TOKEN: 'management-token', RELAY_USER_ID: '42' },
+      Date.parse('2026-08-12T08:00:00Z'),
+    )).resolves.toMatchObject({ balanceLabel: 'coding: $12.5' })
+    expect(fetchMock).toHaveBeenCalledWith('https://relay.example.com/api/user/self', expect.objectContaining({
+      headers: expect.objectContaining({
+        'Authorization': 'Bearer management-token',
+        'New-Api-User': '42',
+      }),
+    }))
+
+    await readConfiguredExternalUsage([query], 'https://relay.example.com/v1/responses', {
+      RELAY_ACCESS_TOKEN: 'management-token',
+      RELAY_USER_ID: '42',
+    }, Date.parse('2026-08-12T08:00:01Z'))
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not issue network requests when the query is disabled or the endpoint differs', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const query = {
+      enabled: false,
+      origin: 'https://relay-disabled.example.com',
+      template: 'newApi' as const,
+      apiKeyEnv: '',
+      accessTokenEnv: 'RELAY_ACCESS_TOKEN',
+      userIdEnv: 'RELAY_USER_ID',
+      refreshMs: 300_000,
+      quotaPerCredit: 500_000,
+    }
+
+    await expect(readConfiguredExternalUsage(
+      [query],
+      'https://other.example.com/v1',
+      { RELAY_ACCESS_TOKEN: 'management-token', RELAY_USER_ID: '42' },
+    )).resolves.toBeNull()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('queries Sub2API account balance with its JWT token', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      code: 0,
+      message: 'success',
+      data: { balance: 18.75 },
+    })))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const usage = await readConfiguredExternalUsage([{
+      enabled: true,
+      origin: 'https://sub2.example.com',
+      template: 'sub2Api',
+      apiKeyEnv: '',
+      accessTokenEnv: 'SUB2_JWT',
+      userIdEnv: '',
+      refreshMs: 300_000,
+      quotaPerCredit: 500_000,
+    }], 'https://sub2.example.com/v1/responses', { SUB2_JWT: 'jwt-token' })
+    expect(usage).toMatchObject({ balanceLabel: '$18.75' })
+    expect(fetchMock).toHaveBeenCalledWith('https://sub2.example.com/api/v1/auth/me', expect.objectContaining({
+      headers: expect.objectContaining({
+        Accept: 'application/json',
+        Authorization: 'Bearer jwt-token',
+      }),
+    }))
+  })
+
+  it('uses the CC Switch general balance protocol and reuses OPENAI_API_KEY', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      balance: 9.75,
+      is_active: true,
+    })))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const usage = await readConfiguredExternalUsage([{
+      enabled: true,
+      origin: 'https://general.example.com',
+      template: 'general',
+      apiKeyEnv: '',
+      accessTokenEnv: '',
+      userIdEnv: '',
+      refreshMs: 300_000,
+      quotaPerCredit: 500_000,
+    }], 'https://general.example.com/v1/responses', { OPENAI_API_KEY: 'sk-query' })
+
+    expect(usage).toMatchObject({ balanceLabel: '$9.75' })
+    expect(fetchMock).toHaveBeenCalledWith('https://general.example.com/user/balance', expect.objectContaining({
+      headers: expect.objectContaining({
+        'Authorization': 'Bearer sk-query',
+        'User-Agent': 'codex-hud/0.4',
+      }),
+    }))
+  })
+
+  it('prefers a dedicated general-query API key environment variable', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ balance: 7 })))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await readConfiguredExternalUsage([{
+      enabled: true,
+      origin: 'https://dedicated.example.com',
+      template: 'general',
+      apiKeyEnv: 'BALANCE_API_KEY',
+      accessTokenEnv: '',
+      userIdEnv: '',
+      refreshMs: 300_000,
+      quotaPerCredit: 500_000,
+    }], 'https://dedicated.example.com/v1', {
+      BALANCE_API_KEY: 'sk-dedicated',
+      OPENAI_API_KEY: 'sk-inference',
+    })
+
+    expect(fetchMock).toHaveBeenCalledWith('https://dedicated.example.com/user/balance', expect.objectContaining({
+      headers: expect.objectContaining({ Authorization: 'Bearer sk-dedicated' }),
+    }))
+  })
+
+  it('applies the default general template to the current third-party origin', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ balance: 4.5 })))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const usage = await readConfiguredExternalUsage([{
+      enabled: true,
+      origin: '*',
+      template: 'general',
+      apiKeyEnv: '',
+      accessTokenEnv: '',
+      userIdEnv: '',
+      refreshMs: 300_000,
+      quotaPerCredit: 500_000,
+    }], 'https://auto-relay.example.com/v1/responses', { OPENAI_API_KEY: 'sk-auto' })
+
+    expect(usage).toMatchObject({ balanceLabel: '$4.5' })
+    expect(fetchMock).toHaveBeenCalledWith('https://auto-relay.example.com/user/balance', expect.any(Object))
+  })
+
+  it('never applies the default general template to official endpoints', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const query = {
+      enabled: true,
+      origin: '*',
+      template: 'general' as const,
+      apiKeyEnv: '',
+      accessTokenEnv: '',
+      userIdEnv: '',
+      refreshMs: 300_000,
+      quotaPerCredit: 500_000,
+    }
+
+    await expect(readConfiguredExternalUsage(
+      [query],
+      'https://chatgpt.com/backend-api/codex/responses',
+      { OPENAI_API_KEY: 'sk-never-send' },
+    )).resolves.toBeNull()
+    await expect(readConfiguredExternalUsage(
+      [query],
+      'https://api.openai.com/v1/responses',
+      { OPENAI_API_KEY: 'sk-never-send' },
+    )).resolves.toBeNull()
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 })

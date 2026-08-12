@@ -84,9 +84,10 @@ function authSegment(ctx: RenderContext): string | null {
   const user = maximum > 0 && rawUser.length > maximum
     ? `${rawUser.slice(0, Math.max(1, maximum - 1))}…`
     : rawUser
-  return ctx.config.display.showAuthUser && user
+  const method = ctx.config.display.showAuthUser && user
     ? `${ctx.state.auth.method} (${user})`
     : ctx.state.auth.method
+  return ctx.state.auth.balanceLabel ? `${method} · ${ctx.state.auth.balanceLabel}` : method
 }
 
 export function renderProjectLine(ctx: RenderContext): string | null {

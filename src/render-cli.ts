@@ -5,9 +5,10 @@ import fs from 'node:fs'
 // @env node
 import process from 'node:process'
 import { pathToFileURL } from 'node:url'
+import { readConfiguredExternalUsage } from './codex/external-usage.js'
 import { readLatestLoggedRateLimits } from './codex/log-rate-limits.js'
 import { RolloutParser } from './codex/rollout-parser.js'
-import { resolveProcessSession } from './codex/session-endpoint.js'
+import { resolveProcessEndpoint, resolveProcessSession, resolveSessionEndpoint } from './codex/session-endpoint.js'
 import { findActiveSession } from './codex/session-finder.js'
 import { loadConfig } from './config/load.js'
 import {
@@ -142,8 +143,9 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
     }
   }
   let lastConfigMtime = configMtime()
+  let render: () => Promise<void>
 
-  const render = (): void => {
+  const renderFrame = async (): Promise<void> => {
     const nowMs = Date.now()
     if (currentSessionPath && !fs.existsSync(currentSessionPath)) {
       currentSessionPath = null
@@ -201,10 +203,16 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
     const rollout = parser.parse()
     const codexProcess = codexPid ? { pid: codexPid, launchedAt: options.launchedAfter ?? startedAt } : null
     const now = new Date()
+    const endpoint = rollout.session
+      ? resolveSessionEndpoint(rollout.session.id)
+      : codexProcess ? resolveProcessEndpoint(codexProcess.pid, codexProcess.launchedAt) : null
     const loggedUsage = loaded.config.display.showUsage || loaded.config.display.showAuth
-      ? readLatestLoggedRateLimits(process.env, now.getTime())?.usage ?? null
+      ? readLatestLoggedRateLimits(process.env, now.getTime(), endpoint?.url ?? null)?.usage ?? null
       : null
-    const state = buildHudState(options.cwd, rollout, startedAt, loaded.config, now, codexProcess, loggedUsage)
+    const queriedUsage = loaded.config.display.showAuth
+      ? await readConfiguredExternalUsage(loaded.config.display.externalUsageQueries, endpoint?.url ?? null, process.env, now.getTime())
+      : null
+    const state = buildHudState(options.cwd, rollout, startedAt, loaded.config, now, codexProcess, loggedUsage, queriedUsage)
     latestTurns = state.conversationTurns
     latestImages = state.images
     const width = process.stdout.columns || Number(process.env.COLUMNS) || loaded.config.maxWidth || 120
@@ -273,11 +281,30 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
     }
   }
 
-  render()
+  let renderPromise: Promise<void> | null = null
+  let renderQueued = false
+  render = (): Promise<void> => {
+    if (renderPromise) {
+      renderQueued = true
+      return renderPromise
+    }
+    const run = async (): Promise<void> => {
+      do {
+        renderQueued = false
+        await renderFrame()
+      } while (renderQueued)
+    }
+    renderPromise = run().finally(() => {
+      renderPromise = null
+    })
+    return renderPromise
+  }
+
+  await render()
   if (options.once) {
     return
   }
-  const interval = setInterval(render, 1_000)
+  const interval = setInterval(() => void render(), 1_000)
   const configSafetyInterval = setInterval(() => {
     const nextMtime = configMtime()
     if (nextMtime !== lastConfigMtime) {

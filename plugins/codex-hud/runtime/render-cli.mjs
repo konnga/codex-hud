@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { C as readLatestLoggedRateLimits, E as resolveProcessSession, M as RolloutParser, _ as visibleWidth, c as desiredPaneHeight, d as resizeCmuxPane, f as resizeHudPane, g as truncateAnsi, h as safeText, l as hudRenderHeight, m as renderHud, o as writeSessionBinding, p as settleCmuxPaneHeight, r as readSessionBinding, s as buildHudState, u as readCmuxPaneGeometry, v as sliceAnsi, w as findActiveSession, y as loadConfig } from "./session-binding-CpXPrdLv.mjs";
+import { C as readLatestLoggedRateLimits, D as resolveProcessEndpoint, O as resolveProcessSession, P as RolloutParser, T as findActiveSession, _ as visibleWidth, c as desiredPaneHeight, d as resizeCmuxPane, f as resizeHudPane, g as truncateAnsi, h as safeText, k as resolveSessionEndpoint, l as hudRenderHeight, m as renderHud, o as writeSessionBinding, p as settleCmuxPaneHeight, r as readSessionBinding, s as buildHudState, u as readCmuxPaneGeometry, v as sliceAnsi, w as readConfiguredExternalUsage, y as loadConfig } from "./session-binding-BUY-BqJh.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -418,7 +418,8 @@ async function runRenderCli(args = process.argv.slice(2)) {
 		}
 	};
 	let lastConfigMtime = configMtime();
-	const render = () => {
+	let render;
+	const renderFrame = async () => {
 		const nowMs = Date.now();
 		if (currentSessionPath && !fs.existsSync(currentSessionPath)) {
 			currentSessionPath = null;
@@ -464,8 +465,10 @@ async function runRenderCli(args = process.argv.slice(2)) {
 			launchedAt: options.launchedAfter ?? startedAt
 		} : null;
 		const now = /* @__PURE__ */ new Date();
-		const loggedUsage = loaded.config.display.showUsage || loaded.config.display.showAuth ? readLatestLoggedRateLimits(process.env, now.getTime())?.usage ?? null : null;
-		const state = buildHudState(options.cwd, rollout, startedAt, loaded.config, now, codexProcess, loggedUsage);
+		const endpoint = rollout.session ? resolveSessionEndpoint(rollout.session.id) : codexProcess ? resolveProcessEndpoint(codexProcess.pid, codexProcess.launchedAt) : null;
+		const loggedUsage = loaded.config.display.showUsage || loaded.config.display.showAuth ? readLatestLoggedRateLimits(process.env, now.getTime(), endpoint?.url ?? null)?.usage ?? null : null;
+		const queriedUsage = loaded.config.display.showAuth ? await readConfiguredExternalUsage(loaded.config.display.externalUsageQueries, endpoint?.url ?? null, process.env, now.getTime()) : null;
+		const state = buildHudState(options.cwd, rollout, startedAt, loaded.config, now, codexProcess, loggedUsage, queriedUsage);
 		latestTurns = state.conversationTurns;
 		latestImages = state.images;
 		const width = process.stdout.columns || Number(process.env.COLUMNS) || loaded.config.maxWidth || 120;
@@ -514,9 +517,27 @@ async function runRenderCli(args = process.argv.slice(2)) {
 			process.stdout.write(`\u001B[?25l${clear}${lines.map((line) => `\u001B[2K${line}`).join("\n")}\u001B[J`);
 		}
 	};
-	render();
+	let renderPromise = null;
+	let renderQueued = false;
+	render = () => {
+		if (renderPromise) {
+			renderQueued = true;
+			return renderPromise;
+		}
+		const run = async () => {
+			do {
+				renderQueued = false;
+				await renderFrame();
+			} while (renderQueued);
+		};
+		renderPromise = run().finally(() => {
+			renderPromise = null;
+		});
+		return renderPromise;
+	};
+	await render();
 	if (options.once) return;
-	const interval = setInterval(render, 1e3);
+	const interval = setInterval(() => void render(), 1e3);
 	const configSafetyInterval = setInterval(() => {
 		const nextMtime = configMtime();
 		if (nextMtime !== lastConfigMtime) {

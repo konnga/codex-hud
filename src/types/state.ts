@@ -158,6 +158,7 @@ export interface SessionInfo {
 export interface AuthInfo {
   method: string
   user?: string
+  balanceLabel?: string
 }
 
 export interface HudState {

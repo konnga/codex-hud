@@ -195,6 +195,45 @@ codex-hud configure --language zh-Hant
 
 Configuration is stored at `${CODEX_HOME:-~/.codex}/codex-hud/config.json`. Sessions that already have a HUD pane reload saved changes automatically. A Codex process started without the Codex HUD launcher still needs to be restarted.
 
+### Relay balance queries
+
+Codex HUD supports CC Switch's general balance protocol plus dedicated New API and Sub2API templates. The general query is enabled by default: when a new session reaches a third-party relay, the HUD requests that relay's `/user/balance` endpoint with the current API key. ChatGPT and OpenAI official origins are always excluded. Queries run only while `auth` is visible. The balance appears beside the API-key provider name, for example `anyrouter · $12.50`, rather than on a separate usage line.
+
+No configuration is required for a relay that implements the general protocol. To disable automatic balance queries, set `"externalUsageQueries": []`. Use explicit entries only for a dedicated query key or a New API/Sub2API management endpoint:
+
+```json
+{
+  "display": {
+    "externalUsageQueries": [
+      {
+        "enabled": true,
+        "origin": "https://new-api.example.com",
+        "template": "newApi",
+        "apiKeyEnv": "",
+        "accessTokenEnv": "RELAY_ACCESS_TOKEN",
+        "userIdEnv": "RELAY_USER_ID",
+        "refreshMs": 300000,
+        "quotaPerCredit": 500000
+      },
+      {
+        "enabled": true,
+        "origin": "https://sub2.example.com",
+        "template": "sub2Api",
+        "apiKeyEnv": "",
+        "accessTokenEnv": "SUB2_JWT",
+        "userIdEnv": "",
+        "refreshMs": 300000,
+        "quotaPerCredit": 500000
+      }
+    ]
+  }
+}
+```
+
+The default `general` template matches CC Switch: it requests `GET /user/balance` with a Bearer API key and reads the numeric `balance` field. It reuses the current `OPENAI_API_KEY`; an explicit entry can set `apiKeyEnv` to use a dedicated query key. This endpoint is a common convention, not an industry standard, so unsupported relays simply show no balance.
+
+For New API, use its system access token and user ID, not the inference `sk-` key. For Sub2API, use the panel login JWT. New API quota units default to 500,000 per displayed dollar; change `quotaPerCredit` for deployments with a different conversion. Requests time out after three seconds and preserve the last successful value across transient failures.
+
 <details>
 <summary><strong>All configurable fields and environment variables</strong></summary>
 
@@ -355,7 +394,8 @@ Uninstall does not delete the HUD configuration, official Codex data, or files t
 
 ## Privacy and safety
 
-- The HUD reads local Codex rollout data, configuration metadata, and Git status only.
+- By default, the HUD reads local Codex rollout data, configuration metadata, and Git status only.
+- Explicitly enabled relay balance queries send the configured management credential to the matching session origin only; credentials are read from environment variables and are not persisted by Codex HUD.
 - The persistent HUD does not display user prompts, model response bodies, or tool output bodies.
 - Conversation content is displayed only after the user explicitly opens the navigator and remains local.
 - All rendered text is stripped of terminal control characters.

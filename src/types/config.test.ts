@@ -10,6 +10,12 @@ describe('default HUD configuration', () => {
     expect(DEFAULT_CONFIG.lineLayout).toBe('expanded')
     expect(DEFAULT_CONFIG.refreshIntervalMs).toBe(300)
     expect(DEFAULT_CONFIG.display.showModel).toBe(true)
+    expect(DEFAULT_CONFIG.display.showAuth).toBe(true)
+    expect(DEFAULT_CONFIG.display.externalUsageQueries).toMatchObject([{
+      enabled: true,
+      origin: '*',
+      template: 'general',
+    }])
   })
 
   it('keeps the canonical element order', () => {

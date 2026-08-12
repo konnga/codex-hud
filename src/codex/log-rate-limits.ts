@@ -8,11 +8,12 @@ import path from 'node:path'
 import process from 'node:process'
 import { getCodexHome, getHudStateDirectory } from '../config/paths.js'
 import { normalizeRateLimits } from './rate-limits.js'
-import { findCodexLogDatabase } from './session-endpoint.js'
+import { endpointOrigin, findCodexLogDatabase } from './session-endpoint.js'
 
 export interface LoggedUsageSnapshot {
   usage: UsageData
   observedAt: Date
+  origin: string
 }
 
 const EVENT_PREFIX = 'SSE event: '
@@ -21,6 +22,7 @@ const CACHE_MS = 15_000
 const MAX_EVENT_AGE_SECONDS = 8 * 24 * 60 * 60
 const RESETLESS_FRESHNESS_MS = 6 * 60 * 60 * 1_000
 const MAX_ROW_LOOKBACK = 200_000
+const MAX_EVENT_CANDIDATES = 1_000
 const SNAPSHOT_FILE_NAME = 'account-usage.json'
 const MAX_STORED_BODY_LENGTH = 16_384
 
@@ -96,41 +98,68 @@ function storedSnapshotPath(env: NodeJS.ProcessEnv): string {
   return path.join(getHudStateDirectory(env), SNAPSHOT_FILE_NAME)
 }
 
-function readStoredSnapshot(env: NodeJS.ProcessEnv, now: number): LoggedUsageSnapshot | null {
+function readStoredSnapshot(
+  env: NodeJS.ProcessEnv,
+  now: number,
+  expectedOrigin?: string,
+): LoggedUsageSnapshot | null {
   try {
     const stored = record(JSON.parse(fs.readFileSync(storedSnapshotPath(env), 'utf8')))
-    if (stored?.version !== 1 || typeof stored.body !== 'string' || stored.body.length > MAX_STORED_BODY_LENGTH) {
+    const entries = record(stored?.entries)
+    if (stored?.version !== 2 || !entries) {
       return null
     }
-    const observedAt = typeof stored.observed_at === 'string' ? new Date(stored.observed_at) : null
-    if (!observedAt || Number.isNaN(observedAt.getTime()) || now - observedAt.getTime() > MAX_EVENT_AGE_SECONDS * 1_000) {
-      return null
+    const candidates = expectedOrigin === undefined
+      ? Object.entries(entries)
+      : [[expectedOrigin, entries[expectedOrigin]] as const]
+    let newest: LoggedUsageSnapshot | null = null
+    for (const [origin, rawEntry] of candidates) {
+      const entry = record(rawEntry)
+      const observedAt = typeof entry?.observed_at === 'string' ? new Date(entry.observed_at) : null
+      const body = typeof entry?.body === 'string' ? entry.body : null
+      if (!observedAt || Number.isNaN(observedAt.getTime()) || !body || body.length > MAX_STORED_BODY_LENGTH
+        || now - observedAt.getTime() > MAX_EVENT_AGE_SECONDS * 1_000) {
+        continue
+      }
+      const usage = parseEvent(body)
+      const fresh = usage ? freshUsage(usage, observedAt, now) : null
+      if (fresh && (!newest || observedAt > newest.observedAt)) {
+        newest = { usage: fresh, observedAt, origin }
+      }
     }
-    const usage = parseEvent(stored.body)
-    const fresh = usage ? freshUsage(usage, observedAt, now) : null
-    return fresh ? { usage: fresh, observedAt } : null
+    return newest
   }
   catch {
     return null
   }
 }
 
-function writeStoredSnapshot(env: NodeJS.ProcessEnv, body: string, observedAt: Date, now: number): void {
+function writeStoredSnapshot(env: NodeJS.ProcessEnv, body: string, observedAt: Date, origin: string): void {
   if (body.length > MAX_STORED_BODY_LENGTH) {
-    return
-  }
-  const existing = readStoredSnapshot(env, now)
-  if (existing && existing.observedAt.getTime() > observedAt.getTime()) {
     return
   }
   const filePath = storedSnapshotPath(env)
   const temporaryPath = `${filePath}.${process.pid}.tmp`
   try {
+    let stored: Record<string, unknown> | null = null
+    try {
+      stored = record(JSON.parse(fs.readFileSync(filePath, 'utf8')))
+    }
+    catch {
+      // A missing or legacy cache starts a new provider-partitioned snapshot.
+    }
+    const currentEntries = stored?.version === 2 ? record(stored.entries) : null
+    const entries = currentEntries ? { ...currentEntries } : {}
+    const current = record(entries[origin])
+    const currentObservedAt = typeof current?.observed_at === 'string' ? new Date(current.observed_at) : null
+    if (currentObservedAt && !Number.isNaN(currentObservedAt.getTime()) && currentObservedAt > observedAt) {
+      return
+    }
+    entries[origin] = { observed_at: observedAt.toISOString(), body }
     fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 })
     fs.writeFileSync(temporaryPath, `${JSON.stringify({
-      version: 1,
-      observed_at: observedAt.toISOString(),
-      body,
+      version: 2,
+      entries,
     }, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
     fs.renameSync(temporaryPath, filePath)
     fs.chmodSync(filePath, 0o600)
@@ -145,29 +174,59 @@ function writeStoredSnapshot(env: NodeJS.ProcessEnv, body: string, observedAt: D
   }
 }
 
+function eventOrigin(database: string, processUuid: string, timestamp: number): string | null {
+  const safeProcessUuid = processUuid.replaceAll('\'', '\'\'')
+  const sql = [
+    'SELECT feedback_log_body',
+    '  FROM logs',
+    ` WHERE process_uuid = '${safeProcessUuid}'`,
+    `   AND ts BETWEEN ${timestamp - MAX_EVENT_AGE_SECONDS} AND ${timestamp + 60}`,
+    `   AND target IN ('codex_http_client::default_client', 'codex_http_client::client')`,
+    `   AND instr(feedback_log_body, 'url=') > 0`,
+    ` ORDER BY abs(ts - ${timestamp}) ASC, id DESC`,
+    ' LIMIT 1;',
+  ].join('\n')
+  const result = spawnSync('sqlite3', ['-readonly', '-noheader', '-batch', database, sql], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+    timeout: QUERY_TIMEOUT_MS,
+  })
+  const match = typeof result.stdout === 'string' ? /\burl=(https?:\/\/[^\s"]+)/.exec(result.stdout) : null
+  return match ? endpointOrigin(match[1]) : null
+}
+
 /**
  * Codex currently logs `codex.rate_limits` SSE events but does not copy them
- * into rollout token-count events for every provider. The newest event under a
- * Codex home is account-wide, so persist it for other open HUD processes too.
+ * into rollout token-count events for every provider. The newest event per
+ * provider origin is account-wide, so persist it for other open HUD processes
+ * too. `expectedEndpoint` names the provider the caller is bound to; passing
+ * null means the endpoint is unknown, and showing no usage beats showing
+ * another provider's account.
  */
 export function readLatestLoggedRateLimits(
   env: NodeJS.ProcessEnv = process.env,
   now = Date.now(),
+  expectedEndpoint?: string | null,
 ): LoggedUsageSnapshot | null {
+  const expectedOrigin = expectedEndpoint === undefined ? undefined : expectedEndpoint ? endpointOrigin(expectedEndpoint) : null
+  if (expectedOrigin === null) {
+    return null
+  }
   const codexHome = getCodexHome(env)
-  const cached = cache.get(codexHome)
+  const cacheKey = `${codexHome}:${expectedOrigin ?? '*'}`
+  const cached = cache.get(cacheKey)
   if (cached && now - cached.at < CACHE_MS) {
     return cloneSnapshot(cached.value)
   }
   const remember = (value: LoggedUsageSnapshot | null): LoggedUsageSnapshot | null => {
-    cache.set(codexHome, { at: now, value: cloneSnapshot(value) })
+    cache.set(cacheKey, { at: now, value: cloneSnapshot(value) })
     return cloneSnapshot(value)
   }
-  let previous = readStoredSnapshot(env, now)
+  let previous = readStoredSnapshot(env, now, expectedOrigin)
   if (cached?.value) {
     const fallback = freshUsage(cached.value.usage, cached.value.observedAt, now)
     if (fallback) {
-      previous = { usage: fallback, observedAt: cached.value.observedAt }
+      previous = { usage: fallback, observedAt: cached.value.observedAt, origin: cached.value.origin }
     }
   }
   const database = findCodexLogDatabase(codexHome)
@@ -176,14 +235,14 @@ export function readLatestLoggedRateLimits(
   }
   const since = Math.floor(now / 1_000) - MAX_EVENT_AGE_SECONDS
   const sql = [
-    `SELECT ts || '|' || hex(feedback_log_body)`,
+    `SELECT ts || '|' || hex(process_uuid) || '|' || hex(feedback_log_body)`,
     '  FROM logs',
     ` WHERE id >= (SELECT max(id) - ${MAX_ROW_LOOKBACK} FROM logs)`,
     `   AND ts >= ${since}`,
     `   AND target = 'codex_api::sse::responses'`,
     `   AND instr(feedback_log_body, '"type":"codex.rate_limits"') > 0`,
     ' ORDER BY id DESC',
-    ' LIMIT 1;',
+    ` LIMIT ${MAX_EVENT_CANDIDATES};`,
   ].join('\n')
   const result = spawnSync('sqlite3', ['-readonly', '-noheader', '-batch', database, sql], {
     encoding: 'utf8',
@@ -193,20 +252,32 @@ export function readLatestLoggedRateLimits(
   if (typeof result.stdout !== 'string') {
     return remember(previous)
   }
+  const origins = new Map<string, string | null>()
   for (const line of result.stdout.split('\n')) {
-    const [timestampValue, bodyValue] = line.split('|')
+    const [timestampValue, processValue, bodyValue] = line.split('|')
     const timestamp = Number(timestampValue)
+    const processUuid = decodeHex(processValue ?? '')
     const body = decodeHex(bodyValue ?? '')
-    if (!Number.isFinite(timestamp) || !body) {
+    if (!Number.isFinite(timestamp) || !processUuid || !body) {
       continue
     }
     const observedAt = new Date(timestamp * 1_000)
     const usage = parseEvent(body)
     const fresh = usage ? freshUsage(usage, observedAt, now) : null
-    if (fresh) {
-      writeStoredSnapshot(env, body, observedAt, now)
-      return remember({ usage: fresh, observedAt })
+    if (!fresh) {
+      // Attributing an event costs one sqlite3 spawn per process, so stale
+      // events must be dropped before their origin is ever looked up.
+      continue
     }
+    const origin = origins.has(processUuid)
+      ? origins.get(processUuid) ?? null
+      : eventOrigin(database, processUuid, timestamp)
+    origins.set(processUuid, origin)
+    if (!origin || (expectedOrigin !== undefined && origin !== expectedOrigin)) {
+      continue
+    }
+    writeStoredSnapshot(env, body, observedAt, origin)
+    return remember({ usage: fresh, observedAt, origin })
   }
   return remember(previous)
 }

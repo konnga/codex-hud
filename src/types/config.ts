@@ -2,6 +2,18 @@ export type Language = 'en' | 'zh-Hans' | 'zh-Hant'
 export type LineLayout = 'compact' | 'expanded'
 export type ContextValueMode = 'percent' | 'tokens' | 'remaining' | 'both'
 export type UsageValueMode = 'percent' | 'remaining'
+export type ExternalUsageQueryTemplate = 'general' | 'newApi' | 'sub2Api'
+
+export interface ExternalUsageQueryConfig {
+  enabled: boolean
+  origin: string
+  template: ExternalUsageQueryTemplate
+  apiKeyEnv: string
+  accessTokenEnv: string
+  userIdEnv: string
+  refreshMs: number
+  quotaPerCredit: number
+}
 export type TimeFormatMode = 'relative' | 'absolute' | 'both' | 'elapsed' | 'elapsedAndAbsolute'
 export type ModelFormatMode = 'full' | 'compact' | 'short'
 export type GitBranchOverflowMode = 'truncate' | 'wrap'
@@ -115,6 +127,7 @@ export interface DisplayConfig {
   externalUsagePath: string
   externalUsageWritePath: string
   externalUsageFreshnessMs: number
+  externalUsageQueries: ExternalUsageQueryConfig[]
   modelFormat: ModelFormatMode
   modelOverride: string
   showProvider: boolean
@@ -205,7 +218,7 @@ export const DEFAULT_CONFIG: HudConfig = {
     showGoal: true,
     showTurns: true,
     showSessionName: false,
-    showAuth: false,
+    showAuth: true,
     showAuthUser: false,
     authUserLength: 8,
     showCodexVersion: false,
@@ -231,6 +244,16 @@ export const DEFAULT_CONFIG: HudConfig = {
     externalUsagePath: '',
     externalUsageWritePath: '',
     externalUsageFreshnessMs: 300_000,
+    externalUsageQueries: [{
+      enabled: true,
+      origin: '*',
+      template: 'general',
+      apiKeyEnv: '',
+      accessTokenEnv: '',
+      userIdEnv: '',
+      refreshMs: 300_000,
+      quotaPerCredit: 500_000,
+    }],
     modelFormat: 'full',
     modelOverride: '',
     showProvider: false,

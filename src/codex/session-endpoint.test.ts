@@ -112,6 +112,14 @@ describe('session endpoint resolution', () => {
     })
   })
 
+  it('reads request URLs from the current Codex client log target', () => {
+    const codexHome = codexHomeWithLogs([
+      { ...request(10, 'thread-client', 'https://current.example.com/v1/responses'), target: 'codex_http_client::client' },
+    ])
+
+    expect(resolve(codexHome, 'thread-client')?.url).toBe('https://current.example.com/v1/responses')
+  })
+
   it('breaks ties within one second by insertion order', () => {
     const codexHome = codexHomeWithLogs([
       request(10, 'thread-a', 'https://first.example.com/v1/responses'),

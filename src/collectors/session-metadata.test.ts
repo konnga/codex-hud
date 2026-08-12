@@ -89,6 +89,39 @@ describe('session metadata collectors', () => {
     expect(collectAuthInfo(null, session('session-log'), { CODEX_HOME: codexHome })).toEqual({ method: 'aisz' })
   })
 
+  it('does not let a relayed plan type override API-key authentication', () => {
+    const codexHome = apiKeyHome('codex-hud-auth-plan-')
+    writeLogDatabase(codexHome, [
+      { threadId: 'session-plan', target: 'codex_http_client::client', body: 'Request completed method=POST url=https://relay.example.com/v1/responses status=200 OK' },
+    ])
+
+    expect(collectAuthInfo('team', session('session-plan'), { CODEX_HOME: codexHome })).toEqual({ method: 'example' })
+  })
+
+  it('shows the subscription plan for ChatGPT authentication', () => {
+    const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-auth-chatgpt-'))
+    directories.push(codexHome)
+    fs.writeFileSync(path.join(codexHome, 'auth.json'), JSON.stringify({
+      tokens: { access_token: 'not-a-jwt', refresh_token: 'secret' },
+    }))
+
+    expect(collectAuthInfo('team', session('session-chatgpt'), { CODEX_HOME: codexHome })).toEqual({
+      method: 'ChatGPT team',
+    })
+  })
+
+  it('prefers an actual ChatGPT endpoint when an API key remains in the environment', () => {
+    const codexHome = apiKeyHome('codex-hud-auth-chatgpt-endpoint-')
+    writeLogDatabase(codexHome, [
+      { threadId: 'session-chatgpt-endpoint', target: 'codex_http_client::client', body: 'Request completed method=POST url=https://chatgpt.com/backend-api/codex/responses status=200 OK' },
+    ])
+
+    expect(collectAuthInfo('pro', session('session-chatgpt-endpoint'), {
+      CODEX_HOME: codexHome,
+      OPENAI_API_KEY: 'sk-stale',
+    })).toEqual({ method: 'ChatGPT pro' })
+  })
+
   it('falls back to the provider Codex resolved when no request has completed', () => {
     const codexHome = apiKeyHome('codex-hud-auth-init-')
     writeLogDatabase(codexHome, [

@@ -275,4 +275,19 @@ describe('hud renderer', () => {
     expect(lines.join('\n')).toContain('ChatGPT pro (builder)')
     expect(lines.join('\n')).toContain('out: 42.1 tok/s')
   })
+
+  it('renders relay balance beside the API key provider name', () => {
+    const config = createPreset('full')
+    config.display.showAuth = true
+    config.display.showUsage = true
+    const current = state()
+    current.auth = { method: 'anyrouter', balanceLabel: '$12.50' }
+    current.usage = null
+
+    const lines = renderHud({ config, state: current, options: { width: 180, height: 20, color: false }, now })
+
+    expect(lines[0]).toContain('anyrouter · $12.50')
+    expect(lines.filter(line => line.includes('$12.50'))).toHaveLength(1)
+    expect(lines.join('\n')).not.toContain('Usage $12.50')
+  })
 })

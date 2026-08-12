@@ -171,19 +171,22 @@ function writeLauncher(
 
 export function runInstall(args: string[]): number {
   const dryRun = args.includes('--dry-run')
-  const installCodexShim = args.includes('--codex-shim')
   migrateLegacyState(dryRun)
   const configMigration = migrateConfig({ dryRun })
   if (configMigration.migrated) {
     output(`${dryRun ? 'Would migrate' : 'Migrated'} Codex HUD configuration to version ${configMigration.toVersion}.`)
   }
   const directory = binDirectory()
+  const codexShim = path.join(directory, 'codex')
+  const previousState = readInstallState()
+  // An existing managed shim survives reinstalls that omit --codex-shim; a
+  // manually removed shim stays removed until the flag is passed again.
+  const installCodexShim = args.includes('--codex-shim')
+    || (previousState?.managedFiles.includes(codexShim) === true && isManagedLauncher(codexShim))
   const runtimeSource = runtimeSourceDirectory()
   const runtimeDirectory = managedRuntimeDirectory()
   const paths = executablePaths(runtimeDirectory)
-  const realCodex = findExecutable('codex', process.env, [
-    path.join(directory, 'codex'),
-  ])
+  const realCodex = findExecutable('codex', process.env, [codexShim])
   if (!realCodex) {
     throw new Error('Unable to find the real Codex executable before installing the shim.')
   }
@@ -192,14 +195,13 @@ export function runInstall(args: string[]): number {
     path.join(directory, 'codex-hud-render'),
   ]
   if (installCodexShim) {
-    managedFiles.push(path.join(directory, 'codex'))
+    managedFiles.push(codexShim)
   }
   const legacyManagedFiles = [path.join(directory, 'codex-hub'), path.join(directory, 'codex-hub-render')]
   if (!dryRun) {
     fs.mkdirSync(directory, { recursive: true })
     fs.mkdirSync(getHudStateDirectory(), { recursive: true, mode: 0o700 })
   }
-  const previousState = readInstallState()
   for (const target of managedFiles) {
     ensureManagedTarget(target, dryRun)
   }

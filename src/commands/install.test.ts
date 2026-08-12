@@ -125,10 +125,22 @@ describe('managed installer', () => {
     expect(fs.readFileSync(path.join(bin, 'codex-hud'), 'utf8')).toContain('replaced')
   })
 
-  it('removes a previously managed optional shim when reinstalled without it', () => {
+  it('keeps a previously managed optional shim when reinstalled without the flag', () => {
     const { bin } = environment()
     runInstall(['--codex-shim'])
     expect(fs.existsSync(path.join(bin, 'codex'))).toBe(true)
+    runInstall([])
+    expect(fs.readFileSync(path.join(bin, 'codex'), 'utf8')).toContain('# Managed by Codex HUD')
+    const state = JSON.parse(
+      fs.readFileSync(path.join(process.env.CODEX_HOME!, 'codex-hud', 'install.json'), 'utf8'),
+    )
+    expect(state.managedFiles).toContain(path.join(bin, 'codex'))
+  })
+
+  it('does not resurrect a manually removed codex shim', () => {
+    const { bin } = environment()
+    runInstall(['--codex-shim'])
+    fs.rmSync(path.join(bin, 'codex'))
     runInstall([])
     expect(fs.existsSync(path.join(bin, 'codex'))).toBe(false)
   })

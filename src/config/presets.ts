@@ -65,6 +65,7 @@ export function createPreset(preset: ConfigPreset): HudConfig {
   config.lineLayout = 'compact'
   config.elementOrder = ['project', 'context']
   config.display.showUsage = false
+  config.display.showAuth = false
   config.display.showAddedDirs = false
   config.display.showGoal = false
   config.display.showTurns = false

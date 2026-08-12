@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { A as getHudStateDirectory, C as readLatestLoggedRateLimits, D as resolveSessionEndpoint, M as RolloutParser, O as getCodexHome, S as DEFAULT_CONFIG, T as findCodexLogDatabase, a as waitForNewRootSession, b as applyConfigMigrations, i as snapshotRootSessions, j as getLegacyStateDirectory, k as getConfigPath, m as renderHud, n as createSessionBindingPath, o as writeSessionBinding, s as buildHudState, t as acquireSessionDiscoveryLock, w as findActiveSession, x as rawConfigVersion, y as loadConfig } from "./session-binding-CpXPrdLv.mjs";
+import { A as getCodexHome, C as readLatestLoggedRateLimits, E as findCodexLogDatabase, M as getHudStateDirectory, N as getLegacyStateDirectory, P as RolloutParser, S as DEFAULT_CONFIG, T as findActiveSession, a as waitForNewRootSession, b as applyConfigMigrations, i as snapshotRootSessions, j as getConfigPath, k as resolveSessionEndpoint, m as renderHud, n as createSessionBindingPath, o as writeSessionBinding, s as buildHudState, t as acquireSessionDiscoveryLock, w as readConfiguredExternalUsage, x as rawConfigVersion, y as loadConfig } from "./session-binding-BUY-BqJh.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import process$1, { stdin, stdout } from "node:process";
@@ -1263,6 +1263,7 @@ function createPreset(preset) {
 	config.lineLayout = "compact";
 	config.elementOrder = ["project", "context"];
 	config.display.showUsage = false;
+	config.display.showAuth = false;
 	config.display.showAddedDirs = false;
 	config.display.showGoal = false;
 	config.display.showTurns = false;
@@ -1359,6 +1360,7 @@ function preserveAdvancedSettings(target, source) {
 		"externalUsagePath",
 		"externalUsageWritePath",
 		"externalUsageFreshnessMs",
+		"externalUsageQueries",
 		"modelFormat",
 		"modelOverride",
 		"showProvider",
@@ -1370,16 +1372,18 @@ function preserveAdvancedSettings(target, source) {
 		"promptCacheTtlSeconds"
 	]) target.display[key] = structuredClone(source.display[key]);
 }
-function preview(config) {
+async function preview(config) {
 	const parser = new RolloutParser();
 	const candidate = findActiveSession({ cwd: process$1.cwd() });
 	parser.setFile(candidate?.path ?? null);
 	const now = /* @__PURE__ */ new Date();
 	const rollout = parser.parse();
-	const loggedUsage = readLatestLoggedRateLimits(process$1.env, now.getTime())?.usage ?? null;
+	const endpoint = rollout.session ? resolveSessionEndpoint(rollout.session.id) : null;
+	const loggedUsage = readLatestLoggedRateLimits(process$1.env, now.getTime(), endpoint?.url ?? null)?.usage ?? null;
+	const queriedUsage = config.display.showAuth ? await readConfiguredExternalUsage(config.display.externalUsageQueries, endpoint?.url ?? null, process$1.env, now.getTime()) : null;
 	return renderHud({
 		config,
-		state: buildHudState(process$1.cwd(), rollout, now, config, now, null, loggedUsage),
+		state: buildHudState(process$1.cwd(), rollout, now, config, now, null, loggedUsage, queriedUsage),
 		options: {
 			width: Math.min(process$1.stdout.columns || 120, 140),
 			height: 30,
@@ -1544,7 +1548,7 @@ async function runConfigure(args) {
 		});
 		if (cancelled(pathLevels)) return 1;
 		config.pathLevels = pathLevels;
-		note(preview(config), "HUD preview");
+		note(await preview(config), "HUD preview");
 		const confirmed = await confirm({
 			message: `Save ${base} / ${selectedLanguage} / ${config.lineLayout} configuration?`,
 			initialValue: true
@@ -1756,18 +1760,20 @@ function writeLauncher(target, source, dryRun, realCodex) {
 }
 function runInstall(args) {
 	const dryRun = args.includes("--dry-run");
-	const installCodexShim = args.includes("--codex-shim");
 	migrateLegacyState(dryRun);
 	const configMigration = migrateConfig({ dryRun });
 	if (configMigration.migrated) output(`${dryRun ? "Would migrate" : "Migrated"} Codex HUD configuration to version ${configMigration.toVersion}.`);
 	const directory = binDirectory();
+	const codexShim = path.join(directory, "codex");
+	const previousState = readInstallState();
+	const installCodexShim = args.includes("--codex-shim") || previousState?.managedFiles.includes(codexShim) === true && isManagedLauncher(codexShim);
 	const runtimeSource = runtimeSourceDirectory();
 	const runtimeDirectory = managedRuntimeDirectory();
 	const paths = executablePaths(runtimeDirectory);
-	const realCodex = findExecutable("codex", process$1.env, [path.join(directory, "codex")]);
+	const realCodex = findExecutable("codex", process$1.env, [codexShim]);
 	if (!realCodex) throw new Error("Unable to find the real Codex executable before installing the shim.");
 	const managedFiles = [path.join(directory, "codex-hud"), path.join(directory, "codex-hud-render")];
-	if (installCodexShim) managedFiles.push(path.join(directory, "codex"));
+	if (installCodexShim) managedFiles.push(codexShim);
 	const legacyManagedFiles = [path.join(directory, "codex-hub"), path.join(directory, "codex-hub-render")];
 	if (!dryRun) {
 		fs.mkdirSync(directory, { recursive: true });
@@ -1776,7 +1782,6 @@ function runInstall(args) {
 			mode: 448
 		});
 	}
-	const previousState = readInstallState();
 	for (const target of managedFiles) ensureManagedTarget(target, dryRun);
 	deployRuntime(runtimeSource, runtimeDirectory, dryRun);
 	writeLauncher(managedFiles[0], paths.cli, dryRun, realCodex);

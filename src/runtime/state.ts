@@ -23,6 +23,7 @@ export function buildHudState(
   now = new Date(),
   codexProcess: CodexProcess | null = null,
   loggedUsage: UsageData | null = null,
+  queriedUsage: UsageData | null = null,
 ): HudState {
   const workspaceRoots = rollout.session?.workspaceRoots ?? []
   const usage = resolveUsageData(mergeUsageData(rollout.usage, loggedUsage), config.display, now)
@@ -30,6 +31,7 @@ export function buildHudState(
   const session = rollout.session
     ? { ...rollout.session, sessionName: title ?? rollout.session.sessionName }
     : null
+  const auth = config.display.showAuth ? collectAuthInfo(usage?.planType ?? null, session, process.env, codexProcess) : null
   return {
     session,
     project: collectProjectInfo(cwd, workspaceRoots, process.env, config.display.showConfigCounts),
@@ -47,7 +49,7 @@ export function buildHudState(
     conversationTurns: rollout.conversationTurns,
     compactCount: rollout.compactCount,
     memory: config.display.showMemoryUsage ? collectMemoryInfo() : null,
-    auth: config.display.showAuth ? collectAuthInfo(usage?.planType ?? null, session, process.env, codexProcess) : null,
+    auth: auth && queriedUsage?.balanceLabel ? { ...auth, balanceLabel: queriedUsage.balanceLabel } : auth,
     sessionStart: session?.startTime ?? sessionStart,
   }
 }
