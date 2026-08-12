@@ -6,7 +6,7 @@ import * as prompts from '@clack/prompts'
 import { readConfiguredExternalUsage } from '../codex/external-usage.js'
 import { readLatestLoggedRateLimits } from '../codex/log-rate-limits.js'
 import { RolloutParser } from '../codex/rollout-parser.js'
-import { resolveSessionEndpoint } from '../codex/session-endpoint.js'
+import { isOfficialOpenAIEndpoint, resolveSessionEndpoint } from '../codex/session-endpoint.js'
 import { findActiveSession } from '../codex/session-finder.js'
 import {
   applyGuidedElementChanges,
@@ -95,11 +95,23 @@ async function preview(config: HudConfig): Promise<string> {
   const now = new Date()
   const rollout = parser.parse()
   const endpoint = rollout.session ? resolveSessionEndpoint(rollout.session.id) : null
-  const loggedUsage = readLatestLoggedRateLimits(process.env, now.getTime(), endpoint?.url ?? null)?.usage ?? null
+  const loggedUsage = isOfficialOpenAIEndpoint(endpoint?.url)
+    ? readLatestLoggedRateLimits(process.env, now.getTime(), endpoint?.url ?? null)?.usage ?? null
+    : null
   const queriedUsage = config.display.showAuth
     ? await readConfiguredExternalUsage(config.display.externalUsageQueries, endpoint?.url ?? null, process.env, now.getTime())
     : null
-  const state = buildHudState(process.cwd(), rollout, now, config, now, null, loggedUsage, queriedUsage)
+  const state = buildHudState(
+    process.cwd(),
+    rollout,
+    now,
+    config,
+    now,
+    null,
+    loggedUsage,
+    queriedUsage,
+    endpoint?.url ?? null,
+  )
   return renderHud({
     config,
     state,

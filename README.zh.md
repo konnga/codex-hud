@@ -232,6 +232,8 @@ Codex HUD 支持 CC Switch 的通用余额协议，以及 New API、Sub2API 专�
 
 默认的 `general` 模板与 CC Switch 对齐：请求 `GET /user/balance`，使用 Bearer API Key，并读取数值型 `balance` 字段。它复用当前 `OPENAI_API_KEY`；显式配置时可通过 `apiKeyEnv` 使用专用查询 Key。该接口只是常见约定，并非所有中转站都支持；不支持时 HUD 静默不显示余额。
 
+第三方中转返回的 Codex 格式 `codex.rate_limits` 事件会被忽略，因为它可能描述共享上游账户池，而不是用户自己的 OpenAI 套餐。原生用量窗口仅信任 ChatGPT 和 OpenAI API 官方端点。
+
 New API 需要系统访问令牌和用户 ID，不是用于推理的 `sk-` Key；Sub2API 使用面板登录 JWT。New API 默认按 500,000 quota 单位显示为 1 美元，可通过 `quotaPerCredit` 适配不同部署。请求三秒超时；短暂失败时继续显示上一次成功结果。
 
 <details>

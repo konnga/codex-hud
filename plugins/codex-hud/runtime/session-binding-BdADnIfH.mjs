@@ -79,6 +79,304 @@ var JsonlTail = class {
 };
 
 //#endregion
+//#region src/config/constants.ts
+const CONFIG_DIRECTORY_NAME = "codex-hud";
+const LEGACY_CONFIG_DIRECTORY_NAME = "codex-hub";
+const CONFIG_FILE_NAME = "config.json";
+const KNOWN_ELEMENTS = /* @__PURE__ */ new Set([
+	"project",
+	"addedDirs",
+	"context",
+	"usage",
+	"promptCache",
+	"memory",
+	"environment",
+	"tools",
+	"skills",
+	"mcp",
+	"agents",
+	"todos",
+	"turns",
+	"sessionTime"
+]);
+const MAX_REFRESH_INTERVAL_MS = 6e4;
+const MAX_PROMPT_CACHE_TTL_SECONDS = 86400;
+
+//#endregion
+//#region src/config/paths.ts
+function getCodexHome(env = process.env) {
+	return path.resolve(env.CODEX_HOME || path.join(os.homedir(), ".codex"));
+}
+function getConfigPath(env = process.env) {
+	const explicit = env.CODEX_HUD_CONFIG || env.CODEX_HUB_CONFIG;
+	if (explicit) return path.resolve(explicit);
+	const canonical = path.join(getCodexHome(env), CONFIG_DIRECTORY_NAME, CONFIG_FILE_NAME);
+	const legacy = path.join(getCodexHome(env), LEGACY_CONFIG_DIRECTORY_NAME, CONFIG_FILE_NAME);
+	return !fs.existsSync(canonical) && fs.existsSync(legacy) ? legacy : canonical;
+}
+function getHudStateDirectory(env = process.env) {
+	return path.join(getCodexHome(env), CONFIG_DIRECTORY_NAME);
+}
+function getLegacyStateDirectory(env = process.env) {
+	return path.join(getCodexHome(env), LEGACY_CONFIG_DIRECTORY_NAME);
+}
+
+//#endregion
+//#region src/codex/session-endpoint.ts
+const SESSION_ID_PATTERN = /^[\w-]{1,128}$/;
+const LOG_DATABASE_PATTERN = /^logs(?:_(\d+))?\.sqlite$/;
+const QUERY_TIMEOUT_MS$1 = 750;
+const PROCESS_SESSION_QUERY_TIMEOUT_MS = 3e3;
+const ENDPOINT_CACHE_MS = 3e4;
+const PROCESS_SESSION_CACHE_MS = 1e3;
+const NEWEST_FIRST = "ORDER BY ts DESC, id DESC LIMIT 1";
+const endpointCache = /* @__PURE__ */ new Map();
+const processSessionCache = /* @__PURE__ */ new Map();
+/**
+* Codex writes its tracing log to `logs_<schema>.sqlite`; pick the newest
+* schema so a Codex upgrade that bumps the suffix keeps working.
+*/
+function findCodexLogDatabase(codexHome = getCodexHome()) {
+	let best = null;
+	let entries;
+	try {
+		entries = fs.readdirSync(codexHome, { withFileTypes: true });
+	} catch {
+		return null;
+	}
+	for (const entry of entries) {
+		const match = LOG_DATABASE_PATTERN.exec(entry.name);
+		if (!match || !entry.isFile()) continue;
+		const version = Number(match[1] ?? 0);
+		if (!best || version > best.version) best = {
+			file: path.join(codexHome, entry.name),
+			version
+		};
+	}
+	return best?.file ?? null;
+}
+function query(database, sql, timeout = QUERY_TIMEOUT_MS$1) {
+	const result = spawnSync("sqlite3", [
+		"-readonly",
+		"-noheader",
+		"-batch",
+		database,
+		sql
+	], {
+		encoding: "utf8",
+		stdio: [
+			"ignore",
+			"pipe",
+			"ignore"
+		],
+		timeout
+	});
+	return typeof result.stdout === "string" ? result.stdout.split("\n") : [];
+}
+function firstUrl(value) {
+	const url = value.trim().split(/[\s"]/)[0];
+	return url.startsWith("http") ? url : null;
+}
+function endpointOrigin(value) {
+	try {
+		return new URL(value).origin.toLowerCase();
+	} catch {
+		return null;
+	}
+}
+/** Only official OpenAI origins are authoritative for Codex subscription limits. */
+function isOfficialOpenAIEndpoint(value) {
+	if (!value) return false;
+	try {
+		const hostname = new URL(value).hostname.toLowerCase();
+		return hostname === "api.openai.com" || hostname === "chatgpt.com" || hostname.endsWith(".chatgpt.com");
+	} catch {
+		return false;
+	}
+}
+const INIT_ROW = [
+	`SELECT 'init|' || substr(feedback_log_body, instr(feedback_log_body, 'base_url: Some("') + 16, 200)`,
+	`  FROM logs`,
+	` WHERE thread_id IS NULL`,
+	`   AND target = 'codex_core::session::session'`,
+	`   AND instr(feedback_log_body, 'base_url: Some("') > 0`
+].join("\n");
+/** `process_uuid` is `pid:<PID>:<uuid>`, so a PID is a prefix range on it. */
+function processRange(pid) {
+	return `(process_uuid >= 'pid:${pid}:' AND process_uuid < 'pid:${pid};')`;
+}
+/**
+* Codex runs behind an npm wrapper script, so the process that logs is a child
+* of the one the launcher spawned.
+*/
+function processFamily(pid) {
+	const result = spawnSync("pgrep", ["-P", String(pid)], {
+		encoding: "utf8",
+		stdio: [
+			"ignore",
+			"pipe",
+			"ignore"
+		],
+		timeout: QUERY_TIMEOUT_MS$1
+	});
+	return [pid, ...typeof result.stdout === "string" ? result.stdout.split("\n").map((line) => Number.parseInt(line.trim(), 10)).filter(Number.isInteger) : []];
+}
+function shellSql(value) {
+	return value.replaceAll("'", "''");
+}
+/**
+* Resolve a session from the Codex process that owns it. This is needed before
+* a HUD binding has a rollout path: selecting by cwd at that point can borrow a
+* different concurrent session in the same project.
+*/
+function resolveProcessSession(codexPid, cwd, since, env = process.env, now = Date.now()) {
+	if (!Number.isInteger(codexPid) || codexPid <= 0) return null;
+	const cacheKey = `${getCodexHome(env)}:${codexPid}:${cwd}`;
+	const cached = processSessionCache.get(cacheKey);
+	if (cached && now - cached.at < PROCESS_SESSION_CACHE_MS) return cached.value ? { ...cached.value } : null;
+	const remember = (value) => {
+		processSessionCache.set(cacheKey, {
+			at: now,
+			value
+		});
+		return value ? { ...value } : null;
+	};
+	const database = findCodexLogDatabase(getCodexHome(env));
+	if (!database) return remember(null);
+	const ranges = processFamily(codexPid).map(processRange).join(" OR ");
+	if (!ranges) return remember(null);
+	const ids = query(database, [
+		"SELECT DISTINCT thread_id",
+		"  FROM logs",
+		" WHERE thread_id IS NOT NULL",
+		`   AND ts >= ${Math.floor(since.getTime() / 1e3) - 60}`,
+		`   AND (${ranges})`,
+		" ORDER BY ts ASC, id ASC;"
+	].join("\n"), PROCESS_SESSION_QUERY_TIMEOUT_MS).filter((id) => SESSION_ID_PATTERN.test(id.trim()));
+	if (ids.length === 0) return remember(null);
+	const candidates = ids.map((id) => `'${shellSql(id.trim())}'`).join(",");
+	const rows = query(path.join(getCodexHome(env), "state_5.sqlite"), [
+		"SELECT id || '|' || rollout_path",
+		"  FROM threads",
+		` WHERE id IN (${candidates})`,
+		`   AND cwd = '${shellSql(path.resolve(cwd))}'`,
+		"   AND (thread_source = 'user' OR thread_source IS NULL)",
+		"   AND (agent_path IS NULL OR agent_path = '')",
+		" ORDER BY created_at_ms ASC, id ASC",
+		" LIMIT 1;"
+	].join("\n"), PROCESS_SESSION_QUERY_TIMEOUT_MS);
+	for (const row of rows) {
+		const separator = row.indexOf("|");
+		if (separator < 0) continue;
+		const sessionId = row.slice(0, separator);
+		const rolloutPath = row.slice(separator + 1);
+		if (SESSION_ID_PATTERN.test(sessionId) && fs.existsSync(rolloutPath)) return remember({
+			sessionId,
+			rolloutPath
+		});
+	}
+	return remember(null);
+}
+/**
+* The endpoint of a Codex process that has not created a session yet. Codex
+* writes no rollout until the first message, so between launch and that message
+* the process is the only thing the HUD can key on.
+*
+* `since` bounds the scan to this launch: the timestamp column is the indexed
+* one, and without a bound the lookup walks every threadless row ever logged.
+*/
+function resolveProcessEndpoint(codexPid, since, env = process.env, now = Date.now()) {
+	if (!Number.isInteger(codexPid) || codexPid <= 0) return null;
+	const codexHome = getCodexHome(env);
+	const cacheKey = `${codexHome}:pid:${codexPid}`;
+	const cached = endpointCache.get(cacheKey);
+	if (cached && now - cached.at < ENDPOINT_CACHE_MS) return cached.value ? { ...cached.value } : null;
+	const database = findCodexLogDatabase(codexHome);
+	const ranges = database ? processFamily(codexPid).map(processRange).join(" OR ") : "";
+	const lines = ranges ? query(database, [
+		INIT_ROW,
+		`   AND ts >= ${Math.floor(since.getTime() / 1e3) - 60}`,
+		`   AND (${ranges})`,
+		` ${NEWEST_FIRST};`
+	].join("\n")) : [];
+	let value = null;
+	for (const line of lines) {
+		const url = line.startsWith("init|") ? firstUrl(line.slice(5)) : null;
+		if (url) {
+			value = {
+				url,
+				source: "log-init"
+			};
+			break;
+		}
+	}
+	sweep(now);
+	endpointCache.set(cacheKey, {
+		at: now,
+		value
+	});
+	return value ? { ...value } : null;
+}
+function sweep(now) {
+	for (const [key, entry] of endpointCache) if (now - entry.at >= ENDPOINT_CACHE_MS) endpointCache.delete(key);
+}
+/**
+* The session id doubles as the tracing `thread_id`, so Codex's own log is the
+* only record of which endpoint a session really used: `config.toml` may have
+* been rewritten since, and the rollout stores just the provider id.
+*
+* Both queries are index-backed. `AND thread_id IS NULL` on the second one is
+* load-bearing for speed, not only correctness: without it the lookup degrades
+* to a full scan of a multi-hundred-megabyte table on the render path.
+*/
+function resolveSessionEndpoint(sessionId, env = process.env, now = Date.now()) {
+	if (!SESSION_ID_PATTERN.test(sessionId)) return null;
+	const codexHome = getCodexHome(env);
+	const cacheKey = `${codexHome}:${sessionId}`;
+	const cached = endpointCache.get(cacheKey);
+	if (cached && now - cached.at < ENDPOINT_CACHE_MS) return cached.value ? { ...cached.value } : null;
+	const remember = (value) => {
+		sweep(now);
+		endpointCache.set(cacheKey, {
+			at: now,
+			value
+		});
+		return value ? { ...value } : null;
+	};
+	const database = findCodexLogDatabase(codexHome);
+	if (!database) return remember(null);
+	const lines = query(database, [
+		`SELECT 'request|' || substr(feedback_log_body, instr(feedback_log_body, 'url=') + 4, 200)`,
+		`  FROM logs`,
+		` WHERE thread_id = '${sessionId}'`,
+		`   AND target IN ('codex_http_client::default_client', 'codex_http_client::client')`,
+		`   AND instr(feedback_log_body, 'url=') > 0`,
+		` ${NEWEST_FIRST};`,
+		INIT_ROW,
+		`   AND process_uuid = (SELECT process_uuid FROM logs WHERE thread_id = '${sessionId}' ${NEWEST_FIRST})`,
+		`   AND ts <= (SELECT min(ts) FROM logs WHERE thread_id = '${sessionId}')`,
+		` ${NEWEST_FIRST};`
+	].join("\n"));
+	let fallback = null;
+	for (const line of lines) {
+		const separator = line.indexOf("|");
+		if (separator < 0) continue;
+		const tag = line.slice(0, separator);
+		const url = firstUrl(line.slice(separator + 1));
+		if (!url) continue;
+		if (tag === "request") return remember({
+			url,
+			source: "log-request"
+		});
+		if (tag === "init" && !fallback) fallback = {
+			url,
+			source: "log-init"
+		};
+	}
+	return remember(fallback);
+}
+
+//#endregion
 //#region src/codex/rate-limits.ts
 function numberValue$1(...values) {
 	for (const value of values) if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -158,6 +456,10 @@ function mergeUsageData(current, observed) {
 		balanceLabel: observed.balanceLabel ?? current.balanceLabel,
 		limitReachedType: observed.limitReachedType ?? current.limitReachedType
 	};
+}
+/** Third-party relays can imitate Codex limit events, but those are not the user's OpenAI subscription limits. */
+function trustedUsageDataForEndpoint(endpoint, current, observed) {
+	return isOfficialOpenAIEndpoint(endpoint) ? mergeUsageData(current, observed) : null;
 }
 
 //#endregion
@@ -529,294 +831,6 @@ var RolloutParser = class {
 };
 
 //#endregion
-//#region src/config/constants.ts
-const CONFIG_DIRECTORY_NAME = "codex-hud";
-const LEGACY_CONFIG_DIRECTORY_NAME = "codex-hub";
-const CONFIG_FILE_NAME = "config.json";
-const KNOWN_ELEMENTS = /* @__PURE__ */ new Set([
-	"project",
-	"addedDirs",
-	"context",
-	"usage",
-	"promptCache",
-	"memory",
-	"environment",
-	"tools",
-	"skills",
-	"mcp",
-	"agents",
-	"todos",
-	"turns",
-	"sessionTime"
-]);
-const MAX_REFRESH_INTERVAL_MS = 6e4;
-const MAX_PROMPT_CACHE_TTL_SECONDS = 86400;
-
-//#endregion
-//#region src/config/paths.ts
-function getCodexHome(env = process.env) {
-	return path.resolve(env.CODEX_HOME || path.join(os.homedir(), ".codex"));
-}
-function getConfigPath(env = process.env) {
-	const explicit = env.CODEX_HUD_CONFIG || env.CODEX_HUB_CONFIG;
-	if (explicit) return path.resolve(explicit);
-	const canonical = path.join(getCodexHome(env), CONFIG_DIRECTORY_NAME, CONFIG_FILE_NAME);
-	const legacy = path.join(getCodexHome(env), LEGACY_CONFIG_DIRECTORY_NAME, CONFIG_FILE_NAME);
-	return !fs.existsSync(canonical) && fs.existsSync(legacy) ? legacy : canonical;
-}
-function getHudStateDirectory(env = process.env) {
-	return path.join(getCodexHome(env), CONFIG_DIRECTORY_NAME);
-}
-function getLegacyStateDirectory(env = process.env) {
-	return path.join(getCodexHome(env), LEGACY_CONFIG_DIRECTORY_NAME);
-}
-
-//#endregion
-//#region src/codex/session-endpoint.ts
-const SESSION_ID_PATTERN = /^[\w-]{1,128}$/;
-const LOG_DATABASE_PATTERN = /^logs(?:_(\d+))?\.sqlite$/;
-const QUERY_TIMEOUT_MS$1 = 750;
-const PROCESS_SESSION_QUERY_TIMEOUT_MS = 3e3;
-const ENDPOINT_CACHE_MS = 3e4;
-const PROCESS_SESSION_CACHE_MS = 1e3;
-const NEWEST_FIRST = "ORDER BY ts DESC, id DESC LIMIT 1";
-const endpointCache = /* @__PURE__ */ new Map();
-const processSessionCache = /* @__PURE__ */ new Map();
-/**
-* Codex writes its tracing log to `logs_<schema>.sqlite`; pick the newest
-* schema so a Codex upgrade that bumps the suffix keeps working.
-*/
-function findCodexLogDatabase(codexHome = getCodexHome()) {
-	let best = null;
-	let entries;
-	try {
-		entries = fs.readdirSync(codexHome, { withFileTypes: true });
-	} catch {
-		return null;
-	}
-	for (const entry of entries) {
-		const match = LOG_DATABASE_PATTERN.exec(entry.name);
-		if (!match || !entry.isFile()) continue;
-		const version = Number(match[1] ?? 0);
-		if (!best || version > best.version) best = {
-			file: path.join(codexHome, entry.name),
-			version
-		};
-	}
-	return best?.file ?? null;
-}
-function query(database, sql, timeout = QUERY_TIMEOUT_MS$1) {
-	const result = spawnSync("sqlite3", [
-		"-readonly",
-		"-noheader",
-		"-batch",
-		database,
-		sql
-	], {
-		encoding: "utf8",
-		stdio: [
-			"ignore",
-			"pipe",
-			"ignore"
-		],
-		timeout
-	});
-	return typeof result.stdout === "string" ? result.stdout.split("\n") : [];
-}
-function firstUrl(value) {
-	const url = value.trim().split(/[\s"]/)[0];
-	return url.startsWith("http") ? url : null;
-}
-function endpointOrigin(value) {
-	try {
-		return new URL(value).origin.toLowerCase();
-	} catch {
-		return null;
-	}
-}
-const INIT_ROW = [
-	`SELECT 'init|' || substr(feedback_log_body, instr(feedback_log_body, 'base_url: Some("') + 16, 200)`,
-	`  FROM logs`,
-	` WHERE thread_id IS NULL`,
-	`   AND target = 'codex_core::session::session'`,
-	`   AND instr(feedback_log_body, 'base_url: Some("') > 0`
-].join("\n");
-/** `process_uuid` is `pid:<PID>:<uuid>`, so a PID is a prefix range on it. */
-function processRange(pid) {
-	return `(process_uuid >= 'pid:${pid}:' AND process_uuid < 'pid:${pid};')`;
-}
-/**
-* Codex runs behind an npm wrapper script, so the process that logs is a child
-* of the one the launcher spawned.
-*/
-function processFamily(pid) {
-	const result = spawnSync("pgrep", ["-P", String(pid)], {
-		encoding: "utf8",
-		stdio: [
-			"ignore",
-			"pipe",
-			"ignore"
-		],
-		timeout: QUERY_TIMEOUT_MS$1
-	});
-	return [pid, ...typeof result.stdout === "string" ? result.stdout.split("\n").map((line) => Number.parseInt(line.trim(), 10)).filter(Number.isInteger) : []];
-}
-function shellSql(value) {
-	return value.replaceAll("'", "''");
-}
-/**
-* Resolve a session from the Codex process that owns it. This is needed before
-* a HUD binding has a rollout path: selecting by cwd at that point can borrow a
-* different concurrent session in the same project.
-*/
-function resolveProcessSession(codexPid, cwd, since, env = process.env, now = Date.now()) {
-	if (!Number.isInteger(codexPid) || codexPid <= 0) return null;
-	const cacheKey = `${getCodexHome(env)}:${codexPid}:${cwd}`;
-	const cached = processSessionCache.get(cacheKey);
-	if (cached && now - cached.at < PROCESS_SESSION_CACHE_MS) return cached.value ? { ...cached.value } : null;
-	const remember = (value) => {
-		processSessionCache.set(cacheKey, {
-			at: now,
-			value
-		});
-		return value ? { ...value } : null;
-	};
-	const database = findCodexLogDatabase(getCodexHome(env));
-	if (!database) return remember(null);
-	const ranges = processFamily(codexPid).map(processRange).join(" OR ");
-	if (!ranges) return remember(null);
-	const ids = query(database, [
-		"SELECT DISTINCT thread_id",
-		"  FROM logs",
-		" WHERE thread_id IS NOT NULL",
-		`   AND ts >= ${Math.floor(since.getTime() / 1e3) - 60}`,
-		`   AND (${ranges})`,
-		" ORDER BY ts ASC, id ASC;"
-	].join("\n"), PROCESS_SESSION_QUERY_TIMEOUT_MS).filter((id) => SESSION_ID_PATTERN.test(id.trim()));
-	if (ids.length === 0) return remember(null);
-	const candidates = ids.map((id) => `'${shellSql(id.trim())}'`).join(",");
-	const rows = query(path.join(getCodexHome(env), "state_5.sqlite"), [
-		"SELECT id || '|' || rollout_path",
-		"  FROM threads",
-		` WHERE id IN (${candidates})`,
-		`   AND cwd = '${shellSql(path.resolve(cwd))}'`,
-		"   AND (thread_source = 'user' OR thread_source IS NULL)",
-		"   AND (agent_path IS NULL OR agent_path = '')",
-		" ORDER BY created_at_ms ASC, id ASC",
-		" LIMIT 1;"
-	].join("\n"), PROCESS_SESSION_QUERY_TIMEOUT_MS);
-	for (const row of rows) {
-		const separator = row.indexOf("|");
-		if (separator < 0) continue;
-		const sessionId = row.slice(0, separator);
-		const rolloutPath = row.slice(separator + 1);
-		if (SESSION_ID_PATTERN.test(sessionId) && fs.existsSync(rolloutPath)) return remember({
-			sessionId,
-			rolloutPath
-		});
-	}
-	return remember(null);
-}
-/**
-* The endpoint of a Codex process that has not created a session yet. Codex
-* writes no rollout until the first message, so between launch and that message
-* the process is the only thing the HUD can key on.
-*
-* `since` bounds the scan to this launch: the timestamp column is the indexed
-* one, and without a bound the lookup walks every threadless row ever logged.
-*/
-function resolveProcessEndpoint(codexPid, since, env = process.env, now = Date.now()) {
-	if (!Number.isInteger(codexPid) || codexPid <= 0) return null;
-	const codexHome = getCodexHome(env);
-	const cacheKey = `${codexHome}:pid:${codexPid}`;
-	const cached = endpointCache.get(cacheKey);
-	if (cached && now - cached.at < ENDPOINT_CACHE_MS) return cached.value ? { ...cached.value } : null;
-	const database = findCodexLogDatabase(codexHome);
-	const ranges = database ? processFamily(codexPid).map(processRange).join(" OR ") : "";
-	const lines = ranges ? query(database, [
-		INIT_ROW,
-		`   AND ts >= ${Math.floor(since.getTime() / 1e3) - 60}`,
-		`   AND (${ranges})`,
-		` ${NEWEST_FIRST};`
-	].join("\n")) : [];
-	let value = null;
-	for (const line of lines) {
-		const url = line.startsWith("init|") ? firstUrl(line.slice(5)) : null;
-		if (url) {
-			value = {
-				url,
-				source: "log-init"
-			};
-			break;
-		}
-	}
-	sweep(now);
-	endpointCache.set(cacheKey, {
-		at: now,
-		value
-	});
-	return value ? { ...value } : null;
-}
-function sweep(now) {
-	for (const [key, entry] of endpointCache) if (now - entry.at >= ENDPOINT_CACHE_MS) endpointCache.delete(key);
-}
-/**
-* The session id doubles as the tracing `thread_id`, so Codex's own log is the
-* only record of which endpoint a session really used: `config.toml` may have
-* been rewritten since, and the rollout stores just the provider id.
-*
-* Both queries are index-backed. `AND thread_id IS NULL` on the second one is
-* load-bearing for speed, not only correctness: without it the lookup degrades
-* to a full scan of a multi-hundred-megabyte table on the render path.
-*/
-function resolveSessionEndpoint(sessionId, env = process.env, now = Date.now()) {
-	if (!SESSION_ID_PATTERN.test(sessionId)) return null;
-	const codexHome = getCodexHome(env);
-	const cacheKey = `${codexHome}:${sessionId}`;
-	const cached = endpointCache.get(cacheKey);
-	if (cached && now - cached.at < ENDPOINT_CACHE_MS) return cached.value ? { ...cached.value } : null;
-	const remember = (value) => {
-		sweep(now);
-		endpointCache.set(cacheKey, {
-			at: now,
-			value
-		});
-		return value ? { ...value } : null;
-	};
-	const database = findCodexLogDatabase(codexHome);
-	if (!database) return remember(null);
-	const lines = query(database, [
-		`SELECT 'request|' || substr(feedback_log_body, instr(feedback_log_body, 'url=') + 4, 200)`,
-		`  FROM logs`,
-		` WHERE thread_id = '${sessionId}'`,
-		`   AND target IN ('codex_http_client::default_client', 'codex_http_client::client')`,
-		`   AND instr(feedback_log_body, 'url=') > 0`,
-		` ${NEWEST_FIRST};`,
-		INIT_ROW,
-		`   AND process_uuid = (SELECT process_uuid FROM logs WHERE thread_id = '${sessionId}' ${NEWEST_FIRST})`,
-		`   AND ts <= (SELECT min(ts) FROM logs WHERE thread_id = '${sessionId}')`,
-		` ${NEWEST_FIRST};`
-	].join("\n"));
-	let fallback = null;
-	for (const line of lines) {
-		const separator = line.indexOf("|");
-		if (separator < 0) continue;
-		const tag = line.slice(0, separator);
-		const url = firstUrl(line.slice(separator + 1));
-		if (!url) continue;
-		if (tag === "request") return remember({
-			url,
-			source: "log-request"
-		});
-		if (tag === "init" && !fallback) fallback = {
-			url,
-			source: "log-init"
-		};
-	}
-	return remember(fallback);
-}
-
-//#endregion
 //#region src/codex/session-finder.ts
 const MAX_SESSION_META_BYTES = 4 * 1024 * 1024;
 const DEFAULT_MAX_AGE_MS = 336 * 60 * 60 * 1e3;
@@ -1006,8 +1020,7 @@ function configuredQuery(queries, endpoint) {
 	} catch {
 		return null;
 	}
-	const hostname = new URL(origin).hostname.toLowerCase();
-	if (hostname === "chatgpt.com" || hostname.endsWith(".chatgpt.com") || hostname === "api.openai.com") return null;
+	if (isOfficialOpenAIEndpoint(origin)) return null;
 	const query = queries.find((query) => query.enabled && query.origin === origin) ?? queries.find((query) => query.enabled && query.origin === "*" && query.template === "general");
 	return query ? {
 		...query,
@@ -5668,9 +5681,9 @@ function collectSessionTitle(session, env = process.env) {
 
 //#endregion
 //#region src/runtime/state.ts
-function buildHudState(cwd, rollout, sessionStart, config, now = /* @__PURE__ */ new Date(), codexProcess = null, loggedUsage = null, queriedUsage = null) {
+function buildHudState(cwd, rollout, sessionStart, config, now = /* @__PURE__ */ new Date(), codexProcess = null, loggedUsage = null, queriedUsage = null, endpoint = null) {
 	const workspaceRoots = rollout.session?.workspaceRoots ?? [];
-	const usage = resolveUsageData(mergeUsageData(rollout.usage, loggedUsage), config.display, now);
+	const usage = resolveUsageData(trustedUsageDataForEndpoint(endpoint, rollout.usage, loggedUsage), config.display, now);
 	const title = config.display.showSessionName ? collectSessionTitle(rollout.session) : null;
 	const session = rollout.session ? {
 		...rollout.session,
@@ -5821,5 +5834,5 @@ async function waitForNewRootSession(cwd, snapshot, codexHome = getCodexHome(), 
 }
 
 //#endregion
-export { getCodexHome as A, readLatestLoggedRateLimits as C, resolveProcessEndpoint as D, findCodexLogDatabase as E, getHudStateDirectory as M, getLegacyStateDirectory as N, resolveProcessSession as O, RolloutParser as P, DEFAULT_CONFIG as S, findActiveSession as T, visibleWidth as _, waitForNewRootSession as a, applyConfigMigrations as b, desiredPaneHeight as c, resizeCmuxPane as d, resizeHudPane as f, truncateAnsi as g, safeText as h, snapshotRootSessions as i, getConfigPath as j, resolveSessionEndpoint as k, hudRenderHeight as l, renderHud as m, createSessionBindingPath as n, writeSessionBinding as o, settleCmuxPaneHeight as p, readSessionBinding as r, buildHudState as s, acquireSessionDiscoveryLock as t, readCmuxPaneGeometry as u, sliceAnsi as v, readConfiguredExternalUsage as w, rawConfigVersion as x, loadConfig as y };
-//# sourceMappingURL=session-binding-BUY-BqJh.mjs.map
+export { resolveProcessSession as A, readLatestLoggedRateLimits as C, findCodexLogDatabase as D, RolloutParser as E, getLegacyStateDirectory as F, getCodexHome as M, getConfigPath as N, isOfficialOpenAIEndpoint as O, getHudStateDirectory as P, DEFAULT_CONFIG as S, findActiveSession as T, visibleWidth as _, waitForNewRootSession as a, applyConfigMigrations as b, desiredPaneHeight as c, resizeCmuxPane as d, resizeHudPane as f, truncateAnsi as g, safeText as h, snapshotRootSessions as i, resolveSessionEndpoint as j, resolveProcessEndpoint as k, hudRenderHeight as l, renderHud as m, createSessionBindingPath as n, writeSessionBinding as o, settleCmuxPaneHeight as p, readSessionBinding as r, buildHudState as s, acquireSessionDiscoveryLock as t, readCmuxPaneGeometry as u, sliceAnsi as v, readConfiguredExternalUsage as w, rawConfigVersion as x, loadConfig as y };
+//# sourceMappingURL=session-binding-BdADnIfH.mjs.map

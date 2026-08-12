@@ -1,6 +1,6 @@
 import type { UsageData } from '../types/state.js'
 import { describe, expect, it } from 'vitest'
-import { mergeUsageData, normalizeRateLimits } from './rate-limits.js'
+import { mergeUsageData, normalizeRateLimits, trustedUsageDataForEndpoint } from './rate-limits.js'
 
 describe('normalizeRateLimits', () => {
   it('does not assume a five-hour window when telemetry omits the duration', () => {
@@ -60,5 +60,23 @@ describe('normalizeRateLimits', () => {
       label: '1w',
       percent: 19,
     })
+  })
+})
+
+describe('trustedUsageDataForEndpoint', () => {
+  const usage: UsageData = {
+    primary: { label: '1w', percent: 38, resetAt: null, windowMinutes: 10_080 },
+    secondary: null,
+    individual: null,
+    planType: 'team',
+    balanceLabel: null,
+    limitReachedType: null,
+  }
+
+  it('accepts native limits only from official OpenAI endpoints', () => {
+    expect(trustedUsageDataForEndpoint('https://chatgpt.com/backend-api/codex/responses', usage, null)).toEqual(usage)
+    expect(trustedUsageDataForEndpoint('https://api.openai.com/v1/responses', usage, null)).toEqual(usage)
+    expect(trustedUsageDataForEndpoint('https://agentrouter.org/v1/responses', usage, null)).toBeNull()
+    expect(trustedUsageDataForEndpoint(null, usage, null)).toBeNull()
   })
 })

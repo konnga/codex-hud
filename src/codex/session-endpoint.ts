@@ -87,6 +87,22 @@ export function endpointOrigin(value: string): string | null {
   }
 }
 
+/** Only official OpenAI origins are authoritative for Codex subscription limits. */
+export function isOfficialOpenAIEndpoint(value: string | null | undefined): boolean {
+  if (!value) {
+    return false
+  }
+  try {
+    const hostname = new URL(value).hostname.toLowerCase()
+    return hostname === 'api.openai.com'
+      || hostname === 'chatgpt.com'
+      || hostname.endsWith('.chatgpt.com')
+  }
+  catch {
+    return false
+  }
+}
+
 const INIT_ROW = [
   `SELECT 'init|' || substr(feedback_log_body, instr(feedback_log_body, 'base_url: Some("') + 16, 200)`,
   `  FROM logs`,

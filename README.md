@@ -232,6 +232,8 @@ No configuration is required for a relay that implements the general protocol. T
 
 The default `general` template matches CC Switch: it requests `GET /user/balance` with a Bearer API key and reads the numeric `balance` field. It reuses the current `OPENAI_API_KEY`; an explicit entry can set `apiKeyEnv` to use a dedicated query key. This endpoint is a common convention, not an industry standard, so unsupported relays simply show no balance.
 
+Codex-shaped `codex.rate_limits` events returned by third-party relays are ignored because they may describe a shared upstream pool rather than the user's OpenAI subscription. Native usage windows are trusted only for official ChatGPT and OpenAI API endpoints.
+
 For New API, use its system access token and user ID, not the inference `sk-` key. For Sub2API, use the panel login JWT. New API quota units default to 500,000 per displayed dollar; change `quotaPerCredit` for deployments with a different conversion. Requests time out after three seconds and preserve the last successful value across transient failures.
 
 <details>

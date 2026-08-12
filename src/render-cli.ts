@@ -8,7 +8,7 @@ import { pathToFileURL } from 'node:url'
 import { readConfiguredExternalUsage } from './codex/external-usage.js'
 import { readLatestLoggedRateLimits } from './codex/log-rate-limits.js'
 import { RolloutParser } from './codex/rollout-parser.js'
-import { resolveProcessEndpoint, resolveProcessSession, resolveSessionEndpoint } from './codex/session-endpoint.js'
+import { isOfficialOpenAIEndpoint, resolveProcessEndpoint, resolveProcessSession, resolveSessionEndpoint } from './codex/session-endpoint.js'
 import { findActiveSession } from './codex/session-finder.js'
 import { loadConfig } from './config/load.js'
 import {
@@ -206,13 +206,24 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
     const endpoint = rollout.session
       ? resolveSessionEndpoint(rollout.session.id)
       : codexProcess ? resolveProcessEndpoint(codexProcess.pid, codexProcess.launchedAt) : null
-    const loggedUsage = loaded.config.display.showUsage || loaded.config.display.showAuth
+    const loggedUsage = (loaded.config.display.showUsage || loaded.config.display.showAuth)
+      && isOfficialOpenAIEndpoint(endpoint?.url)
       ? readLatestLoggedRateLimits(process.env, now.getTime(), endpoint?.url ?? null)?.usage ?? null
       : null
     const queriedUsage = loaded.config.display.showAuth
       ? await readConfiguredExternalUsage(loaded.config.display.externalUsageQueries, endpoint?.url ?? null, process.env, now.getTime())
       : null
-    const state = buildHudState(options.cwd, rollout, startedAt, loaded.config, now, codexProcess, loggedUsage, queriedUsage)
+    const state = buildHudState(
+      options.cwd,
+      rollout,
+      startedAt,
+      loaded.config,
+      now,
+      codexProcess,
+      loggedUsage,
+      queriedUsage,
+      endpoint?.url ?? null,
+    )
     latestTurns = state.conversationTurns
     latestImages = state.images
     const width = process.stdout.columns || Number(process.env.COLUMNS) || loaded.config.maxWidth || 120

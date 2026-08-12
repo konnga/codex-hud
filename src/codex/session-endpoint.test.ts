@@ -5,6 +5,7 @@ import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   findCodexLogDatabase,
+  isOfficialOpenAIEndpoint,
   resolveProcessEndpoint,
   resolveProcessSession,
   resolveSessionEndpoint,
@@ -99,6 +100,14 @@ function resolve(codexHome: string, sessionId: string) {
 }
 
 describe('session endpoint resolution', () => {
+  it('recognizes only official OpenAI origins as subscription-limit authorities', () => {
+    expect(isOfficialOpenAIEndpoint('https://chatgpt.com/backend-api/codex/responses')).toBe(true)
+    expect(isOfficialOpenAIEndpoint('https://sub.chatgpt.com/codex')).toBe(true)
+    expect(isOfficialOpenAIEndpoint('https://api.openai.com/v1/responses')).toBe(true)
+    expect(isOfficialOpenAIEndpoint('https://agentrouter.org/v1/responses')).toBe(false)
+    expect(isOfficialOpenAIEndpoint(null)).toBe(false)
+  })
+
   it('reports the most recent request URL for the session', () => {
     const codexHome = codexHomeWithLogs([
       request(30, 'thread-a', 'https://newest.example.com/v1/responses'),

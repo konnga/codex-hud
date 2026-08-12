@@ -4,6 +4,7 @@ import type { UsageData, UsageWindow } from '../types/state.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import { getCodexHome } from '../config/paths.js'
+import { isOfficialOpenAIEndpoint } from './session-endpoint.js'
 
 interface SnapshotWindow {
   used_percentage?: number
@@ -141,8 +142,7 @@ function configuredQuery(
   catch {
     return null
   }
-  const hostname = new URL(origin).hostname.toLowerCase()
-  if (hostname === 'chatgpt.com' || hostname.endsWith('.chatgpt.com') || hostname === 'api.openai.com') {
+  if (isOfficialOpenAIEndpoint(origin)) {
     return null
   }
   const query = queries.find(query => query.enabled && query.origin === origin)

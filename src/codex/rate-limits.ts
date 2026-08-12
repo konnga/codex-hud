@@ -1,5 +1,6 @@
 import type { RawRateLimits, RawRateLimitWindow } from '../types/rollout.js'
 import type { UsageData, UsageWindow } from '../types/state.js'
+import { isOfficialOpenAIEndpoint } from './session-endpoint.js'
 
 function numberValue(...values: unknown[]): number | null {
   for (const value of values) {
@@ -137,4 +138,13 @@ export function mergeUsageData(current: UsageData | null, observed: UsageData | 
     balanceLabel: observed.balanceLabel ?? current.balanceLabel,
     limitReachedType: observed.limitReachedType ?? current.limitReachedType,
   }
+}
+
+/** Third-party relays can imitate Codex limit events, but those are not the user's OpenAI subscription limits. */
+export function trustedUsageDataForEndpoint(
+  endpoint: string | null,
+  current: UsageData | null,
+  observed: UsageData | null,
+): UsageData | null {
+  return isOfficialOpenAIEndpoint(endpoint) ? mergeUsageData(current, observed) : null
 }

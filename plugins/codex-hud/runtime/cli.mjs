@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { A as getCodexHome, C as readLatestLoggedRateLimits, E as findCodexLogDatabase, M as getHudStateDirectory, N as getLegacyStateDirectory, P as RolloutParser, S as DEFAULT_CONFIG, T as findActiveSession, a as waitForNewRootSession, b as applyConfigMigrations, i as snapshotRootSessions, j as getConfigPath, k as resolveSessionEndpoint, m as renderHud, n as createSessionBindingPath, o as writeSessionBinding, s as buildHudState, t as acquireSessionDiscoveryLock, w as readConfiguredExternalUsage, x as rawConfigVersion, y as loadConfig } from "./session-binding-BUY-BqJh.mjs";
+import { C as readLatestLoggedRateLimits, D as findCodexLogDatabase, E as RolloutParser, F as getLegacyStateDirectory, M as getCodexHome, N as getConfigPath, O as isOfficialOpenAIEndpoint, P as getHudStateDirectory, S as DEFAULT_CONFIG, T as findActiveSession, a as waitForNewRootSession, b as applyConfigMigrations, i as snapshotRootSessions, j as resolveSessionEndpoint, m as renderHud, n as createSessionBindingPath, o as writeSessionBinding, s as buildHudState, t as acquireSessionDiscoveryLock, w as readConfiguredExternalUsage, x as rawConfigVersion, y as loadConfig } from "./session-binding-BdADnIfH.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import process$1, { stdin, stdout } from "node:process";
@@ -1379,11 +1379,11 @@ async function preview(config) {
 	const now = /* @__PURE__ */ new Date();
 	const rollout = parser.parse();
 	const endpoint = rollout.session ? resolveSessionEndpoint(rollout.session.id) : null;
-	const loggedUsage = readLatestLoggedRateLimits(process$1.env, now.getTime(), endpoint?.url ?? null)?.usage ?? null;
+	const loggedUsage = isOfficialOpenAIEndpoint(endpoint?.url) ? readLatestLoggedRateLimits(process$1.env, now.getTime(), endpoint?.url ?? null)?.usage ?? null : null;
 	const queriedUsage = config.display.showAuth ? await readConfiguredExternalUsage(config.display.externalUsageQueries, endpoint?.url ?? null, process$1.env, now.getTime()) : null;
 	return renderHud({
 		config,
-		state: buildHudState(process$1.cwd(), rollout, now, config, now, null, loggedUsage, queriedUsage),
+		state: buildHudState(process$1.cwd(), rollout, now, config, now, null, loggedUsage, queriedUsage, endpoint?.url ?? null),
 		options: {
 			width: Math.min(process$1.stdout.columns || 120, 140),
 			height: 30,
