@@ -27,6 +27,7 @@ Usage:
   codex-hud render [--once] [--cwd <path>] [--no-color]
   codex-hud doctor [--json]
   codex-hud setup [--codex-shim] [--preset full|essential|minimal]
+                  [--relay-usage|--no-relay-usage]
                   [--language en|zh-Hans|zh-Hant] [--layout compact|expanded] [--yes]
   codex-hud configure [--preset full|essential|minimal] [--language en|zh-Hans|zh-Hant]
   codex-hud configure --status [--json]

@@ -14,6 +14,17 @@ export interface ExternalUsageQueryConfig {
   refreshMs: number
   quotaPerCredit: number
 }
+
+export const DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY: ExternalUsageQueryConfig = {
+  enabled: true,
+  origin: '*',
+  template: 'general',
+  apiKeyEnv: '',
+  accessTokenEnv: '',
+  userIdEnv: '',
+  refreshMs: 300_000,
+  quotaPerCredit: 500_000,
+}
 export type TimeFormatMode = 'relative' | 'absolute' | 'both' | 'elapsed' | 'elapsedAndAbsolute'
 export type ModelFormatMode = 'full' | 'compact' | 'short'
 export type GitBranchOverflowMode = 'truncate' | 'wrap'
@@ -244,16 +255,7 @@ export const DEFAULT_CONFIG: HudConfig = {
     externalUsagePath: '',
     externalUsageWritePath: '',
     externalUsageFreshnessMs: 300_000,
-    externalUsageQueries: [{
-      enabled: true,
-      origin: '*',
-      template: 'general',
-      apiKeyEnv: '',
-      accessTokenEnv: '',
-      userIdEnv: '',
-      refreshMs: 300_000,
-      quotaPerCredit: 500_000,
-    }],
+    externalUsageQueries: [],
     modelFormat: 'full',
     modelOverride: '',
     showProvider: false,

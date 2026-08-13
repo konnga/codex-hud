@@ -122,6 +122,19 @@ function getLegacyStateDirectory(env = process.env) {
 }
 
 //#endregion
+//#region src/runtime/timed-cache.ts
+function pruneTimedCache(cache, now, maxAgeMs, maxEntries) {
+	for (const [key, entry] of cache) if (now - entry.at > maxAgeMs) cache.delete(key);
+	if (cache.size <= maxEntries) return;
+	const oldest = [...cache.entries()].sort((left, right) => left[1].at - right[1].at).slice(0, cache.size - maxEntries);
+	for (const [key] of oldest) cache.delete(key);
+}
+function setTimedCache(cache, key, entry, maxAgeMs, maxEntries) {
+	cache.set(key, entry);
+	pruneTimedCache(cache, entry.at, maxAgeMs, maxEntries);
+}
+
+//#endregion
 //#region src/codex/session-endpoint.ts
 const SESSION_ID_PATTERN = /^[\w-]{1,128}$/;
 const LOG_DATABASE_PATTERN = /^logs(?:_(\d+))?\.sqlite$/;
@@ -129,6 +142,8 @@ const QUERY_TIMEOUT_MS$1 = 750;
 const PROCESS_SESSION_QUERY_TIMEOUT_MS = 3e3;
 const ENDPOINT_CACHE_MS = 3e4;
 const PROCESS_SESSION_CACHE_MS = 1e3;
+const CACHE_MAX_AGE_MS$2 = 30 * 6e4;
+const CACHE_MAX_ENTRIES$2 = 256;
 const NEWEST_FIRST = "ORDER BY ts DESC, id DESC LIMIT 1";
 const endpointCache = /* @__PURE__ */ new Map();
 const processSessionCache = /* @__PURE__ */ new Map();
@@ -235,10 +250,10 @@ function resolveProcessSession(codexPid, cwd, since, env = process.env, now = Da
 	const cached = processSessionCache.get(cacheKey);
 	if (cached && now - cached.at < PROCESS_SESSION_CACHE_MS) return cached.value ? { ...cached.value } : null;
 	const remember = (value) => {
-		processSessionCache.set(cacheKey, {
+		setTimedCache(processSessionCache, cacheKey, {
 			at: now,
 			value
-		});
+		}, CACHE_MAX_AGE_MS$2, CACHE_MAX_ENTRIES$2);
 		return value ? { ...value } : null;
 	};
 	const database = findCodexLogDatabase(getCodexHome(env));
@@ -311,14 +326,15 @@ function resolveProcessEndpoint(codexPid, since, env = process.env, now = Date.n
 		}
 	}
 	sweep(now);
-	endpointCache.set(cacheKey, {
+	setTimedCache(endpointCache, cacheKey, {
 		at: now,
 		value
-	});
+	}, CACHE_MAX_AGE_MS$2, CACHE_MAX_ENTRIES$2);
 	return value ? { ...value } : null;
 }
 function sweep(now) {
-	for (const [key, entry] of endpointCache) if (now - entry.at >= ENDPOINT_CACHE_MS) endpointCache.delete(key);
+	pruneTimedCache(endpointCache, now, CACHE_MAX_AGE_MS$2, CACHE_MAX_ENTRIES$2);
+	pruneTimedCache(processSessionCache, now, CACHE_MAX_AGE_MS$2, CACHE_MAX_ENTRIES$2);
 }
 /**
 * The session id doubles as the tracing `thread_id`, so Codex's own log is the
@@ -337,10 +353,10 @@ function resolveSessionEndpoint(sessionId, env = process.env, now = Date.now()) 
 	if (cached && now - cached.at < ENDPOINT_CACHE_MS) return cached.value ? { ...cached.value } : null;
 	const remember = (value) => {
 		sweep(now);
-		endpointCache.set(cacheKey, {
+		setTimedCache(endpointCache, cacheKey, {
 			at: now,
 			value
-		});
+		}, CACHE_MAX_AGE_MS$2, CACHE_MAX_ENTRIES$2);
 		return value ? { ...value } : null;
 	};
 	const database = findCodexLogDatabase(codexHome);
@@ -952,10 +968,17 @@ function findActiveSession(options) {
 //#endregion
 //#region src/codex/external-usage.ts
 const MAX_BALANCE_LABEL = 80;
+const MAX_RESPONSE_BYTES = 64 * 1024;
 const WRITE_HEARTBEAT_MS = 6e4;
+const WRITE_CACHE_MAX_AGE_MS = 30 * 6e4;
+const WRITE_CACHE_MAX_ENTRIES = 64;
 const QUERY_FAILURE_RETRY_MS = 15e3;
+const QUERY_STALE_MAX_MS = 15 * 6e4;
+const QUERY_CACHE_MAX_AGE_MS = 1440 * 6e4;
+const QUERY_CACHE_MAX_ENTRIES = 64;
 const lastWrites = /* @__PURE__ */ new Map();
 const queryCache = /* @__PURE__ */ new Map();
+const inFlightQueries = /* @__PURE__ */ new Map();
 function safePercent(value) {
 	return typeof value === "number" && Number.isFinite(value) ? Math.min(100, Math.max(0, Math.round(value))) : null;
 }
@@ -981,6 +1004,49 @@ function usageData(balanceLabel) {
 		balanceLabel,
 		limitReachedType: null
 	};
+}
+function credentialFingerprint(value) {
+	return createHash("sha256").update(value).digest("hex").slice(0, 16);
+}
+async function responseJson(response) {
+	const contentLength = response.headers.get("content-length");
+	if (contentLength) {
+		const declaredLength = Number(contentLength);
+		if (Number.isFinite(declaredLength) && declaredLength > MAX_RESPONSE_BYTES) return null;
+	}
+	try {
+		if (!response.body) {
+			const text = await response.text();
+			if (Buffer.byteLength(text, "utf8") > MAX_RESPONSE_BYTES) return null;
+			return JSON.parse(text);
+		}
+		const reader = response.body.getReader();
+		const chunks = [];
+		let size = 0;
+		try {
+			while (true) {
+				const result = await reader.read();
+				if (result.done) break;
+				size += result.value.byteLength;
+				if (size > MAX_RESPONSE_BYTES) {
+					await reader.cancel();
+					return null;
+				}
+				chunks.push(result.value);
+			}
+		} finally {
+			reader.releaseLock();
+		}
+		const bytes = new Uint8Array(size);
+		let offset = 0;
+		for (const chunk of chunks) {
+			bytes.set(chunk, offset);
+			offset += chunk.byteLength;
+		}
+		return JSON.parse(new TextDecoder().decode(bytes));
+	} catch {
+		return null;
+	}
 }
 function newApiUsage(body, quotaPerCredit) {
 	const response = body;
@@ -1039,21 +1105,35 @@ function inferenceApiKey(env) {
 		return null;
 	}
 }
-/**
-* Query a matching relay balance endpoint. Dedicated credentials are read
-* only from named environment variables and never persisted.
-*/
-async function readConfiguredExternalUsage(queries, endpoint, env, now = Date.now()) {
+function configuredQueryContext(queries, endpoint, env) {
 	const query = configuredQuery(queries, endpoint);
-	if (!query) return null;
+	if (!query || !endpoint) return null;
 	const credentialEnv = query.template === "general" ? query.apiKeyEnv : query.accessTokenEnv;
-	const accessToken = query.template === "general" ? (credentialEnv ? env[credentialEnv] : null) ?? inferenceApiKey(env) : env[credentialEnv];
+	const accessToken = query.template === "general" ? credentialEnv ? env[credentialEnv] : inferenceApiKey(env) : env[credentialEnv];
 	const userId = env[query.userIdEnv];
 	if (!accessToken || query.template === "newApi" && !userId) return null;
-	const cacheKey = `${query.origin}:${query.template}:${credentialEnv}:${query.userIdEnv}`;
+	return {
+		query,
+		endpoint,
+		accessToken,
+		userId,
+		cacheKey: [
+			query.origin,
+			query.template,
+			credentialEnv,
+			query.userIdEnv,
+			query.quotaPerCredit,
+			credentialFingerprint(accessToken),
+			query.template === "newApi" ? credentialFingerprint(userId) : ""
+		].join(":")
+	};
+}
+function cachedQueryValue(cached, now) {
+	return cached?.value && now - cached.valueAt <= QUERY_STALE_MAX_MS ? structuredClone(cached.value) : null;
+}
+async function performConfiguredQuery(context, now) {
+	const { query, endpoint, accessToken, userId, cacheKey } = context;
 	const cached = queryCache.get(cacheKey);
-	if (cached && now - cached.at < query.refreshMs) return cached.value ? structuredClone(cached.value) : null;
-	if (cached?.failedAt && now - cached.failedAt < QUERY_FAILURE_RETRY_MS) return cached.value ? structuredClone(cached.value) : null;
 	const controller = new AbortController();
 	const timeout = setTimeout(() => controller.abort(), 3e3);
 	let value = null;
@@ -1071,12 +1151,8 @@ async function readConfiguredExternalUsage(queries, endpoint, env, now = Date.no
 				signal: controller.signal
 			});
 			if (!response.ok) continue;
-			let body;
-			try {
-				body = await response.json();
-			} catch {
-				continue;
-			}
+			const body = await responseJson(response);
+			if (body === null) continue;
 			value = query.template === "general" ? generalUsage(body) : query.template === "newApi" ? newApiUsage(body, query.quotaPerCredit) : sub2ApiUsage(body);
 			if (value) break;
 		}
@@ -1084,18 +1160,51 @@ async function readConfiguredExternalUsage(queries, endpoint, env, now = Date.no
 		clearTimeout(timeout);
 	}
 	if (value) {
-		queryCache.set(cacheKey, {
+		setTimedCache(queryCache, cacheKey, {
 			at: now,
+			valueAt: now,
 			value: structuredClone(value)
-		});
+		}, QUERY_CACHE_MAX_AGE_MS, QUERY_CACHE_MAX_ENTRIES);
 		return structuredClone(value);
 	}
-	queryCache.set(cacheKey, {
-		at: cached?.at ?? 0,
+	setTimedCache(queryCache, cacheKey, {
+		at: now,
+		valueAt: cached?.valueAt ?? 0,
 		failedAt: now,
 		value: cached?.value ? structuredClone(cached.value) : null
+	}, QUERY_CACHE_MAX_AGE_MS, QUERY_CACHE_MAX_ENTRIES);
+	return cachedQueryValue(cached, now);
+}
+function startConfiguredQuery(context, now) {
+	const existing = inFlightQueries.get(context.cacheKey);
+	if (existing) return existing;
+	const promise = performConfiguredQuery(context, now).finally(() => {
+		inFlightQueries.delete(context.cacheKey);
 	});
-	return cached?.value ? structuredClone(cached.value) : null;
+	inFlightQueries.set(context.cacheKey, promise);
+	return promise;
+}
+/**
+* Query a matching relay balance endpoint. Dedicated credentials are read
+* only from named environment variables and never persisted.
+*/
+async function readConfiguredExternalUsage(queries, endpoint, env, now = Date.now()) {
+	const context = configuredQueryContext(queries, endpoint, env);
+	if (!context) return null;
+	const cached = queryCache.get(context.cacheKey);
+	if (cached?.valueAt && now - cached.valueAt < context.query.refreshMs) return cached.value ? structuredClone(cached.value) : null;
+	if (cached?.failedAt && now - cached.failedAt < QUERY_FAILURE_RETRY_MS) return cachedQueryValue(cached, now);
+	return startConfiguredQuery(context, now);
+}
+function readCachedConfiguredExternalUsage(queries, endpoint, env, onUpdate, now = Date.now()) {
+	const context = configuredQueryContext(queries, endpoint, env);
+	if (!context) return null;
+	const cached = queryCache.get(context.cacheKey);
+	if (cached?.valueAt && now - cached.valueAt < context.query.refreshMs) return cached.value ? structuredClone(cached.value) : null;
+	if (!cached?.failedAt || now - cached.failedAt >= QUERY_FAILURE_RETRY_MS) {
+		if (!inFlightQueries.has(context.cacheKey)) startConfiguredQuery(context, now).finally(onUpdate);
+	}
+	return cachedQueryValue(cached, now);
 }
 function snapshotWindow(value, label, fallbackMinutes) {
 	if (!value || typeof value !== "object") return null;
@@ -1169,10 +1278,10 @@ function writeExternalUsage(filePath, usage, now = /* @__PURE__ */ new Date()) {
 			mode: 384
 		});
 		fs.chmodSync(filePath, 384);
-		lastWrites.set(filePath, {
+		setTimedCache(lastWrites, filePath, {
 			fingerprint,
 			at: now.getTime()
-		});
+		}, WRITE_CACHE_MAX_AGE_MS, WRITE_CACHE_MAX_ENTRIES);
 	} catch {}
 }
 function resolveUsageData(nativeUsage, display, now = /* @__PURE__ */ new Date()) {
@@ -1191,14 +1300,16 @@ function resolveUsageData(nativeUsage, display, now = /* @__PURE__ */ new Date()
 //#region src/codex/log-rate-limits.ts
 const EVENT_PREFIX = "SSE event: ";
 const QUERY_TIMEOUT_MS = 750;
-const CACHE_MS$2 = 15e3;
+const CACHE_MS$1 = 15e3;
 const MAX_EVENT_AGE_SECONDS = 11520 * 60;
 const RESETLESS_FRESHNESS_MS = 360 * 60 * 1e3;
 const MAX_ROW_LOOKBACK = 2e5;
 const MAX_EVENT_CANDIDATES = 1e3;
 const SNAPSHOT_FILE_NAME = "account-usage.json";
 const MAX_STORED_BODY_LENGTH = 16384;
-const cache$3 = /* @__PURE__ */ new Map();
+const CACHE_MAX_AGE_MS$1 = 30 * 6e4;
+const CACHE_MAX_ENTRIES$1 = 64;
+const cache$2 = /* @__PURE__ */ new Map();
 function record$1(value) {
 	return value && typeof value === "object" && !Array.isArray(value) ? value : null;
 }
@@ -1353,13 +1464,13 @@ function readLatestLoggedRateLimits(env = process.env, now = Date.now(), expecte
 	if (expectedOrigin === null) return null;
 	const codexHome = getCodexHome(env);
 	const cacheKey = `${codexHome}:${expectedOrigin ?? "*"}`;
-	const cached = cache$3.get(cacheKey);
-	if (cached && now - cached.at < CACHE_MS$2) return cloneSnapshot(cached.value);
+	const cached = cache$2.get(cacheKey);
+	if (cached && now - cached.at < CACHE_MS$1) return cloneSnapshot(cached.value);
 	const remember = (value) => {
-		cache$3.set(cacheKey, {
+		setTimedCache(cache$2, cacheKey, {
 			at: now,
 			value: cloneSnapshot(value)
-		});
+		}, CACHE_MAX_AGE_MS$1, CACHE_MAX_ENTRIES$1);
 		return cloneSnapshot(value);
 	};
 	let previous = readStoredSnapshot(env, now, expectedOrigin);
@@ -1425,6 +1536,16 @@ function readLatestLoggedRateLimits(env = process.env, now = Date.now(), expecte
 
 //#endregion
 //#region src/types/config.ts
+const DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY = {
+	enabled: true,
+	origin: "*",
+	template: "general",
+	apiKeyEnv: "",
+	accessTokenEnv: "",
+	userIdEnv: "",
+	refreshMs: 3e5,
+	quotaPerCredit: 5e5
+};
 const DEFAULT_ELEMENT_ORDER = [
 	"project",
 	"addedDirs",
@@ -1513,16 +1634,7 @@ const DEFAULT_CONFIG = {
 		externalUsagePath: "",
 		externalUsageWritePath: "",
 		externalUsageFreshnessMs: 3e5,
-		externalUsageQueries: [{
-			enabled: true,
-			origin: "*",
-			template: "general",
-			apiKeyEnv: "",
-			accessTokenEnv: "",
-			userIdEnv: "",
-			refreshMs: 3e5,
-			quotaPerCredit: 5e5
-		}],
+		externalUsageQueries: [],
 		modelFormat: "full",
 		modelOverride: "",
 		showProvider: false,
@@ -1845,6 +1957,13 @@ function loadConfig(env = process.env) {
 			error: missing ? null : error
 		};
 	}
+}
+function reloadConfig(previous, env = process.env) {
+	const next = loadConfig(env);
+	return next.error ? {
+		...previous,
+		error: next.error
+	} : next;
 }
 
 //#endregion
@@ -4326,8 +4445,10 @@ function settleCmuxPaneHeight(currentRows, managedHeight, selfFraction, geometry
 //#region src/collectors/agents.ts
 const COMPLETED_VISIBLE_MS = 3e4;
 const STARTING_VISIBLE_MS = 15 * 6e4;
-const CACHE_MS$1 = 1e3;
-let cache$2 = null;
+const CACHE_MS = 1e3;
+const ROLLOUT_CACHE_MAX_AGE_MS = 60 * 6e4;
+const ROLLOUT_CACHE_MAX_ENTRIES = 256;
+let cache$1 = null;
 const rolloutCache = /* @__PURE__ */ new Map();
 function safeDate(value, fallback) {
 	if (typeof value === "number" && Number.isFinite(value)) {
@@ -4353,14 +4474,33 @@ function readAgentRollout(candidate) {
 	} catch {
 		return null;
 	}
-	const cached = rolloutCache.get(candidate.path);
-	if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) return cached.value ? structuredClone(cached.value) : null;
-	const activeTurns = /* @__PURE__ */ new Set();
-	let model;
-	let startedAt = candidate.startTime;
-	let lastTimestamp = candidate.startTime;
+	let cached = rolloutCache.get(candidate.path);
+	if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+		cached.at = Date.now();
+		return {
+			active: cached.activeTurns.size > 0,
+			model: cached.model,
+			startedAt: new Date(cached.startedAt),
+			lastTimestamp: new Date(cached.lastTimestamp)
+		};
+	}
+	if (!cached) cached = {
+		at: Date.now(),
+		mtimeMs: 0,
+		size: 0,
+		tail: new JsonlTail(),
+		activeTurns: /* @__PURE__ */ new Set(),
+		startedAt: candidate.startTime,
+		lastTimestamp: candidate.startTime
+	};
 	try {
-		const lines = fs.readFileSync(candidate.path, "utf8").split(/\r?\n/).filter(Boolean);
+		const { lines, reset } = cached.tail.read(candidate.path);
+		if (reset) {
+			cached.activeTurns.clear();
+			cached.model = void 0;
+			cached.startedAt = candidate.startTime;
+			cached.lastTimestamp = candidate.startTime;
+		}
 		for (const line of lines) {
 			let entry;
 			try {
@@ -4368,41 +4508,35 @@ function readAgentRollout(candidate) {
 			} catch {
 				continue;
 			}
-			lastTimestamp = safeDate(entry.timestamp, lastTimestamp);
+			cached.lastTimestamp = safeDate(entry.timestamp, cached.lastTimestamp);
 			const payload = entry.payload;
 			if (!payload) continue;
 			if (entry.type === "turn_context") {
 				const collaboration = payload.collaboration_mode;
 				const settings = collaboration && typeof collaboration === "object" && !Array.isArray(collaboration) ? collaboration.settings : null;
-				model = typeof payload.model === "string" ? payload.model : settings && typeof settings === "object" && !Array.isArray(settings) && typeof settings.model === "string" ? settings.model : model;
+				cached.model = typeof payload.model === "string" ? payload.model : settings && typeof settings === "object" && !Array.isArray(settings) && typeof settings.model === "string" ? settings.model : cached.model;
 			}
 			if (entry.type !== "event_msg") continue;
 			if (payload.type === "task_started" && typeof payload.turn_id === "string") {
-				activeTurns.add(payload.turn_id);
-				startedAt = safeDate(payload.started_at, lastTimestamp);
-			} else if (payload.type === "task_complete" && typeof payload.turn_id === "string") activeTurns.delete(payload.turn_id);
-			else if (payload.type === "turn_aborted") if (typeof payload.turn_id === "string") activeTurns.delete(payload.turn_id);
-			else activeTurns.clear();
+				cached.activeTurns.add(payload.turn_id);
+				cached.startedAt = safeDate(payload.started_at, cached.lastTimestamp);
+			} else if (payload.type === "task_complete" && typeof payload.turn_id === "string") cached.activeTurns.delete(payload.turn_id);
+			else if (payload.type === "turn_aborted") if (typeof payload.turn_id === "string") cached.activeTurns.delete(payload.turn_id);
+			else cached.activeTurns.clear();
 		}
 	} catch {
-		rolloutCache.set(candidate.path, {
-			mtimeMs: stat.mtimeMs,
-			size: stat.size,
-			value: null
-		});
 		return null;
 	}
+	cached.at = Date.now();
+	cached.mtimeMs = stat.mtimeMs;
+	cached.size = stat.size;
+	setTimedCache(rolloutCache, candidate.path, cached, ROLLOUT_CACHE_MAX_AGE_MS, ROLLOUT_CACHE_MAX_ENTRIES);
 	const value = {
-		active: activeTurns.size > 0,
-		model,
-		startedAt,
-		lastTimestamp
+		active: cached.activeTurns.size > 0,
+		model: cached.model,
+		startedAt: cached.startedAt,
+		lastTimestamp: cached.lastTimestamp
 	};
-	rolloutCache.set(candidate.path, {
-		mtimeMs: stat.mtimeMs,
-		size: stat.size,
-		value
-	});
 	return structuredClone(value);
 }
 function parseAgent(candidate, now) {
@@ -4444,8 +4578,9 @@ function descendants(rootThreadId, runtimes) {
 function collectAgentEntries(session, env = process.env, now = /* @__PURE__ */ new Date()) {
 	if (!session) return [];
 	const codexHome = getCodexHome(env);
+	pruneTimedCache(rolloutCache, now.getTime(), ROLLOUT_CACHE_MAX_AGE_MS, ROLLOUT_CACHE_MAX_ENTRIES);
 	const key = `${codexHome}:${session.id}`;
-	if (cache$2?.key === key && now.getTime() - cache$2.at < CACHE_MS$1) return structuredClone(cache$2.agents);
+	if (cache$1?.key === key && now.getTime() - cache$1.at < CACHE_MS) return structuredClone(cache$1.agents);
 	const runtimes = listSessionCandidates(codexHome).filter((candidate) => isSubagentSource(candidate.source) && candidate.parentThreadId).flatMap((candidate) => {
 		const runtime = parseAgent(candidate, now);
 		return runtime ? [runtime] : [];
@@ -4470,7 +4605,7 @@ function collectAgentEntries(session, env = process.env, now = /* @__PURE__ */ n
 			activeDescendantCount
 		};
 	});
-	cache$2 = {
+	cache$1 = {
 		key,
 		at: now.getTime(),
 		agents
@@ -4481,8 +4616,12 @@ function collectAgentEntries(session, env = process.env, now = /* @__PURE__ */ n
 //#endregion
 //#region src/collectors/git.ts
 const GIT_TIMEOUT_MS = 1500;
-const CACHE_MS = 2e3;
-const cache$1 = /* @__PURE__ */ new Map();
+const STATUS_CACHE_MS = 2e3;
+const ROOT_CACHE_MS = 5 * 6e4;
+const CACHE_MAX_AGE_MS = 30 * 6e4;
+const CACHE_MAX_ENTRIES = 64;
+const statusCache = /* @__PURE__ */ new Map();
+const rootCache = /* @__PURE__ */ new Map();
 function git(cwd, args) {
 	const result = spawnSync("git", args, {
 		cwd,
@@ -4496,37 +4635,50 @@ function git(cwd, args) {
 	});
 	return result.status === 0 ? result.stdout.trim() : null;
 }
-function findGitRoot(cwd) {
-	return git(cwd, ["rev-parse", "--show-toplevel"]);
+function findGitRoot(cwd, now = Date.now()) {
+	const cached = rootCache.get(cwd);
+	if (cached && now - cached.at < ROOT_CACHE_MS) return cached.root;
+	const root = git(cwd, ["rev-parse", "--show-toplevel"]);
+	setTimedCache(rootCache, cwd, {
+		at: now,
+		root
+	}, CACHE_MAX_AGE_MS, CACHE_MAX_ENTRIES);
+	return root;
+}
+function changeType(xy) {
+	return xy[0] !== "." ? xy[0] : xy[1] ?? ".";
 }
 function collectGitStatus(cwd) {
 	const now = Date.now();
-	const cached = cache$1.get(cwd);
-	if (cached && now - cached.at < CACHE_MS) return cached.status ? structuredClone(cached.status) : null;
-	const root = findGitRoot(cwd);
+	const cached = statusCache.get(cwd);
+	if (cached && now - cached.at < STATUS_CACHE_MS) return cached.status ? structuredClone(cached.status) : null;
+	const root = findGitRoot(cwd, now);
 	if (!root) {
-		cache$1.set(cwd, {
+		setTimedCache(statusCache, cwd, {
 			at: now,
 			status: null
-		});
+		}, CACHE_MAX_AGE_MS, CACHE_MAX_ENTRIES);
 		return null;
 	}
-	const branch = git(root, [
-		"symbolic-ref",
-		"--quiet",
-		"--short",
-		"HEAD"
-	]) ?? git(root, [
-		"rev-parse",
-		"--short",
-		"HEAD"
-	]);
-	const records = (git(root, [
+	const output = git(root, [
 		"status",
-		"--porcelain=v1",
+		"--porcelain=v2",
+		"--branch",
 		"-z",
 		"--untracked-files=normal"
-	]) ?? "").split("\0").filter(Boolean);
+	]);
+	if (output === null) {
+		setTimedCache(statusCache, cwd, {
+			at: now,
+			status: null
+		}, CACHE_MAX_AGE_MS, CACHE_MAX_ENTRIES);
+		return null;
+	}
+	const records = output.split("\0").filter(Boolean);
+	let branch = null;
+	let oid = null;
+	let ahead = 0;
+	let behind = 0;
 	let modified = 0;
 	let added = 0;
 	let deleted = 0;
@@ -4535,41 +4687,47 @@ function collectGitStatus(cwd) {
 	let copied = 0;
 	let typeChanged = 0;
 	let conflicted = 0;
-	let i = 0;
-	while (i < records.length) {
-		const xy = records[i++].slice(0, 2);
-		if (xy === "??") {
-			untracked++;
+	for (let index = 0; index < records.length; index += 1) {
+		const record = records[index];
+		if (record.startsWith("# branch.head ")) {
+			const value = record.slice(14);
+			branch = value === "(detached)" ? null : value;
 			continue;
 		}
-		if (xy === "!!") continue;
-		if (xy[0] === "U" || xy[1] === "U" || xy === "AA" || xy === "DD") {
-			conflicted++;
+		if (record.startsWith("# branch.oid ")) {
+			const value = record.slice(13);
+			oid = value === "(initial)" ? null : value.slice(0, 7);
 			continue;
 		}
-		const ch = xy[0] !== " " ? xy[0] : xy[1];
-		if (ch === "R") {
-			renamed++;
-			i++;
-		} else if (ch === "C") {
-			copied++;
-			i++;
-		} else if (ch === "A") added++;
-		else if (ch === "D") deleted++;
-		else if (ch === "T") typeChanged++;
-		else modified++;
+		if (record.startsWith("# branch.ab ")) {
+			const match = /\+(\d+) -(\d+)/.exec(record);
+			ahead = Number(match?.[1] ?? 0);
+			behind = Number(match?.[2] ?? 0);
+			continue;
+		}
+		if (record.startsWith("? ")) {
+			untracked += 1;
+			continue;
+		}
+		if (record.startsWith("u ")) {
+			conflicted += 1;
+			continue;
+		}
+		if (record.startsWith("1 ") || record.startsWith("2 ")) {
+			const type = changeType(record.slice(2, 4));
+			if (type === "R") renamed += 1;
+			else if (type === "C") copied += 1;
+			else if (type === "A") added += 1;
+			else if (type === "D") deleted += 1;
+			else if (type === "T") typeChanged += 1;
+			else modified += 1;
+			if (record.startsWith("2 ")) index += 1;
+		}
 	}
-	const divergence = git(root, [
-		"rev-list",
-		"--left-right",
-		"--count",
-		"HEAD...@{upstream}"
-	]);
-	const [ahead = 0, behind = 0] = divergence ? divergence.split(/\s+/).map((value) => Number.parseInt(value, 10) || 0) : [0, 0];
 	const status = {
 		isGitRepo: true,
-		branch,
-		isDirty: records.length > 0,
+		branch: branch ?? oid,
+		isDirty: modified + added + deleted + untracked + renamed + copied + typeChanged + conflicted > 0,
 		ahead,
 		behind,
 		modified,
@@ -4581,10 +4739,10 @@ function collectGitStatus(cwd) {
 		typeChanged,
 		conflicted
 	};
-	cache$1.set(cwd, {
+	setTimedCache(statusCache, cwd, {
 		at: now,
 		status
-	});
+	}, CACHE_MAX_AGE_MS, CACHE_MAX_ENTRIES);
 	return structuredClone(status);
 }
 
@@ -5413,6 +5571,8 @@ const IGNORED_DIRECTORIES = /* @__PURE__ */ new Set([
 	"target"
 ]);
 const PROJECT_CACHE_MS = 3e4;
+const PROJECT_CACHE_MAX_AGE_MS = 30 * 6e4;
+const PROJECT_CACHE_MAX_ENTRIES = 32;
 const projectCache = /* @__PURE__ */ new Map();
 function isDirectory(value) {
 	try {
@@ -5496,10 +5656,10 @@ function collectProjectInfo(cwd, workspaceRoots = [], env = process.env, include
 		pluginsCount: includeCounts ? tableSize(globalConfig.plugins) + tableSize(projectConfig.plugins) : 0,
 		mcpCount: includeCounts ? tableSize(globalConfig.mcp_servers) + tableSize(projectConfig.mcp_servers) : 0
 	};
-	projectCache.set(cacheKey, {
+	setTimedCache(projectCache, cacheKey, {
 		at: now,
 		value
-	});
+	}, PROJECT_CACHE_MAX_AGE_MS, PROJECT_CACHE_MAX_ENTRIES);
 	return structuredClone(value);
 }
 
@@ -5508,6 +5668,8 @@ function collectProjectInfo(cwd, workspaceRoots = [], env = process.env, include
 const titleCache = /* @__PURE__ */ new Map();
 const authCache = /* @__PURE__ */ new Map();
 const METADATA_CACHE_MS = 3e4;
+const METADATA_CACHE_MAX_AGE_MS = 30 * 6e4;
+const METADATA_CACHE_MAX_ENTRIES = 256;
 function record(value) {
 	return value && typeof value === "object" && !Array.isArray(value) ? value : null;
 }
@@ -5616,18 +5778,18 @@ function collectAuthInfo(planType, session = null, env = process.env, codexProce
 			method: `ChatGPT ${planType}`,
 			user: user ?? void 0
 		};
-		authCache.set(cacheKey, {
+		setTimedCache(authCache, cacheKey, {
 			at: Date.now(),
 			value
-		});
+		}, METADATA_CACHE_MAX_AGE_MS, METADATA_CACHE_MAX_ENTRIES);
 		return structuredClone(value);
 	}
 	if (hasApiKey) {
 		const value = { method: (baseUrl ? providerLabel(baseUrl) : null) || "API Key" };
-		authCache.set(cacheKey, {
+		setTimedCache(authCache, cacheKey, {
 			at: Date.now(),
 			value
-		});
+		}, METADATA_CACHE_MAX_AGE_MS, METADATA_CACHE_MAX_ENTRIES);
 		return value;
 	}
 	if (Object.keys(auth).length > 0) {
@@ -5635,16 +5797,16 @@ function collectAuthInfo(planType, session = null, env = process.env, codexProce
 			method: "ChatGPT",
 			user: user ?? void 0
 		};
-		authCache.set(cacheKey, {
+		setTimedCache(authCache, cacheKey, {
 			at: Date.now(),
 			value
-		});
+		}, METADATA_CACHE_MAX_AGE_MS, METADATA_CACHE_MAX_ENTRIES);
 		return structuredClone(value);
 	}
-	authCache.set(cacheKey, {
+	setTimedCache(authCache, cacheKey, {
 		at: Date.now(),
 		value: null
-	});
+	}, METADATA_CACHE_MAX_AGE_MS, METADATA_CACHE_MAX_ENTRIES);
 	return null;
 }
 function collectSessionTitle(session, env = process.env) {
@@ -5654,10 +5816,10 @@ function collectSessionTitle(session, env = process.env) {
 	if (cached && Date.now() - cached.at < METADATA_CACHE_MS) return cached.title;
 	const database = path.join(getCodexHome(env), "state_5.sqlite");
 	if (!fs.existsSync(database)) {
-		titleCache.set(cacheKey, {
+		setTimedCache(titleCache, cacheKey, {
 			at: Date.now(),
 			title: null
-		});
+		}, METADATA_CACHE_MAX_AGE_MS, METADATA_CACHE_MAX_ENTRIES);
 		return null;
 	}
 	const result = spawnSync("sqlite3", [
@@ -5675,18 +5837,18 @@ function collectSessionTitle(session, env = process.env) {
 		timeout: 750
 	});
 	if (result.status !== 0) {
-		titleCache.set(cacheKey, {
+		setTimedCache(titleCache, cacheKey, {
 			at: Date.now(),
 			title: null
-		});
+		}, METADATA_CACHE_MAX_AGE_MS, METADATA_CACHE_MAX_ENTRIES);
 		return null;
 	}
 	const title = result.stdout.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, " ").replace(/\s+/g, " ").trim();
 	const normalized = title ? title.slice(0, 80) : null;
-	titleCache.set(cacheKey, {
+	setTimedCache(titleCache, cacheKey, {
 		at: Date.now(),
 		title: normalized
-	});
+	}, METADATA_CACHE_MAX_AGE_MS, METADATA_CACHE_MAX_ENTRIES);
 	return normalized;
 }
 
@@ -5845,5 +6007,5 @@ async function waitForNewRootSession(cwd, snapshot, codexHome = getCodexHome(), 
 }
 
 //#endregion
-export { resolveProcessSession as A, readLatestLoggedRateLimits as C, findCodexLogDatabase as D, RolloutParser as E, getLegacyStateDirectory as F, getCodexHome as M, getConfigPath as N, isOfficialOpenAIEndpoint as O, getHudStateDirectory as P, DEFAULT_CONFIG as S, findActiveSession as T, visibleWidth as _, waitForNewRootSession as a, applyConfigMigrations as b, desiredPaneHeight as c, resizeCmuxPane as d, resizeHudPane as f, truncateAnsi as g, safeText as h, snapshotRootSessions as i, resolveSessionEndpoint as j, resolveProcessEndpoint as k, hudRenderHeight as l, renderHud as m, createSessionBindingPath as n, writeSessionBinding as o, settleCmuxPaneHeight as p, readSessionBinding as r, buildHudState as s, acquireSessionDiscoveryLock as t, readCmuxPaneGeometry as u, sliceAnsi as v, readConfiguredExternalUsage as w, rawConfigVersion as x, loadConfig as y };
-//# sourceMappingURL=session-binding-Bsjkdux_.mjs.map
+export { findCodexLogDatabase as A, DEFAULT_CONFIG as C, readConfiguredExternalUsage as D, readCachedConfiguredExternalUsage as E, getCodexHome as F, getConfigPath as I, getHudStateDirectory as L, resolveProcessEndpoint as M, resolveProcessSession as N, findActiveSession as O, resolveSessionEndpoint as P, getLegacyStateDirectory as R, rawConfigVersion as S, readLatestLoggedRateLimits as T, visibleWidth as _, waitForNewRootSession as a, reloadConfig as b, desiredPaneHeight as c, resizeCmuxPane as d, resizeHudPane as f, truncateAnsi as g, safeText as h, snapshotRootSessions as i, isOfficialOpenAIEndpoint as j, RolloutParser as k, hudRenderHeight as l, renderHud as m, createSessionBindingPath as n, writeSessionBinding as o, settleCmuxPaneHeight as p, readSessionBinding as r, buildHudState as s, acquireSessionDiscoveryLock as t, readCmuxPaneGeometry as u, sliceAnsi as v, DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY as w, applyConfigMigrations as x, loadConfig as y };
+//# sourceMappingURL=session-binding-CQ7nE5p-.mjs.map

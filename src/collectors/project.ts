@@ -5,6 +5,7 @@ import path from 'node:path'
 import process from 'node:process'
 import { parse } from 'smol-toml'
 import { getCodexHome } from '../config/paths.js'
+import { setTimedCache } from '../runtime/timed-cache.js'
 import { findGitRoot } from './git.js'
 
 const IGNORED_DIRECTORIES = new Set([
@@ -20,6 +21,8 @@ const IGNORED_DIRECTORIES = new Set([
   'target',
 ])
 const PROJECT_CACHE_MS = 30_000
+const PROJECT_CACHE_MAX_AGE_MS = 30 * 60_000
+const PROJECT_CACHE_MAX_ENTRIES = 32
 const projectCache = new Map<string, { at: number, value: ProjectInfo }>()
 
 function isDirectory(value: string): boolean {
@@ -157,6 +160,6 @@ export function collectProjectInfo(
     pluginsCount: includeCounts ? tableSize(globalConfig.plugins) + tableSize(projectConfig.plugins) : 0,
     mcpCount: includeCounts ? tableSize(globalConfig.mcp_servers) + tableSize(projectConfig.mcp_servers) : 0,
   }
-  projectCache.set(cacheKey, { at: now, value })
+  setTimedCache(projectCache, cacheKey, { at: now, value }, PROJECT_CACHE_MAX_AGE_MS, PROJECT_CACHE_MAX_ENTRIES)
   return structuredClone(value)
 }

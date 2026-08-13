@@ -7,6 +7,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 import { getCodexHome, getHudStateDirectory } from '../config/paths.js'
+import { setTimedCache } from '../runtime/timed-cache.js'
 import { normalizeRateLimits } from './rate-limits.js'
 import { endpointOrigin, findCodexLogDatabase } from './session-endpoint.js'
 
@@ -25,6 +26,8 @@ const MAX_ROW_LOOKBACK = 200_000
 const MAX_EVENT_CANDIDATES = 1_000
 const SNAPSHOT_FILE_NAME = 'account-usage.json'
 const MAX_STORED_BODY_LENGTH = 16_384
+const CACHE_MAX_AGE_MS = 30 * 60_000
+const CACHE_MAX_ENTRIES = 64
 
 const cache = new Map<string, { at: number, value: LoggedUsageSnapshot | null }>()
 
@@ -219,7 +222,7 @@ export function readLatestLoggedRateLimits(
     return cloneSnapshot(cached.value)
   }
   const remember = (value: LoggedUsageSnapshot | null): LoggedUsageSnapshot | null => {
-    cache.set(cacheKey, { at: now, value: cloneSnapshot(value) })
+    setTimedCache(cache, cacheKey, { at: now, value: cloneSnapshot(value) }, CACHE_MAX_AGE_MS, CACHE_MAX_ENTRIES)
     return cloneSnapshot(value)
   }
   let previous = readStoredSnapshot(env, now, expectedOrigin)

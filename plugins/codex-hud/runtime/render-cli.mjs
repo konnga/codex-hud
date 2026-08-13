@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { A as resolveProcessSession, C as readLatestLoggedRateLimits, E as RolloutParser, O as isOfficialOpenAIEndpoint, T as findActiveSession, _ as visibleWidth, c as desiredPaneHeight, d as resizeCmuxPane, f as resizeHudPane, g as truncateAnsi, h as safeText, j as resolveSessionEndpoint, k as resolveProcessEndpoint, l as hudRenderHeight, m as renderHud, o as writeSessionBinding, p as settleCmuxPaneHeight, r as readSessionBinding, s as buildHudState, u as readCmuxPaneGeometry, v as sliceAnsi, w as readConfiguredExternalUsage, y as loadConfig } from "./session-binding-Bsjkdux_.mjs";
+import { D as readConfiguredExternalUsage, E as readCachedConfiguredExternalUsage, M as resolveProcessEndpoint, N as resolveProcessSession, O as findActiveSession, P as resolveSessionEndpoint, T as readLatestLoggedRateLimits, _ as visibleWidth, b as reloadConfig, c as desiredPaneHeight, d as resizeCmuxPane, f as resizeHudPane, g as truncateAnsi, h as safeText, j as isOfficialOpenAIEndpoint, k as RolloutParser, l as hudRenderHeight, m as renderHud, o as writeSessionBinding, p as settleCmuxPaneHeight, r as readSessionBinding, s as buildHudState, u as readCmuxPaneGeometry, v as sliceAnsi, y as loadConfig } from "./session-binding-CQ7nE5p-.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -354,6 +354,24 @@ function watchConfigPath(configPath, onChange) {
 }
 
 //#endregion
+//#region src/runtime/heartbeat.ts
+function createHeartbeatScheduler(callback) {
+	let timer = null;
+	return {
+		reschedule(intervalMs) {
+			if (timer) clearInterval(timer);
+			timer = setInterval(callback, intervalMs);
+		},
+		stop() {
+			if (timer) {
+				clearInterval(timer);
+				timer = null;
+			}
+		}
+	};
+}
+
+//#endregion
 //#region src/render-cli.ts
 function parseOptions(args) {
 	const options = {
@@ -419,6 +437,10 @@ async function runRenderCli(args = process.argv.slice(2)) {
 	};
 	let lastConfigMtime = configMtime();
 	let render;
+	const heartbeat = createHeartbeatScheduler(() => void render());
+	const loadLatestConfig = () => {
+		loaded = reloadConfig(loaded);
+	};
 	const renderFrame = async () => {
 		const nowMs = Date.now();
 		if (currentSessionPath && !fs.existsSync(currentSessionPath)) {
@@ -467,7 +489,7 @@ async function runRenderCli(args = process.argv.slice(2)) {
 		const now = /* @__PURE__ */ new Date();
 		const endpoint = rollout.session ? resolveSessionEndpoint(rollout.session.id) : codexProcess ? resolveProcessEndpoint(codexProcess.pid, codexProcess.launchedAt) : null;
 		const loggedUsage = (loaded.config.display.showUsage || loaded.config.display.showAuth) && isOfficialOpenAIEndpoint(endpoint?.url) ? readLatestLoggedRateLimits(process.env, now.getTime(), endpoint?.url ?? null)?.usage ?? null : null;
-		const queriedUsage = loaded.config.display.showAuth ? await readConfiguredExternalUsage(loaded.config.display.externalUsageQueries, endpoint?.url ?? null, process.env, now.getTime()) : null;
+		const queriedUsage = loaded.config.display.showAuth ? options.once ? await readConfiguredExternalUsage(loaded.config.display.externalUsageQueries, endpoint?.url ?? null, process.env, now.getTime()) : readCachedConfiguredExternalUsage(loaded.config.display.externalUsageQueries, endpoint?.url ?? null, process.env, () => void render(), now.getTime()) : null;
 		const state = buildHudState(options.cwd, rollout, startedAt, loaded.config, now, codexProcess, loggedUsage, queriedUsage, endpoint?.url ?? null);
 		latestTurns = state.conversationTurns;
 		latestImages = state.images;
@@ -537,18 +559,23 @@ async function runRenderCli(args = process.argv.slice(2)) {
 	};
 	await render();
 	if (options.once) return;
-	const interval = setInterval(() => void render(), 1e3);
+	const scheduleHeartbeat = () => {
+		heartbeat.reschedule(loaded.config.refreshIntervalMs);
+	};
+	scheduleHeartbeat();
 	const configSafetyInterval = setInterval(() => {
 		const nextMtime = configMtime();
 		if (nextMtime !== lastConfigMtime) {
-			loaded = loadConfig();
+			loadLatestConfig();
 			lastConfigMtime = nextMtime;
+			scheduleHeartbeat();
 			render();
 		}
 	}, 1e4);
 	const configWatcher = watchConfigPath(loaded.path, () => {
-		loaded = loadConfig();
+		loadLatestConfig();
 		lastConfigMtime = configMtime();
+		scheduleHeartbeat();
 		render();
 	});
 	const onResize = () => {
@@ -734,7 +761,7 @@ async function runRenderCli(args = process.argv.slice(2)) {
 		splitNavigatorInput(value.toString()).forEach(onKey);
 	};
 	shutdown = () => {
-		clearInterval(interval);
+		heartbeat.stop();
 		clearInterval(configSafetyInterval);
 		if (debounceTimer) clearTimeout(debounceTimer);
 		if (resizeTimer) clearTimeout(resizeTimer);

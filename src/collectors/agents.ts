@@ -3,12 +3,16 @@ import type { AgentEntry, SessionInfo } from '../types/state.js'
 // @env node
 import fs from 'node:fs'
 import process from 'node:process'
+import { JsonlTail } from '../codex/jsonl-tail.js'
 import { isSubagentSource, listSessionCandidates } from '../codex/session-finder.js'
 import { getCodexHome } from '../config/paths.js'
+import { pruneTimedCache, setTimedCache } from '../runtime/timed-cache.js'
 
 const COMPLETED_VISIBLE_MS = 30_000
 const STARTING_VISIBLE_MS = 15 * 60_000
 const CACHE_MS = 1_000
+const ROLLOUT_CACHE_MAX_AGE_MS = 60 * 60_000
+const ROLLOUT_CACHE_MAX_ENTRIES = 256
 
 interface AgentRuntime {
   entry: AgentEntry
@@ -23,8 +27,19 @@ interface ParsedAgentRollout {
   lastTimestamp: Date
 }
 
+interface AgentRolloutCache {
+  at: number
+  mtimeMs: number
+  size: number
+  tail: JsonlTail
+  activeTurns: Set<string>
+  model?: string
+  startedAt: Date
+  lastTimestamp: Date
+}
+
 let cache: { key: string, at: number, agents: AgentEntry[] } | null = null
-const rolloutCache = new Map<string, { mtimeMs: number, size: number, value: ParsedAgentRollout | null }>()
+const rolloutCache = new Map<string, AgentRolloutCache>()
 
 function safeDate(value: unknown, fallback: Date): Date {
   if (typeof value === 'number' && Number.isFinite(value)) {
@@ -59,16 +74,35 @@ function readAgentRollout(candidate: SessionCandidate): ParsedAgentRollout | nul
   catch {
     return null
   }
-  const cached = rolloutCache.get(candidate.path)
+  let cached = rolloutCache.get(candidate.path)
   if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
-    return cached.value ? structuredClone(cached.value) : null
+    cached.at = Date.now()
+    return {
+      active: cached.activeTurns.size > 0,
+      model: cached.model,
+      startedAt: new Date(cached.startedAt),
+      lastTimestamp: new Date(cached.lastTimestamp),
+    }
   }
-  const activeTurns = new Set<string>()
-  let model: string | undefined
-  let startedAt = candidate.startTime
-  let lastTimestamp = candidate.startTime
+  if (!cached) {
+    cached = {
+      at: Date.now(),
+      mtimeMs: 0,
+      size: 0,
+      tail: new JsonlTail(),
+      activeTurns: new Set<string>(),
+      startedAt: candidate.startTime,
+      lastTimestamp: candidate.startTime,
+    }
+  }
   try {
-    const lines = fs.readFileSync(candidate.path, 'utf8').split(/\r?\n/).filter(Boolean)
+    const { lines, reset } = cached.tail.read(candidate.path)
+    if (reset) {
+      cached.activeTurns.clear()
+      cached.model = undefined
+      cached.startedAt = candidate.startTime
+      cached.lastTimestamp = candidate.startTime
+    }
     for (const line of lines) {
       let entry: { timestamp?: string, type?: string, payload?: Record<string, unknown> }
       try {
@@ -77,7 +111,7 @@ function readAgentRollout(candidate: SessionCandidate): ParsedAgentRollout | nul
       catch {
         continue
       }
-      lastTimestamp = safeDate(entry.timestamp, lastTimestamp)
+      cached.lastTimestamp = safeDate(entry.timestamp, cached.lastTimestamp)
       const payload = entry.payload
       if (!payload) {
         continue
@@ -87,44 +121,46 @@ function readAgentRollout(candidate: SessionCandidate): ParsedAgentRollout | nul
         const settings = collaboration && typeof collaboration === 'object' && !Array.isArray(collaboration)
           ? (collaboration as Record<string, unknown>).settings
           : null
-        model = typeof payload.model === 'string'
+        cached.model = typeof payload.model === 'string'
           ? payload.model
           : settings && typeof settings === 'object' && !Array.isArray(settings) && typeof (settings as Record<string, unknown>).model === 'string'
             ? (settings as Record<string, unknown>).model as string
-            : model
+            : cached.model
       }
       if (entry.type !== 'event_msg') {
         continue
       }
       if (payload.type === 'task_started' && typeof payload.turn_id === 'string') {
-        activeTurns.add(payload.turn_id)
-        startedAt = safeDate(payload.started_at, lastTimestamp)
+        cached.activeTurns.add(payload.turn_id)
+        cached.startedAt = safeDate(payload.started_at, cached.lastTimestamp)
       }
       else if (payload.type === 'task_complete' && typeof payload.turn_id === 'string') {
-        activeTurns.delete(payload.turn_id)
+        cached.activeTurns.delete(payload.turn_id)
       }
       else if (payload.type === 'turn_aborted') {
         if (typeof payload.turn_id === 'string') {
-          activeTurns.delete(payload.turn_id)
+          cached.activeTurns.delete(payload.turn_id)
         }
         else {
-          activeTurns.clear()
+          cached.activeTurns.clear()
         }
       }
     }
   }
   catch {
-    rolloutCache.set(candidate.path, { mtimeMs: stat.mtimeMs, size: stat.size, value: null })
     return null
   }
 
+  cached.at = Date.now()
+  cached.mtimeMs = stat.mtimeMs
+  cached.size = stat.size
+  setTimedCache(rolloutCache, candidate.path, cached, ROLLOUT_CACHE_MAX_AGE_MS, ROLLOUT_CACHE_MAX_ENTRIES)
   const value: ParsedAgentRollout = {
-    active: activeTurns.size > 0,
-    model,
-    startedAt,
-    lastTimestamp,
+    active: cached.activeTurns.size > 0,
+    model: cached.model,
+    startedAt: cached.startedAt,
+    lastTimestamp: cached.lastTimestamp,
   }
-  rolloutCache.set(candidate.path, { mtimeMs: stat.mtimeMs, size: stat.size, value })
   return structuredClone(value)
 }
 
@@ -181,6 +217,7 @@ export function collectAgentEntries(
     return []
   }
   const codexHome = getCodexHome(env)
+  pruneTimedCache(rolloutCache, now.getTime(), ROLLOUT_CACHE_MAX_AGE_MS, ROLLOUT_CACHE_MAX_ENTRIES)
   const key = `${codexHome}:${session.id}`
   if (cache?.key === key && now.getTime() - cache.at < CACHE_MS) {
     return structuredClone(cache.agents)

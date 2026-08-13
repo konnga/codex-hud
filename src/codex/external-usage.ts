@@ -1,9 +1,12 @@
 import type { DisplayConfig, ExternalUsageQueryConfig } from '../types/config.js'
 import type { UsageData, UsageWindow } from '../types/state.js'
 // @env node
+import { Buffer } from 'node:buffer'
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { getCodexHome } from '../config/paths.js'
+import { setTimedCache } from '../runtime/timed-cache.js'
 import { isOfficialOpenAIEndpoint } from './session-endpoint.js'
 
 interface SnapshotWindow {
@@ -22,10 +25,17 @@ interface UsageSnapshot {
 }
 
 const MAX_BALANCE_LABEL = 80
+const MAX_RESPONSE_BYTES = 64 * 1024
 const WRITE_HEARTBEAT_MS = 60_000
+const WRITE_CACHE_MAX_AGE_MS = 30 * 60_000
+const WRITE_CACHE_MAX_ENTRIES = 64
 const QUERY_FAILURE_RETRY_MS = 15_000
+const QUERY_STALE_MAX_MS = 15 * 60_000
+const QUERY_CACHE_MAX_AGE_MS = 24 * 60 * 60_000
+const QUERY_CACHE_MAX_ENTRIES = 64
 const lastWrites = new Map<string, { fingerprint: string, at: number }>()
-const queryCache = new Map<string, { at: number, failedAt?: number, value: UsageData | null }>()
+const queryCache = new Map<string, { at: number, valueAt: number, failedAt?: number, value: UsageData | null }>()
+const inFlightQueries = new Map<string, Promise<UsageData | null>>()
 
 interface NewApiUserResponse {
   success?: boolean
@@ -84,6 +94,59 @@ function usageData(balanceLabel: string): UsageData {
     planType: null,
     balanceLabel,
     limitReachedType: null,
+  }
+}
+
+function credentialFingerprint(value: string): string {
+  return createHash('sha256').update(value).digest('hex').slice(0, 16)
+}
+
+async function responseJson(response: Response): Promise<unknown | null> {
+  const contentLength = response.headers.get('content-length')
+  if (contentLength) {
+    const declaredLength = Number(contentLength)
+    if (Number.isFinite(declaredLength) && declaredLength > MAX_RESPONSE_BYTES) {
+      return null
+    }
+  }
+  try {
+    if (!response.body) {
+      const text = await response.text()
+      if (Buffer.byteLength(text, 'utf8') > MAX_RESPONSE_BYTES) {
+        return null
+      }
+      return JSON.parse(text) as unknown
+    }
+    const reader = response.body.getReader()
+    const chunks: Uint8Array[] = []
+    let size = 0
+    try {
+      while (true) {
+        const result = await reader.read()
+        if (result.done) {
+          break
+        }
+        size += result.value.byteLength
+        if (size > MAX_RESPONSE_BYTES) {
+          await reader.cancel()
+          return null
+        }
+        chunks.push(result.value)
+      }
+    }
+    finally {
+      reader.releaseLock()
+    }
+    const bytes = new Uint8Array(size)
+    let offset = 0
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset)
+      offset += chunk.byteLength
+    }
+    return JSON.parse(new TextDecoder().decode(bytes)) as unknown
+  }
+  catch {
+    return null
   }
 }
 
@@ -181,42 +244,66 @@ function inferenceApiKey(env: NodeJS.ProcessEnv): string | null {
   }
 }
 
-/**
- * Query a matching relay balance endpoint. Dedicated credentials are read
- * only from named environment variables and never persisted.
- */
-export async function readConfiguredExternalUsage(
+interface ConfiguredQueryContext {
+  query: ExternalUsageQueryConfig
+  endpoint: string
+  accessToken: string
+  userId: string | undefined
+  cacheKey: string
+}
+
+function configuredQueryContext(
   queries: ExternalUsageQueryConfig[],
   endpoint: string | null,
   env: NodeJS.ProcessEnv,
-  now = Date.now(),
-): Promise<UsageData | null> {
+): ConfiguredQueryContext | null {
   const query = configuredQuery(queries, endpoint)
-  if (!query) {
+  if (!query || !endpoint) {
     return null
   }
   const credentialEnv = query.template === 'general' ? query.apiKeyEnv : query.accessTokenEnv
   const accessToken = query.template === 'general'
-    ? (credentialEnv ? env[credentialEnv] : null) ?? inferenceApiKey(env)
+    ? credentialEnv ? env[credentialEnv] : inferenceApiKey(env)
     : env[credentialEnv]
   const userId = env[query.userIdEnv]
   if (!accessToken || (query.template === 'newApi' && !userId)) {
     return null
   }
-  const cacheKey = `${query.origin}:${query.template}:${credentialEnv}:${query.userIdEnv}`
+  return {
+    query,
+    endpoint,
+    accessToken,
+    userId,
+    cacheKey: [
+      query.origin,
+      query.template,
+      credentialEnv,
+      query.userIdEnv,
+      query.quotaPerCredit,
+      credentialFingerprint(accessToken),
+      query.template === 'newApi' ? credentialFingerprint(userId!) : '',
+    ].join(':'),
+  }
+}
+
+function cachedQueryValue(
+  cached: { valueAt: number, value: UsageData | null } | undefined,
+  now: number,
+): UsageData | null {
+  return cached?.value && now - cached.valueAt <= QUERY_STALE_MAX_MS
+    ? structuredClone(cached.value)
+    : null
+}
+
+async function performConfiguredQuery(context: ConfiguredQueryContext, now: number): Promise<UsageData | null> {
+  const { query, endpoint, accessToken, userId, cacheKey } = context
   const cached = queryCache.get(cacheKey)
-  if (cached && now - cached.at < query.refreshMs) {
-    return cached.value ? structuredClone(cached.value) : null
-  }
-  if (cached?.failedAt && now - cached.failedAt < QUERY_FAILURE_RETRY_MS) {
-    return cached.value ? structuredClone(cached.value) : null
-  }
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), 3_000)
   let value: UsageData | null = null
   try {
     const urls = query.template === 'general'
-      ? generalQueryUrls(endpoint!, query.origin)
+      ? generalQueryUrls(endpoint, query.origin)
       : [`${query.origin}${query.template === 'newApi' ? '/api/user/self' : '/api/v1/auth/me'}`]
     for (const url of urls) {
       const response = await fetch(url, {
@@ -232,11 +319,8 @@ export async function readConfiguredExternalUsage(
       if (!response.ok) {
         continue
       }
-      let body: unknown
-      try {
-        body = await response.json()
-      }
-      catch {
+      const body = await responseJson(response)
+      if (body === null) {
         continue
       }
       value = query.template === 'general'
@@ -254,15 +338,79 @@ export async function readConfiguredExternalUsage(
     clearTimeout(timeout)
   }
   if (value) {
-    queryCache.set(cacheKey, { at: now, value: structuredClone(value) })
+    setTimedCache(queryCache, cacheKey, {
+      at: now,
+      valueAt: now,
+      value: structuredClone(value),
+    }, QUERY_CACHE_MAX_AGE_MS, QUERY_CACHE_MAX_ENTRIES)
     return structuredClone(value)
   }
-  queryCache.set(cacheKey, {
-    at: cached?.at ?? 0,
+  setTimedCache(queryCache, cacheKey, {
+    at: now,
+    valueAt: cached?.valueAt ?? 0,
     failedAt: now,
     value: cached?.value ? structuredClone(cached.value) : null,
+  }, QUERY_CACHE_MAX_AGE_MS, QUERY_CACHE_MAX_ENTRIES)
+  return cachedQueryValue(cached, now)
+}
+
+function startConfiguredQuery(context: ConfiguredQueryContext, now: number): Promise<UsageData | null> {
+  const existing = inFlightQueries.get(context.cacheKey)
+  if (existing) {
+    return existing
+  }
+  const promise = performConfiguredQuery(context, now).finally(() => {
+    inFlightQueries.delete(context.cacheKey)
   })
-  return cached?.value ? structuredClone(cached.value) : null
+  inFlightQueries.set(context.cacheKey, promise)
+  return promise
+}
+
+/**
+ * Query a matching relay balance endpoint. Dedicated credentials are read
+ * only from named environment variables and never persisted.
+ */
+export async function readConfiguredExternalUsage(
+  queries: ExternalUsageQueryConfig[],
+  endpoint: string | null,
+  env: NodeJS.ProcessEnv,
+  now = Date.now(),
+): Promise<UsageData | null> {
+  const context = configuredQueryContext(queries, endpoint, env)
+  if (!context) {
+    return null
+  }
+  const cached = queryCache.get(context.cacheKey)
+  if (cached?.valueAt && now - cached.valueAt < context.query.refreshMs) {
+    return cached.value ? structuredClone(cached.value) : null
+  }
+  if (cached?.failedAt && now - cached.failedAt < QUERY_FAILURE_RETRY_MS) {
+    return cachedQueryValue(cached, now)
+  }
+  return startConfiguredQuery(context, now)
+}
+
+export function readCachedConfiguredExternalUsage(
+  queries: ExternalUsageQueryConfig[],
+  endpoint: string | null,
+  env: NodeJS.ProcessEnv,
+  onUpdate: () => void,
+  now = Date.now(),
+): UsageData | null {
+  const context = configuredQueryContext(queries, endpoint, env)
+  if (!context) {
+    return null
+  }
+  const cached = queryCache.get(context.cacheKey)
+  if (cached?.valueAt && now - cached.valueAt < context.query.refreshMs) {
+    return cached.value ? structuredClone(cached.value) : null
+  }
+  if (!cached?.failedAt || now - cached.failedAt >= QUERY_FAILURE_RETRY_MS) {
+    if (!inFlightQueries.has(context.cacheKey)) {
+      void startConfiguredQuery(context, now).finally(onUpdate)
+    }
+  }
+  return cachedQueryValue(cached, now)
 }
 
 function snapshotWindow(value: SnapshotWindow | null | undefined, label: string, fallbackMinutes: number): UsageWindow | null {
@@ -363,7 +511,7 @@ export function writeExternalUsage(filePath: string, usage: UsageData, now = new
   try {
     fs.writeFileSync(filePath, `${JSON.stringify(snapshot, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
     fs.chmodSync(filePath, 0o600)
-    lastWrites.set(filePath, { fingerprint, at: now.getTime() })
+    setTimedCache(lastWrites, filePath, { fingerprint, at: now.getTime() }, WRITE_CACHE_MAX_AGE_MS, WRITE_CACHE_MAX_ENTRIES)
   }
   catch {
     // Sidecar snapshots are optional and must never break the HUD.

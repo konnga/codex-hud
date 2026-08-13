@@ -5,12 +5,12 @@ import fs from 'node:fs'
 // @env node
 import process from 'node:process'
 import { pathToFileURL } from 'node:url'
-import { readConfiguredExternalUsage } from './codex/external-usage.js'
+import { readCachedConfiguredExternalUsage, readConfiguredExternalUsage } from './codex/external-usage.js'
 import { readLatestLoggedRateLimits } from './codex/log-rate-limits.js'
 import { RolloutParser } from './codex/rollout-parser.js'
 import { isOfficialOpenAIEndpoint, resolveProcessEndpoint, resolveProcessSession, resolveSessionEndpoint } from './codex/session-endpoint.js'
 import { findActiveSession } from './codex/session-finder.js'
-import { loadConfig } from './config/load.js'
+import { loadConfig, reloadConfig } from './config/load.js'
 import {
   copyImagePath,
   createImagePreview,
@@ -27,6 +27,7 @@ import {
 } from './navigator/index.js'
 import { renderHud } from './render/index.js'
 import { watchConfigPath } from './runtime/config-watch.js'
+import { createHeartbeatScheduler } from './runtime/heartbeat.js'
 import {
   DEFAULT_HUD_MAX_HEIGHT,
   desiredPaneHeight,
@@ -144,6 +145,11 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
   }
   let lastConfigMtime = configMtime()
   let render: () => Promise<void>
+  const heartbeat = createHeartbeatScheduler(() => void render())
+
+  const loadLatestConfig = (): void => {
+    loaded = reloadConfig(loaded)
+  }
 
   const renderFrame = async (): Promise<void> => {
     const nowMs = Date.now()
@@ -211,7 +217,15 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
       ? readLatestLoggedRateLimits(process.env, now.getTime(), endpoint?.url ?? null)?.usage ?? null
       : null
     const queriedUsage = loaded.config.display.showAuth
-      ? await readConfiguredExternalUsage(loaded.config.display.externalUsageQueries, endpoint?.url ?? null, process.env, now.getTime())
+      ? options.once
+        ? await readConfiguredExternalUsage(loaded.config.display.externalUsageQueries, endpoint?.url ?? null, process.env, now.getTime())
+        : readCachedConfiguredExternalUsage(
+            loaded.config.display.externalUsageQueries,
+            endpoint?.url ?? null,
+            process.env,
+            () => void render(),
+            now.getTime(),
+          )
       : null
     const state = buildHudState(
       options.cwd,
@@ -315,18 +329,23 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
   if (options.once) {
     return
   }
-  const interval = setInterval(() => void render(), 1_000)
+  const scheduleHeartbeat = (): void => {
+    heartbeat.reschedule(loaded.config.refreshIntervalMs)
+  }
+  scheduleHeartbeat()
   const configSafetyInterval = setInterval(() => {
     const nextMtime = configMtime()
     if (nextMtime !== lastConfigMtime) {
-      loaded = loadConfig()
+      loadLatestConfig()
       lastConfigMtime = nextMtime
+      scheduleHeartbeat()
       render()
     }
   }, 10_000)
   const configWatcher = watchConfigPath(loaded.path, () => {
-    loaded = loadConfig()
+    loadLatestConfig()
     lastConfigMtime = configMtime()
+    scheduleHeartbeat()
     render()
   })
   const onResize = (): void => {
@@ -577,7 +596,7 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
     splitNavigatorInput(value.toString()).forEach(onKey)
   }
   shutdown = (): void => {
-    clearInterval(interval)
+    heartbeat.stop()
     clearInterval(configSafetyInterval)
     if (debounceTimer) {
       clearTimeout(debounceTimer)

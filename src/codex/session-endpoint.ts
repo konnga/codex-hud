@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 import { getCodexHome } from '../config/paths.js'
+import { pruneTimedCache, setTimedCache } from '../runtime/timed-cache.js'
 
 /**
  * Where an endpoint came from. `log-request` is a URL Codex actually posted to;
@@ -23,6 +24,8 @@ const QUERY_TIMEOUT_MS = 750
 const PROCESS_SESSION_QUERY_TIMEOUT_MS = 3_000
 const ENDPOINT_CACHE_MS = 30_000
 const PROCESS_SESSION_CACHE_MS = 1_000
+const CACHE_MAX_AGE_MS = 30 * 60_000
+const CACHE_MAX_ENTRIES = 256
 // `ts` stores whole seconds, so several rows routinely share one value; the
 // rowid tiebreak keeps "newest" meaning insertion order rather than scan order.
 const NEWEST_FIRST = 'ORDER BY ts DESC, id DESC LIMIT 1'
@@ -157,7 +160,7 @@ export function resolveProcessSession(
     return cached.value ? { ...cached.value } : null
   }
   const remember = (value: ProcessSession | null): ProcessSession | null => {
-    processSessionCache.set(cacheKey, { at: now, value })
+    setTimedCache(processSessionCache, cacheKey, { at: now, value }, CACHE_MAX_AGE_MS, CACHE_MAX_ENTRIES)
     return value ? { ...value } : null
   }
   const database = findCodexLogDatabase(getCodexHome(env))
@@ -246,16 +249,13 @@ export function resolveProcessEndpoint(
     }
   }
   sweep(now)
-  endpointCache.set(cacheKey, { at: now, value })
+  setTimedCache(endpointCache, cacheKey, { at: now, value }, CACHE_MAX_AGE_MS, CACHE_MAX_ENTRIES)
   return value ? { ...value } : null
 }
 
 function sweep(now: number): void {
-  for (const [key, entry] of endpointCache) {
-    if (now - entry.at >= ENDPOINT_CACHE_MS) {
-      endpointCache.delete(key)
-    }
-  }
+  pruneTimedCache(endpointCache, now, CACHE_MAX_AGE_MS, CACHE_MAX_ENTRIES)
+  pruneTimedCache(processSessionCache, now, CACHE_MAX_AGE_MS, CACHE_MAX_ENTRIES)
 }
 
 /**
@@ -283,7 +283,7 @@ export function resolveSessionEndpoint(
   }
   const remember = (value: SessionEndpoint | null): SessionEndpoint | null => {
     sweep(now)
-    endpointCache.set(cacheKey, { at: now, value })
+    setTimedCache(endpointCache, cacheKey, { at: now, value }, CACHE_MAX_AGE_MS, CACHE_MAX_ENTRIES)
     return value ? { ...value } : null
   }
   const database = findCodexLogDatabase(codexHome)

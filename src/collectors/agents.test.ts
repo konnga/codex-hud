@@ -68,4 +68,43 @@ describe('subagent collector', () => {
       }),
     ])
   })
+
+  it('incrementally applies appended completion events', () => {
+    const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-agents-'))
+    temporaryDirectories.push(codexHome)
+    const directory = path.join(codexHome, 'sessions', '2026', '07', '16')
+    fs.mkdirSync(directory, { recursive: true })
+    const childPath = path.join(directory, 'rollout-child-incremental.jsonl')
+    fs.writeFileSync(childPath, [
+      JSON.stringify({
+        timestamp: '2026-07-16T08:00:00Z',
+        type: 'session_meta',
+        payload: {
+          id: 'child-incremental',
+          timestamp: '2026-07-16T08:00:00Z',
+          cwd: '/work/demo',
+          source: { subagent: { thread_spawn: { parent_thread_id: 'root' } } },
+        },
+      }),
+      JSON.stringify({
+        timestamp: '2026-07-16T08:00:01Z',
+        type: 'event_msg',
+        payload: { type: 'task_started', turn_id: 'turn-child' },
+      }),
+      '',
+    ].join('\n'))
+    const session: SessionInfo = {
+      id: 'root',
+      rolloutPath: '/tmp/root.jsonl',
+      startTime: new Date('2026-07-16T08:00:00Z'),
+      cwd: '/work/demo',
+    }
+    expect(collectAgentEntries(session, { CODEX_HOME: codexHome }, new Date('2026-07-16T08:00:02Z'))[0]?.status).toBe('running')
+    fs.appendFileSync(childPath, `${JSON.stringify({
+      timestamp: '2026-07-16T08:00:03Z',
+      type: 'event_msg',
+      payload: { type: 'task_complete', turn_id: 'turn-child' },
+    })}\n`)
+    expect(collectAgentEntries(session, { CODEX_HOME: codexHome }, new Date('2026-07-16T08:00:04Z'))[0]?.status).toBe('completed')
+  })
 })

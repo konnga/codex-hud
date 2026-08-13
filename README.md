@@ -197,9 +197,9 @@ Configuration is stored at `${CODEX_HOME:-~/.codex}/codex-hud/config.json`. Sess
 
 ### Relay balance queries
 
-Codex HUD supports CC Switch's common balance and usage response shapes plus dedicated New API and Sub2API templates. The general query is enabled by default: when a new session reaches a third-party relay, the HUD queries the relay with the current API key. ChatGPT and OpenAI official origins are always excluded. Queries run only while `auth` is visible. The balance appears beside the API-key provider name, for example `anyrouter · $12.50`, rather than on a separate usage line.
+Codex HUD supports CC Switch's common balance and usage response shapes plus dedicated New API and Sub2API templates. Relay queries are disabled by default. First-time interactive setup asks whether to enable the general query; non-interactive setup requires `--relay-usage`. When enabled and a new session reaches a third-party relay, the HUD queries that relay with the current API key. ChatGPT and OpenAI official origins are always excluded. Queries run only while `auth` is visible. The balance appears beside the API-key provider name, for example `anyrouter · $12.50`, rather than on a separate usage line.
 
-No configuration is required for a relay that implements the general protocol. To disable automatic balance queries, set `"externalUsageQueries": []`. Use explicit entries only for a dedicated query key or a New API/Sub2API management endpoint:
+Run `codex-hud setup --relay-usage` to enable the general protocol during setup, or add an explicit entry. Set `"externalUsageQueries": []` to disable all relay queries. Use explicit entries for a dedicated query key or a New API/Sub2API management endpoint:
 
 ```json
 {
@@ -230,11 +230,11 @@ No configuration is required for a relay that implements the general protocol. T
 }
 ```
 
-The default `general` template follows CC Switch's common query shapes. It first requests `GET /user/balance` and reads `balance`; if that does not return JSON usage data, it also tries the active API base URL's `/usage` endpoint and reads `remaining` (or `balance`), `unit`, and `planName`. Both requests use a Bearer API key and stay on the active relay origin. The query reuses the current `OPENAI_API_KEY`; an explicit entry can set `apiKeyEnv` to use a dedicated query key. These endpoints are common conventions, not an industry standard, so unsupported relays simply show no balance.
+The default `general` template follows CC Switch's common query shapes. It first requests `GET /user/balance` and reads `balance`; if that does not return JSON usage data, it also tries the active API base URL's `/usage` endpoint and reads `remaining` (or `balance`), `unit`, and `planName`. Both requests use a Bearer API key and stay on the active relay origin. The query reuses the current `OPENAI_API_KEY`; after an explicit entry sets `apiKeyEnv`, only that dedicated query key is used, and a missing variable never falls back to the inference key. These endpoints are common conventions, not an industry standard, so unsupported relays simply show no balance.
 
 Codex-shaped `codex.rate_limits` events returned by third-party relays are ignored because they may describe a shared upstream pool rather than the user's OpenAI subscription. Native usage windows are trusted only for official ChatGPT and OpenAI API endpoints.
 
-For New API, use its system access token and user ID, not the inference `sk-` key. For Sub2API, use the panel login JWT. New API quota units default to 500,000 per displayed dollar; change `quotaPerCredit` for deployments with a different conversion. Requests time out after three seconds and preserve the last successful value across transient failures.
+For New API, use its system access token and user ID, not the inference `sk-` key. For Sub2API, use the panel login JWT. New API quota units default to 500,000 per displayed dollar; change `quotaPerCredit` for deployments with a different conversion. Cache entries are isolated by the actual credential and user. Queries refresh in the background without blocking HUD rendering. Requests time out after three seconds and response bodies are capped at 64 KiB; transient failures preserve the last successful value for at most 15 minutes after a failed refresh.
 
 <details>
 <summary><strong>All configurable fields and environment variables</strong></summary>
@@ -396,7 +396,7 @@ Uninstall does not delete the HUD configuration, official Codex data, or files t
 
 ## Privacy and safety
 
-- By default, the HUD reads local Codex rollout data, configuration metadata, and Git status only.
+- By default, the HUD reads local Codex rollout data, configuration metadata, and Git status only. Relay balance queries require an explicit setup choice or configuration entry.
 - Explicitly enabled relay balance queries send the configured management credential to the matching session origin only; credentials are read from environment variables and are not persisted by Codex HUD.
 - The persistent HUD does not display user prompts, model response bodies, or tool output bodies.
 - Conversation content is displayed only after the user explicitly opens the navigator and remains local.
@@ -404,3 +404,7 @@ Uninstall does not delete the HUD configuration, official Codex data, or files t
 - Codex HUD does not modify the official Codex binary, and `--no-hud` bypasses it at any time.
 
 Codex HUD is released under the [MIT License](./LICENSE). See [NOTICE](./NOTICE) for attribution of adapted work.
+
+## Friendly links
+
+[linux.do](https://linux.do)
