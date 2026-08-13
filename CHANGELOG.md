@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+## 0.5.0 - 2026-08-13
+
+### Added
+
+- Added relay balance queries for third-party Codex endpoints. The HUD now supports the CC Switch-compatible general protocol by default, plus configurable New API and Sub2API templates, and displays the resulting balance beside the API-key provider name. Queries are scoped to the matching non-official session origin, keep credentials in environment variables, and preserve the last successful result across transient failures.
+
+### Fixed
+
+- Ignored Codex-shaped native usage-limit events from third-party relays, which can describe a shared upstream pool rather than the user's OpenAI subscription. Native usage windows are now trusted only for official ChatGPT and OpenAI API endpoints.
+
+---
+
+### 新增
+
+- 新增第三方 Codex 中转站余额查询。HUD 默认支持与 CC Switch 兼容的通用协议，并提供可配置的 New API 和 Sub2API 模板；查询结果显示在 API Key 服务商名称旁。查询只会访问当前会话匹配的非官方 origin，凭据仅从环境变量读取，短暂失败时继续显示上一次成功结果。
+
+### 修复
+
+- 忽略第三方中转返回的 Codex 格式原生额度事件；这类事件可能描述共享上游账户池，而不是用户自己的 OpenAI 套餐。原生用量窗口现在仅信任 ChatGPT 和 OpenAI API 官方端点。
+
 ## 0.4.2 - 2026-08-11
 
 ### Fixed
