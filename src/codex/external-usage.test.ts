@@ -165,9 +165,82 @@ describe('external usage snapshots', () => {
     expect(fetchMock).toHaveBeenCalledWith('https://general.example.com/user/balance', expect.objectContaining({
       headers: expect.objectContaining({
         'Authorization': 'Bearer sk-query',
-        'User-Agent': 'codex-hud/0.4',
+        'User-Agent': 'codex-hud/0.5',
       }),
     }))
+  })
+
+  it('falls back to a CC Switch-style usage endpoint and formats its fields', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response('<!doctype html>', {
+        status: 200,
+        headers: { 'Content-Type': 'text/html' },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        isValid: true,
+        planName: 'AI system',
+        remaining: 933.07,
+        unit: 'USD',
+      }), { headers: { 'Content-Type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const usage = await readConfiguredExternalUsage([{
+      enabled: true,
+      origin: '*',
+      template: 'general',
+      apiKeyEnv: '',
+      accessTokenEnv: '',
+      userIdEnv: '',
+      refreshMs: 300_000,
+      quotaPerCredit: 500_000,
+    }], 'https://relay.example.com/v1/responses', { OPENAI_API_KEY: 'sk-query' })
+
+    expect(usage).toMatchObject({ balanceLabel: 'AI system: $933.07' })
+    expect(fetchMock).toHaveBeenNthCalledWith(1, 'https://relay.example.com/user/balance', expect.any(Object))
+    expect(fetchMock).toHaveBeenNthCalledWith(2, 'https://relay.example.com/v1/usage', expect.any(Object))
+  })
+
+  it('does not send a general-query credential outside the session origin', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ remaining: 1 }), {
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await readConfiguredExternalUsage([{
+      enabled: true,
+      origin: '*',
+      template: 'general',
+      apiKeyEnv: '',
+      accessTokenEnv: '',
+      userIdEnv: '',
+      refreshMs: 300_000,
+      quotaPerCredit: 500_000,
+    }], 'https://same-origin.example.com/v1/responses?redirect=https://evil.example', { OPENAI_API_KEY: 'sk-query' })
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock).toHaveBeenCalledWith('https://same-origin.example.com/user/balance', expect.any(Object))
+  })
+
+  it('ignores usage responses that explicitly mark the account invalid', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      isValid: false,
+      remaining: 100,
+      unit: 'USD',
+    })))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      readConfiguredExternalUsage([{
+        enabled: true,
+        origin: '*',
+        template: 'general',
+        apiKeyEnv: '',
+        accessTokenEnv: '',
+        userIdEnv: '',
+        refreshMs: 300_000,
+        quotaPerCredit: 500_000,
+      }], 'https://invalid-account.example.com/v1/responses', { OPENAI_API_KEY: 'sk-query' }),
+    ).resolves.toBeNull()
   })
 
   it('prefers a dedicated general-query API key environment variable', async () => {

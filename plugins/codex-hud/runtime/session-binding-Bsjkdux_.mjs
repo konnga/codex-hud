@@ -972,45 +972,48 @@ function sanitizeLabel(value) {
 function formatCredits(value) {
 	return Number.isInteger(value) ? value.toString() : value.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
 }
+function usageData(balanceLabel) {
+	return {
+		primary: null,
+		secondary: null,
+		individual: null,
+		planType: null,
+		balanceLabel,
+		limitReachedType: null
+	};
+}
 function newApiUsage(body, quotaPerCredit) {
 	const response = body;
 	const quota = response?.success === true && typeof response.data?.quota === "number" && Number.isFinite(response.data.quota) ? response.data.quota : null;
 	if (quota === null) return null;
 	const group = sanitizeLabel(response.data?.group);
-	return {
-		primary: null,
-		secondary: null,
-		individual: null,
-		planType: null,
-		balanceLabel: `${group ? `${group}: ` : ""}$${formatCredits(Math.max(0, quota) / quotaPerCredit)}`,
-		limitReachedType: null
-	};
+	return usageData(`${group ? `${group}: ` : ""}$${formatCredits(Math.max(0, quota) / quotaPerCredit)}`);
 }
 function sub2ApiUsage(body) {
 	const response = body;
 	const balance = response?.code === 0 && typeof response.data?.balance === "number" && Number.isFinite(response.data.balance) ? response.data.balance : null;
 	if (balance === null) return null;
-	return {
-		primary: null,
-		secondary: null,
-		individual: null,
-		planType: null,
-		balanceLabel: `$${formatCredits(Math.max(0, balance))}`,
-		limitReachedType: null
-	};
+	return usageData(`$${formatCredits(Math.max(0, balance))}`);
 }
 function generalUsage(body) {
 	const response = body;
-	const balance = typeof response?.balance === "number" && Number.isFinite(response.balance) ? response.balance : null;
+	if (response?.isValid === false) return null;
+	const rawBalance = response?.remaining ?? response?.balance;
+	const balance = typeof rawBalance === "number" && Number.isFinite(rawBalance) ? rawBalance : null;
 	if (balance === null) return null;
-	return {
-		primary: null,
-		secondary: null,
-		individual: null,
-		planType: null,
-		balanceLabel: `$${formatCredits(Math.max(0, balance))}`,
-		limitReachedType: null
-	};
+	const unit = sanitizeLabel(response.unit) ?? "USD";
+	const planName = sanitizeLabel(response.planName);
+	const amount = formatCredits(Math.max(0, balance));
+	const formatted = unit === "USD" ? `$${amount}` : `${amount} ${unit}`;
+	return usageData(planName ? `${planName}: ${formatted}` : formatted);
+}
+function generalQueryUrls(endpoint, origin) {
+	const urls = [`${origin}/user/balance`];
+	try {
+		const usageUrl = `${origin}${new URL(endpoint).pathname.replace(/\/(?:responses|chat\/completions)\/?$/, "")}/usage`.replace(/([^:]\/)\/+/, "$1");
+		if (!urls.includes(usageUrl)) urls.push(usageUrl);
+	} catch {}
+	return urls;
 }
 function configuredQuery(queries, endpoint) {
 	if (!endpoint) return null;
@@ -1055,19 +1058,27 @@ async function readConfiguredExternalUsage(queries, endpoint, env, now = Date.no
 	const timeout = setTimeout(() => controller.abort(), 3e3);
 	let value = null;
 	try {
-		const path = query.template === "general" ? "/user/balance" : query.template === "newApi" ? "/api/user/self" : "/api/v1/auth/me";
-		const response = await fetch(`${query.origin}${path}`, {
-			headers: {
-				"Accept": "application/json",
-				"Authorization": `Bearer ${accessToken}`,
-				"User-Agent": "codex-hud/0.4",
-				...query.template === "newApi" ? { "New-Api-User": userId } : {}
-			},
-			signal: controller.signal
-		});
-		if (response.ok) {
-			const body = await response.json();
+		const urls = query.template === "general" ? generalQueryUrls(endpoint, query.origin) : [`${query.origin}${query.template === "newApi" ? "/api/user/self" : "/api/v1/auth/me"}`];
+		for (const url of urls) {
+			const response = await fetch(url, {
+				headers: {
+					"Accept": "application/json",
+					"Authorization": `Bearer ${accessToken}`,
+					"User-Agent": "codex-hud/0.5",
+					...query.template === "newApi" ? { "New-Api-User": userId } : {}
+				},
+				redirect: "error",
+				signal: controller.signal
+			});
+			if (!response.ok) continue;
+			let body;
+			try {
+				body = await response.json();
+			} catch {
+				continue;
+			}
 			value = query.template === "general" ? generalUsage(body) : query.template === "newApi" ? newApiUsage(body, query.quotaPerCredit) : sub2ApiUsage(body);
+			if (value) break;
 		}
 	} catch {} finally {
 		clearTimeout(timeout);
@@ -5835,4 +5846,4 @@ async function waitForNewRootSession(cwd, snapshot, codexHome = getCodexHome(), 
 
 //#endregion
 export { resolveProcessSession as A, readLatestLoggedRateLimits as C, findCodexLogDatabase as D, RolloutParser as E, getLegacyStateDirectory as F, getCodexHome as M, getConfigPath as N, isOfficialOpenAIEndpoint as O, getHudStateDirectory as P, DEFAULT_CONFIG as S, findActiveSession as T, visibleWidth as _, waitForNewRootSession as a, applyConfigMigrations as b, desiredPaneHeight as c, resizeCmuxPane as d, resizeHudPane as f, truncateAnsi as g, safeText as h, snapshotRootSessions as i, resolveSessionEndpoint as j, resolveProcessEndpoint as k, hudRenderHeight as l, renderHud as m, createSessionBindingPath as n, writeSessionBinding as o, settleCmuxPaneHeight as p, readSessionBinding as r, buildHudState as s, acquireSessionDiscoveryLock as t, readCmuxPaneGeometry as u, sliceAnsi as v, readConfiguredExternalUsage as w, rawConfigVersion as x, loadConfig as y };
-//# sourceMappingURL=session-binding-BdADnIfH.mjs.map
+//# sourceMappingURL=session-binding-Bsjkdux_.mjs.map

@@ -44,6 +44,10 @@ interface Sub2ApiUserResponse {
 
 interface GeneralBalanceResponse {
   balance?: unknown
+  remaining?: unknown
+  unit?: unknown
+  planName?: unknown
+  isValid?: unknown
 }
 
 function safePercent(value: unknown): number | null {
@@ -72,6 +76,17 @@ function formatCredits(value: number): string {
   return Number.isInteger(value) ? value.toString() : value.toFixed(2).replace(/0+$/, '').replace(/\.$/, '')
 }
 
+function usageData(balanceLabel: string): UsageData {
+  return {
+    primary: null,
+    secondary: null,
+    individual: null,
+    planType: null,
+    balanceLabel,
+    limitReachedType: null,
+  }
+}
+
 function newApiUsage(body: unknown, quotaPerCredit: number): UsageData | null {
   const response = body as NewApiUserResponse
   const quota = response?.success === true && typeof response.data?.quota === 'number' && Number.isFinite(response.data.quota)
@@ -82,14 +97,7 @@ function newApiUsage(body: unknown, quotaPerCredit: number): UsageData | null {
   }
   const group = sanitizeLabel(response.data?.group)
   const prefix = group ? `${group}: ` : ''
-  return {
-    primary: null,
-    secondary: null,
-    individual: null,
-    planType: null,
-    balanceLabel: `${prefix}$${formatCredits(Math.max(0, quota) / quotaPerCredit)}`,
-    limitReachedType: null,
-  }
+  return usageData(`${prefix}$${formatCredits(Math.max(0, quota) / quotaPerCredit)}`)
 }
 
 function sub2ApiUsage(body: unknown): UsageData | null {
@@ -100,32 +108,42 @@ function sub2ApiUsage(body: unknown): UsageData | null {
   if (balance === null) {
     return null
   }
-  return {
-    primary: null,
-    secondary: null,
-    individual: null,
-    planType: null,
-    balanceLabel: `$${formatCredits(Math.max(0, balance))}`,
-    limitReachedType: null,
-  }
+  return usageData(`$${formatCredits(Math.max(0, balance))}`)
 }
 
 function generalUsage(body: unknown): UsageData | null {
   const response = body as GeneralBalanceResponse
-  const balance = typeof response?.balance === 'number' && Number.isFinite(response.balance)
-    ? response.balance
+  if (response?.isValid === false) {
+    return null
+  }
+  const rawBalance = response?.remaining ?? response?.balance
+  const balance = typeof rawBalance === 'number' && Number.isFinite(rawBalance)
+    ? rawBalance
     : null
   if (balance === null) {
     return null
   }
-  return {
-    primary: null,
-    secondary: null,
-    individual: null,
-    planType: null,
-    balanceLabel: `$${formatCredits(Math.max(0, balance))}`,
-    limitReachedType: null,
+  const unit = sanitizeLabel(response.unit) ?? 'USD'
+  const planName = sanitizeLabel(response.planName)
+  const amount = formatCredits(Math.max(0, balance))
+  const formatted = unit === 'USD' ? `$${amount}` : `${amount} ${unit}`
+  return usageData(planName ? `${planName}: ${formatted}` : formatted)
+}
+
+function generalQueryUrls(endpoint: string, origin: string): string[] {
+  const urls = [`${origin}/user/balance`]
+  try {
+    const requestUrl = new URL(endpoint)
+    const basePath = requestUrl.pathname.replace(/\/(?:responses|chat\/completions)\/?$/, '')
+    const usageUrl = `${origin}${basePath}/usage`.replace(/([^:]\/)\/+/, '$1')
+    if (!urls.includes(usageUrl)) {
+      urls.push(usageUrl)
+    }
   }
+  catch {
+    // configuredQuery already validates endpoint; keep the standard URL only.
+  }
+  return urls
 }
 
 function configuredQuery(
@@ -197,23 +215,36 @@ export async function readConfiguredExternalUsage(
   const timeout = setTimeout(() => controller.abort(), 3_000)
   let value: UsageData | null = null
   try {
-    const path = query.template === 'general'
-      ? '/user/balance'
-      : query.template === 'newApi' ? '/api/user/self' : '/api/v1/auth/me'
-    const response = await fetch(`${query.origin}${path}`, {
-      headers: {
-        'Accept': 'application/json',
-        'Authorization': `Bearer ${accessToken}`,
-        'User-Agent': 'codex-hud/0.4',
-        ...(query.template === 'newApi' ? { 'New-Api-User': userId! } : {}),
-      },
-      signal: controller.signal,
-    })
-    if (response.ok) {
-      const body: unknown = await response.json()
+    const urls = query.template === 'general'
+      ? generalQueryUrls(endpoint!, query.origin)
+      : [`${query.origin}${query.template === 'newApi' ? '/api/user/self' : '/api/v1/auth/me'}`]
+    for (const url of urls) {
+      const response = await fetch(url, {
+        headers: {
+          'Accept': 'application/json',
+          'Authorization': `Bearer ${accessToken}`,
+          'User-Agent': 'codex-hud/0.5',
+          ...(query.template === 'newApi' ? { 'New-Api-User': userId! } : {}),
+        },
+        redirect: 'error',
+        signal: controller.signal,
+      })
+      if (!response.ok) {
+        continue
+      }
+      let body: unknown
+      try {
+        body = await response.json()
+      }
+      catch {
+        continue
+      }
       value = query.template === 'general'
         ? generalUsage(body)
         : query.template === 'newApi' ? newApiUsage(body, query.quotaPerCredit) : sub2ApiUsage(body)
+      if (value) {
+        break
+      }
     }
   }
   catch {

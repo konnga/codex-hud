@@ -197,7 +197,7 @@ codex-hud configure --language zh-Hant
 
 ### 中转站余额查询
 
-Codex HUD 支持 CC Switch 的通用余额协议，以及 New API、Sub2API 专用模板。通用查询默认开启：新会话连接第三方中转站后，HUD 会使用当前 API Key 请求该中转站的 `/user/balance`。ChatGPT 与 OpenAI 官方 origin 始终排除。查询仅在显示 `auth` 时运行；余额显示在 API Key 服务商名称右侧，例如 `anyrouter · $12.50`，不会单独占用 usage 行。
+Codex HUD 支持 CC Switch 常见的余额与用量返回格式，以及 New API、Sub2API 专用模板。通用查询默认开启：新会话连接第三方中转站后，HUD 会使用当前 API Key 查询该中转站。ChatGPT 与 OpenAI 官方 origin 始终排除。查询仅在显示 `auth` 时运行；余额显示在 API Key 服务商名称右侧，例如 `anyrouter · $12.50`，不会单独占用 usage 行。
 
 支持通用协议的中转站无需任何配置。若要关闭自动余额查询，请设置 `"externalUsageQueries": []`。只有使用专用查询 Key 或 New API/Sub2API 管理接口时才需要显式配置：
 
@@ -230,7 +230,7 @@ Codex HUD 支持 CC Switch 的通用余额协议，以及 New API、Sub2API 专�
 }
 ```
 
-默认的 `general` 模板与 CC Switch 对齐：请求 `GET /user/balance`，使用 Bearer API Key，并读取数值型 `balance` 字段。它复用当前 `OPENAI_API_KEY`；显式配置时可通过 `apiKeyEnv` 使用专用查询 Key。该接口只是常见约定，并非所有中转站都支持；不支持时 HUD 静默不显示余额。
+默认的 `general` 模板兼容 CC Switch 的常见查询格式：先请求 `GET /user/balance` 并读取 `balance`；若未返回 JSON 用量数据，再请求当前 API Base URL 下的 `/usage`，读取 `remaining`（或 `balance`）、`unit` 和 `planName`。两次请求都使用 Bearer API Key，且严格限制在当前中转 origin。查询复用当前 `OPENAI_API_KEY`；显式配置时可通过 `apiKeyEnv` 使用专用查询 Key。这些接口只是常见约定，并非所有中转站都支持；不支持时 HUD 静默不显示余额。
 
 第三方中转返回的 Codex 格式 `codex.rate_limits` 事件会被忽略，因为它可能描述共享上游账户池，而不是用户自己的 OpenAI 套餐。原生用量窗口仅信任 ChatGPT 和 OpenAI API 官方端点。
 

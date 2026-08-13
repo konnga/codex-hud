@@ -197,7 +197,7 @@ Configuration is stored at `${CODEX_HOME:-~/.codex}/codex-hud/config.json`. Sess
 
 ### Relay balance queries
 
-Codex HUD supports CC Switch's general balance protocol plus dedicated New API and Sub2API templates. The general query is enabled by default: when a new session reaches a third-party relay, the HUD requests that relay's `/user/balance` endpoint with the current API key. ChatGPT and OpenAI official origins are always excluded. Queries run only while `auth` is visible. The balance appears beside the API-key provider name, for example `anyrouter · $12.50`, rather than on a separate usage line.
+Codex HUD supports CC Switch's common balance and usage response shapes plus dedicated New API and Sub2API templates. The general query is enabled by default: when a new session reaches a third-party relay, the HUD queries the relay with the current API key. ChatGPT and OpenAI official origins are always excluded. Queries run only while `auth` is visible. The balance appears beside the API-key provider name, for example `anyrouter · $12.50`, rather than on a separate usage line.
 
 No configuration is required for a relay that implements the general protocol. To disable automatic balance queries, set `"externalUsageQueries": []`. Use explicit entries only for a dedicated query key or a New API/Sub2API management endpoint:
 
@@ -230,7 +230,7 @@ No configuration is required for a relay that implements the general protocol. T
 }
 ```
 
-The default `general` template matches CC Switch: it requests `GET /user/balance` with a Bearer API key and reads the numeric `balance` field. It reuses the current `OPENAI_API_KEY`; an explicit entry can set `apiKeyEnv` to use a dedicated query key. This endpoint is a common convention, not an industry standard, so unsupported relays simply show no balance.
+The default `general` template follows CC Switch's common query shapes. It first requests `GET /user/balance` and reads `balance`; if that does not return JSON usage data, it also tries the active API base URL's `/usage` endpoint and reads `remaining` (or `balance`), `unit`, and `planName`. Both requests use a Bearer API key and stay on the active relay origin. The query reuses the current `OPENAI_API_KEY`; an explicit entry can set `apiKeyEnv` to use a dedicated query key. These endpoints are common conventions, not an industry standard, so unsupported relays simply show no balance.
 
 Codex-shaped `codex.rate_limits` events returned by third-party relays are ignored because they may describe a shared upstream pool rather than the user's OpenAI subscription. Native usage windows are trusted only for official ChatGPT and OpenAI API endpoints.
 
