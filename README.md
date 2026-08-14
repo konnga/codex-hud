@@ -199,6 +199,8 @@ Configuration is stored at `${CODEX_HOME:-~/.codex}/codex-hud/config.json`. Sess
 
 Codex HUD supports CC Switch's common balance and usage response shapes plus dedicated New API and Sub2API templates. The general query is enabled by default: when a new session reaches a third-party relay, the HUD queries the relay with the current API key. ChatGPT and OpenAI official origins are always excluded. Queries run only while `auth` is visible. The balance appears beside the API-key provider name, for example `anyrouter · $12.50`, rather than on a separate usage line.
 
+<img src="./.github/assets/relay-balance.png" alt="Codex HUD showing a relay wallet balance beside the provider name" width="820">
+
 No configuration is required for a relay that implements the general protocol. To disable automatic balance queries, set `"externalUsageQueries": []`. Use explicit entries only for a dedicated query key or a New API/Sub2API management endpoint:
 
 ```json
