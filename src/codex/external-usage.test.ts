@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { readConfiguredExternalUsage, readExternalUsage, resolveUsageData } from './external-usage.js'
+import { readCachedConfiguredExternalUsage, readConfiguredExternalUsage, readExternalUsage, resolveUsageData } from './external-usage.js'
 
 const directories: string[] = []
 
@@ -168,6 +168,107 @@ describe('external usage snapshots', () => {
         'User-Agent': 'codex-hud/0.5',
       }),
     }))
+  })
+
+  it('refreshes cached usage in the background and merges concurrent requests', async () => {
+    let resolveResponse: ((response: Response) => void) | undefined
+    const fetchMock = vi.fn().mockImplementation(() => new Promise<Response>((resolve) => {
+      resolveResponse = resolve
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    const query = [{
+      enabled: true,
+      origin: 'https://background.example.com',
+      template: 'general' as const,
+      apiKeyEnv: '',
+      accessTokenEnv: '',
+      userIdEnv: '',
+      refreshMs: 300_000,
+      quotaPerCredit: 500_000,
+    }]
+    const endpoint = 'https://background.example.com/v1/responses'
+    const updated = vi.fn()
+    expect(readCachedConfiguredExternalUsage(query, endpoint, { OPENAI_API_KEY: 'key' }, updated, 1_000)).toBeNull()
+    expect(readCachedConfiguredExternalUsage(query, endpoint, { OPENAI_API_KEY: 'key' }, updated, 1_001)).toBeNull()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    resolveResponse?.(new Response(JSON.stringify({ balance: 6 })))
+    await vi.waitFor(() => expect(updated).toHaveBeenCalledTimes(1))
+    expect(readCachedConfiguredExternalUsage(query, endpoint, { OPENAI_API_KEY: 'key' }, updated, 1_002)).toMatchObject({ balanceLabel: '$6' })
+  })
+
+  it('does not fall back to the inference key when a dedicated key is configured', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(readConfiguredExternalUsage([{
+      enabled: true,
+      origin: 'https://dedicated-missing.example.com',
+      template: 'general',
+      apiKeyEnv: 'BALANCE_API_KEY',
+      accessTokenEnv: '',
+      userIdEnv: '',
+      refreshMs: 300_000,
+      quotaPerCredit: 500_000,
+    }], 'https://dedicated-missing.example.com/v1/responses', {
+      OPENAI_API_KEY: 'sk-inference',
+    })).resolves.toBeNull()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('separates cached balances when credentials or users change', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ balance: 3 })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ balance: 8 })))
+    vi.stubGlobal('fetch', fetchMock)
+    const query = {
+      enabled: true,
+      origin: 'https://cache-isolated.example.com',
+      template: 'general' as const,
+      apiKeyEnv: 'BALANCE_API_KEY',
+      accessTokenEnv: '',
+      userIdEnv: '',
+      refreshMs: 300_000,
+      quotaPerCredit: 500_000,
+    }
+    const endpoint = 'https://cache-isolated.example.com/v1/responses'
+    await expect(readConfiguredExternalUsage([query], endpoint, { BALANCE_API_KEY: 'first' }, 1_000)).resolves.toMatchObject({ balanceLabel: '$3' })
+    await expect(readConfiguredExternalUsage([query], endpoint, { BALANCE_API_KEY: 'second' }, 1_001)).resolves.toMatchObject({ balanceLabel: '$8' })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('drops a cached balance after the stale grace period', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ balance: 3 })))
+      .mockRejectedValueOnce(new Error('offline'))
+    vi.stubGlobal('fetch', fetchMock)
+    const query = {
+      enabled: true,
+      origin: 'https://stale-limit.example.com',
+      template: 'general' as const,
+      apiKeyEnv: '',
+      accessTokenEnv: '',
+      userIdEnv: '',
+      refreshMs: 1_000,
+      quotaPerCredit: 500_000,
+    }
+    const endpoint = 'https://stale-limit.example.com/v1/responses'
+    await expect(readConfiguredExternalUsage([query], endpoint, { OPENAI_API_KEY: 'key' }, 1_000)).resolves.toMatchObject({ balanceLabel: '$3' })
+    await expect(readConfiguredExternalUsage([query], endpoint, { OPENAI_API_KEY: 'key' }, 901_001)).resolves.toBeNull()
+  })
+
+  it('ignores oversized response bodies', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('x'.repeat(65 * 1024)))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(readConfiguredExternalUsage([{
+      enabled: true,
+      origin: 'https://oversized.example.com',
+      template: 'general',
+      apiKeyEnv: '',
+      accessTokenEnv: '',
+      userIdEnv: '',
+      refreshMs: 300_000,
+      quotaPerCredit: 500_000,
+    }], 'https://oversized.example.com/v1/responses', { OPENAI_API_KEY: 'key' })).resolves.toBeNull()
   })
 
   it('falls back to a CC Switch-style usage endpoint and formats its fields', async () => {

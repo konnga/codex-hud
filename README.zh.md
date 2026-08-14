@@ -199,13 +199,9 @@ codex-hud configure --language zh-Hant
 
 Codex HUD 支持 CC Switch 常见的余额与用量返回格式，以及 New API、Sub2API 专用模板。通用查询默认开启：新会话连接第三方中转站后，HUD 会使用当前 API Key 查询该中转站。ChatGPT 与 OpenAI 官方 origin 始终排除。查询仅在显示 `auth` 时运行；余额显示在 API Key 服务商名称右侧，例如 `xxxrouter · $12.50`，不会单独占用 usage 行。
 
-
-
 <img src="./.github/assets/relay-balance.png" alt="Codex HUD showing a relay wallet balance beside the provider name" width="820">
 
-
-
-支持通用协议的中转站无需任何配置。若要关闭自动余额查询，请设置 `"externalUsageQueries": []`。只有使用专用查询 Key 或 New API/Sub2API 管理接口时才需要显式配置：
+可通过 `codex-hud setup --relay-usage` 在 setup 时开启通用协议，也可以添加显式配置。设置 `"externalUsageQueries": []` 会关闭所有中转查询。专用查询 Key 或 New API/Sub2API 管理接口需要显式配置：
 
 ```json
 {
@@ -236,11 +232,11 @@ Codex HUD 支持 CC Switch 常见的余额与用量返回格式，以及 New API
 }
 ```
 
-默认的 `general` 模板兼容 CC Switch 的常见查询格式：先请求 `GET /user/balance` 并读取 `balance`；若未返回 JSON 用量数据，再请求当前 API Base URL 下的 `/usage`，读取 `remaining`（或 `balance`）、`unit` 和 `planName`。两次请求都使用 Bearer API Key，且严格限制在当前中转 origin。查询复用当前 `OPENAI_API_KEY`；显式配置时可通过 `apiKeyEnv` 使用专用查询 Key。这些接口只是常见约定，并非所有中转站都支持；不支持时 HUD 静默不显示余额。
+默认的 `general` 模板兼容 CC Switch 的常见查询格式：先请求 `GET /user/balance` 并读取 `balance`；若未返回 JSON 用量数据，再请求当前 API Base URL 下的 `/usage`，读取 `remaining`（或 `balance`）、`unit` 和 `planName`。两次请求都使用 Bearer API Key，且严格限制在当前中转 origin。查询复用当前 `OPENAI_API_KEY`；显式配置 `apiKeyEnv` 后只使用该专用查询 Key，变量缺失时不会回退发送推理 Key。这些接口只是常见约定，并非所有中转站都支持；不支持时 HUD 静默不显示余额。
 
 第三方中转返回的 Codex 格式 `codex.rate_limits` 事件会被忽略，因为它可能描述共享上游账户池，而不是用户自己的 OpenAI 套餐。原生用量窗口仅信任 ChatGPT 和 OpenAI API 官方端点。
 
-New API 需要系统访问令牌和用户 ID，不是用于推理的 `sk-` Key；Sub2API 使用面板登录 JWT。New API 默认按 500,000 quota 单位显示为 1 美元，可通过 `quotaPerCredit` 适配不同部署。请求三秒超时；短暂失败时继续显示上一次成功结果。
+New API 需要系统访问令牌和用户 ID，不是用于推理的 `sk-` Key；Sub2API 使用面板登录 JWT。New API 默认按 500,000 quota 单位显示为 1 美元，可通过 `quotaPerCredit` 适配不同部署。缓存按实际凭据和用户隔离；查询在后台刷新，不会阻塞 HUD 渲染。请求三秒超时，响应体上限为 64 KiB；短暂失败时继续显示上一次成功结果，但失败后的旧值最多保留 15 分钟。
 
 <details>
 <summary><strong>全部可配置字段和环境变量</strong></summary>
@@ -402,7 +398,7 @@ codex plugin marketplace remove codex-hud
 
 ## 隐私与安全
 
-- 默认情况下，HUD 只读取本地 Codex rollout、配置元数据和 Git 状态。
+- 默认情况下，HUD 只读取本地 Codex rollout、配置元数据和 Git 状态；中转余额查询需要在 setup 或配置中明确开启。
 - 只有显式开启的中转站余额查询才会把配置的管理凭据发送到当前会话匹配的 origin；凭据从环境变量读取，Codex HUD 不会持久化保存。
 - 常驻 HUD 不显示用户 prompt、模型回复正文或工具输出正文。
 - 会话正文只会在用户主动打开导航器时显示，数据始终保留在本机。
@@ -410,3 +406,7 @@ codex plugin marketplace remove codex-hud
 - Codex HUD 不修改官方 Codex 二进制；`--no-hud` 可以随时绕过 HUD。
 
 Codex HUD 基于 [MIT License](./LICENSE) 开源。改编内容的署名信息见 [NOTICE](./NOTICE)。
+
+## 友情链接
+
+[linux.do](https://linux.do)

@@ -39,3 +39,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
     }
   }
 }
+
+export function reloadConfig(previous: LoadedConfig, env: NodeJS.ProcessEnv = process.env): LoadedConfig {
+  const next = loadConfig(env)
+  return next.error
+    ? { ...previous, error: next.error }
+    : next
+}

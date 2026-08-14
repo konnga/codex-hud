@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { C as readLatestLoggedRateLimits, D as findCodexLogDatabase, E as RolloutParser, F as getLegacyStateDirectory, M as getCodexHome, N as getConfigPath, O as isOfficialOpenAIEndpoint, P as getHudStateDirectory, S as DEFAULT_CONFIG, T as findActiveSession, a as waitForNewRootSession, b as applyConfigMigrations, i as snapshotRootSessions, j as resolveSessionEndpoint, m as renderHud, n as createSessionBindingPath, o as writeSessionBinding, s as buildHudState, t as acquireSessionDiscoveryLock, w as readConfiguredExternalUsage, x as rawConfigVersion, y as loadConfig } from "./session-binding-Bsjkdux_.mjs";
+import { A as findCodexLogDatabase, C as DEFAULT_CONFIG, D as readConfiguredExternalUsage, F as getCodexHome, I as getConfigPath, L as getHudStateDirectory, O as findActiveSession, P as resolveSessionEndpoint, R as getLegacyStateDirectory, S as rawConfigVersion, T as readLatestLoggedRateLimits, a as waitForNewRootSession, i as snapshotRootSessions, j as isOfficialOpenAIEndpoint, k as RolloutParser, m as renderHud, n as createSessionBindingPath, o as writeSessionBinding, s as buildHudState, t as acquireSessionDiscoveryLock, w as DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY, x as applyConfigMigrations, y as loadConfig } from "./session-binding-CQ7nE5p-.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import process$1, { stdin, stdout } from "node:process";
@@ -1469,6 +1469,8 @@ async function runConfigure(args) {
 	}
 	const config = base === "current" ? structuredClone(loaded.config) : createPreset(base);
 	if (base !== "current") preserveAdvancedSettings(config, loaded.config);
+	if (args.includes("--relay-usage")) config.display.externalUsageQueries = [structuredClone(DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY)];
+	else if (args.includes("--no-relay-usage")) config.display.externalUsageQueries = [];
 	if (!isLanguage(language)) if (nonInteractive) language = config.language;
 	else {
 		const selected = await select({
@@ -1869,7 +1871,20 @@ async function runSetup(args) {
 	const hasConfig = fs.existsSync(getConfigPath());
 	const installExitCode = runInstall([...args.includes("--codex-shim") ? ["--codex-shim"] : [], ...dryRun ? ["--dry-run"] : []]);
 	if (installExitCode !== 0 || dryRun) return installExitCode;
-	const configureExitCode = await runConfigure(configureArgs(args, hasConfig));
+	const nextArgs = configureArgs(args, hasConfig);
+	if (!hasConfig && !args.includes("--relay-usage") && !args.includes("--no-relay-usage")) if (args.includes("--yes") || !process$1.stdin.isTTY) nextArgs.push("--no-relay-usage");
+	else {
+		const enabled = await confirm({
+			message: "Query third-party relay balances with the active API key?",
+			initialValue: false
+		});
+		if (isCancel(enabled)) {
+			cancel("Setup cancelled.");
+			return 1;
+		}
+		nextArgs.push(enabled ? "--relay-usage" : "--no-relay-usage");
+	}
+	const configureExitCode = await runConfigure(nextArgs);
 	if (configureExitCode === 0) process$1.stdout.write("Setup complete. The current Codex session cannot gain a HUD pane. Exit it, run `hash -r` if needed, then start a new `codex` session.\n");
 	return configureExitCode;
 }
@@ -2652,6 +2667,7 @@ Usage:
   codex-hud render [--once] [--cwd <path>] [--no-color]
   codex-hud doctor [--json]
   codex-hud setup [--codex-shim] [--preset full|essential|minimal]
+                  [--relay-usage|--no-relay-usage]
                   [--language en|zh-Hans|zh-Hant] [--layout compact|expanded] [--yes]
   codex-hud configure [--preset full|essential|minimal] [--language en|zh-Hans|zh-Hant]
   codex-hud configure --status [--json]

@@ -8,6 +8,7 @@ import process from 'node:process'
 import { parse } from 'smol-toml'
 import { resolveProcessEndpoint, resolveSessionEndpoint } from '../codex/session-endpoint.js'
 import { getCodexHome } from '../config/paths.js'
+import { setTimedCache } from '../runtime/timed-cache.js'
 
 /** The Codex process a HUD pane was launched for, before it has a session. */
 export interface CodexProcess {
@@ -19,6 +20,8 @@ type UnknownRecord = Record<string, unknown>
 const titleCache = new Map<string, { at: number, title: string | null }>()
 const authCache = new Map<string, { at: number, value: AuthInfo | null }>()
 const METADATA_CACHE_MS = 30_000
+const METADATA_CACHE_MAX_AGE_MS = 30 * 60_000
+const METADATA_CACHE_MAX_ENTRIES = 256
 
 function record(value: unknown): UnknownRecord | null {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as UnknownRecord : null
@@ -177,7 +180,7 @@ export function collectAuthInfo(
   const baseUrl = session ? endpoint?.url ?? configuredBaseUrl(session, env) : endpoint?.url ?? null
   if (planType && (isChatGptEndpoint(baseUrl) || !hasApiKey)) {
     const value = { method: `ChatGPT ${planType}`, user: user ?? undefined }
-    authCache.set(cacheKey, { at: Date.now(), value })
+    setTimedCache(authCache, cacheKey, { at: Date.now(), value }, METADATA_CACHE_MAX_AGE_MS, METADATA_CACHE_MAX_ENTRIES)
     return structuredClone(value)
   }
   if (hasApiKey) {
@@ -185,15 +188,15 @@ export function collectAuthInfo(
     // may have been rewritten since the session started. When neither source
     // can prove an endpoint, stay generic rather than name the wrong host.
     const value: AuthInfo = { method: (baseUrl ? providerLabel(baseUrl) : null) || 'API Key' }
-    authCache.set(cacheKey, { at: Date.now(), value })
+    setTimedCache(authCache, cacheKey, { at: Date.now(), value }, METADATA_CACHE_MAX_AGE_MS, METADATA_CACHE_MAX_ENTRIES)
     return value
   }
   if (Object.keys(auth).length > 0) {
     const value = { method: 'ChatGPT', user: user ?? undefined }
-    authCache.set(cacheKey, { at: Date.now(), value })
+    setTimedCache(authCache, cacheKey, { at: Date.now(), value }, METADATA_CACHE_MAX_AGE_MS, METADATA_CACHE_MAX_ENTRIES)
     return structuredClone(value)
   }
-  authCache.set(cacheKey, { at: Date.now(), value: null })
+  setTimedCache(authCache, cacheKey, { at: Date.now(), value: null }, METADATA_CACHE_MAX_AGE_MS, METADATA_CACHE_MAX_ENTRIES)
   return null
 }
 
@@ -208,7 +211,7 @@ export function collectSessionTitle(session: SessionInfo | null, env: NodeJS.Pro
   }
   const database = path.join(getCodexHome(env), 'state_5.sqlite')
   if (!fs.existsSync(database)) {
-    titleCache.set(cacheKey, { at: Date.now(), title: null })
+    setTimedCache(titleCache, cacheKey, { at: Date.now(), title: null }, METADATA_CACHE_MAX_AGE_MS, METADATA_CACHE_MAX_ENTRIES)
     return null
   }
   const id = session.id.replaceAll('\'', '\'\'')
@@ -218,11 +221,11 @@ export function collectSessionTitle(session: SessionInfo | null, env: NodeJS.Pro
     timeout: 750,
   })
   if (result.status !== 0) {
-    titleCache.set(cacheKey, { at: Date.now(), title: null })
+    setTimedCache(titleCache, cacheKey, { at: Date.now(), title: null }, METADATA_CACHE_MAX_AGE_MS, METADATA_CACHE_MAX_ENTRIES)
     return null
   }
   const title = result.stdout.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, ' ').replace(/\s+/g, ' ').trim()
   const normalized = title ? title.slice(0, 80) : null
-  titleCache.set(cacheKey, { at: Date.now(), title: normalized })
+  setTimedCache(titleCache, cacheKey, { at: Date.now(), title: normalized }, METADATA_CACHE_MAX_AGE_MS, METADATA_CACHE_MAX_ENTRIES)
   return normalized
 }

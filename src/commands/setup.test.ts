@@ -50,11 +50,24 @@ describe('codex HUD setup', () => {
     expect(config.display.showMcp).toBe(true)
     expect(config.display.showAgents).toBe(true)
     expect(config.display.showPromptCache).toBe(true)
+    expect(config.display.externalUsageQueries).toEqual([])
 
     config.display.showMemoryUsage = true
     fs.writeFileSync(getConfigPath(), `${JSON.stringify(config, null, 2)}\n`)
     expect(await runSetup(['--codex-shim', '--yes'])).toBe(0)
     const preserved = JSON.parse(fs.readFileSync(getConfigPath(), 'utf8'))
     expect(preserved.display.showMemoryUsage).toBe(true)
+  })
+
+  it('can explicitly enable relay balance queries during non-interactive setup', async () => {
+    environment()
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true)
+    expect(await runSetup(['--codex-shim', '--yes', '--relay-usage'])).toBe(0)
+    const config = JSON.parse(fs.readFileSync(getConfigPath(), 'utf8'))
+    expect(config.display.externalUsageQueries).toMatchObject([{
+      enabled: true,
+      origin: '*',
+      template: 'general',
+    }])
   })
 })

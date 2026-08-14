@@ -2,6 +2,30 @@
 
 ## [Unreleased]
 
+## 0.5.1 - 2026-08-13
+
+### Changed
+
+- Relay balance queries are now disabled by default and require an explicit first-time setup choice, `--relay-usage`, or configuration entry. Queries refresh in the background without blocking HUD frames.
+- The configured refresh interval now controls the HUD heartbeat. Git status uses one porcelain-v2 command per refresh, subagent rollouts are parsed incrementally, and long-lived caches have bounded TTL and capacity.
+
+### Fixed
+
+- Preserved the last valid HUD configuration across transient malformed writes during hot reload.
+- Isolated relay balance caches by credential and user, stopped dedicated-key configurations from falling back to inference keys, bounded stale results and response sizes, and prevented concurrent duplicate refreshes.
+
+---
+
+### 调整
+
+- 中转余额查询现在默认关闭，需要在首次 setup 中明确选择、传入 `--relay-usage` 或添加配置后才会启用；查询在后台刷新，不会阻塞 HUD 帧。
+- 配置的刷新间隔现在会实际控制 HUD heartbeat。Git 状态每次刷新只执行一次 porcelain-v2 命令，子 Agent rollout 改为增量解析，长期缓存增加 TTL 和容量上限。
+
+### 修复
+
+- 配置热加载遇到短暂的无效写入时继续保留上一份有效配置。
+- 中转余额缓存按凭据和用户隔离；专用 Key 缺失时不再回退推理 Key，并限制旧值保留时间、响应体大小以及并发重复刷新。
+
 ## 0.5.0 - 2026-08-13
 
 ### Added

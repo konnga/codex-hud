@@ -4,7 +4,7 @@ import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { runConfigure } from '../commands/configure.js'
 import { DEFAULT_CONFIG } from '../types/config.js'
-import { loadConfig } from './load.js'
+import { loadConfig, reloadConfig } from './load.js'
 import { CURRENT_CONFIG_VERSION, migrateConfig } from './migrate.js'
 import { createPreset } from './presets.js'
 import { validateConfig } from './validate.js'
@@ -118,14 +118,10 @@ describe('configuration validation', () => {
       refreshMs: 10_000,
       quotaPerCredit: 500_000,
     }])
-    expect(DEFAULT_CONFIG.display.externalUsageQueries).toMatchObject([{
-      enabled: true,
-      origin: '*',
-      template: 'general',
-    }])
+    expect(DEFAULT_CONFIG.display.externalUsageQueries).toEqual([])
   })
 
-  it('allows the default relay balance query to be explicitly disabled', () => {
+  it('keeps relay balance queries disabled unless explicitly enabled', () => {
     expect(validateConfig({ display: { externalUsageQueries: [] } }).display.externalUsageQueries).toEqual([])
   })
 })
@@ -144,6 +140,16 @@ describe('configuration persistence', () => {
     const loaded = loadConfig(env)
     expect(loaded.error).toBeInstanceOf(Error)
     expect(loaded.config).toEqual(DEFAULT_CONFIG)
+  })
+
+  it('keeps the last valid runtime config when a hot reload is malformed', () => {
+    const { env, configPath } = temporaryConfigEnv()
+    fs.writeFileSync(configPath, JSON.stringify({ language: 'zh-Hans' }))
+    const previous = loadConfig(env)
+    fs.writeFileSync(configPath, '{not-json', 'utf8')
+    const reloaded = reloadConfig(previous, env)
+    expect(reloaded.config.language).toBe('zh-Hans')
+    expect(reloaded.error).toBeInstanceOf(Error)
   })
 
   it('preserves unknown advanced keys when writing guided changes', () => {

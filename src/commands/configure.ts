@@ -20,6 +20,7 @@ import { writeConfig } from '../config/write.js'
 import { renderHud } from '../render/index.js'
 import { DEFAULT_HUD_MAX_HEIGHT } from '../runtime/pane-size.js'
 import { buildHudState } from '../runtime/state.js'
+import { DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY } from '../types/config.js'
 
 function optionValue(args: string[], name: string): string | null {
   const index = args.indexOf(name)
@@ -212,6 +213,12 @@ export async function runConfigure(args: string[]): Promise<number> {
   const config = base === 'current' ? structuredClone(loaded.config) : createPreset(base)
   if (base !== 'current') {
     preserveAdvancedSettings(config, loaded.config)
+  }
+  if (args.includes('--relay-usage')) {
+    config.display.externalUsageQueries = [structuredClone(DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY)]
+  }
+  else if (args.includes('--no-relay-usage')) {
+    config.display.externalUsageQueries = []
   }
 
   if (!isLanguage(language)) {
