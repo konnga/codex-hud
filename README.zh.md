@@ -145,8 +145,8 @@ codex plugin add codex-hud@codex-hud
 
 ## 常用操作
 
-| 在哪里   | 命令或按键                                          | 用途                                   |
-| -------- | --------------------------------------------------- | -------------------------------------- |
+| 在哪里   | 命令或按键                                        | 用途                                   |
+| -------- | ------------------------------------------------- | -------------------------------------- |
 | Codex 内 | `$codex-hud:configure`                            | 选择要显示的字段并实时预览             |
 | Codex 内 | `$codex-hud:doctor`                               | 检查 launcher、backend、配置和当前会话 |
 | HUD pane | `n`                                               | 打开会话历史导航器                     |
@@ -167,8 +167,8 @@ codex-hud configure
 
 也可以直接应用预设：
 
-| 预设          | 适合场景                            |
-| ------------- | ----------------------------------- |
+| 预设        | 适合场景                            |
+| ----------- | ----------------------------------- |
 | `full`      | 第一次使用，展示日常可用的完整信息  |
 | `essential` | 只保留项目、Context、额度和主要活动 |
 | `minimal`   | 适合窄终端的最小信息集              |
@@ -243,32 +243,32 @@ New API 需要系统访问令牌和用户 ID，不是用于推理的 `sk-` Key�
 
 可用于 `--enable` / `--disable` 的名称：
 
-| 名称                                | 内容                                       |
-| ----------------------------------- | ------------------------------------------ |
-| `git`                             | Git 分支和工作区状态                       |
-| `usage`                           | 额度窗口、reset 时间和 credits             |
-| `promptCache`                     | Prompt Cache 倒计时                        |
-| `tools` / `skills` / `mcp`    | 工具、Skill 和 MCP 活动                    |
-| `agents`                          | 子 Agent 状态                              |
+| 名称                            | 内容                                       |
+| ------------------------------- | ------------------------------------------ |
+| `git`                           | Git 分支和工作区状态                       |
+| `usage`                         | 额度窗口、reset 时间和 credits             |
+| `promptCache`                   | Prompt Cache 倒计时                        |
+| `tools` / `skills` / `mcp`      | 工具、Skill 和 MCP 活动                    |
+| `agents`                        | 子 Agent 状态                              |
 | `todos` / `goal`                | 计划、任务和持久 Goal                      |
-| `turns`                           | 会话轮次和导航提示                         |
-| `configCounts`                    | 配置、规则、Skill 和 MCP 数量              |
-| `auth`                            | ChatGPT 套餐或当前会话实际 endpoint 主机名 |
-| `memory`                          | 近似系统内存                               |
+| `turns`                         | 会话轮次和导航提示                         |
+| `configCounts`                  | 配置、规则、Skill 和 MCP 数量              |
+| `auth`                          | ChatGPT 套餐或当前会话实际 endpoint 主机名 |
+| `memory`                        | 近似系统内存                               |
 | `duration` / `speed`            | 会话时长和回复速度                         |
 | `sessionName` / `sessionTokens` | 会话标题和累计 Token                       |
-| `compactions`                     | Context 压缩次数                           |
+| `compactions`                   | Context 压缩次数                           |
 
 常用环境变量：
 
-| 变量                    | 作用                                    |
-| ----------------------- | --------------------------------------- |
-| `CODEX_HOME`          | Codex 数据与配置目录                    |
-| `CODEX_HUD_CONFIG`    | 覆盖 HUD 配置路径                       |
-| `CODEX_HUD_CODEX_BIN` | 指定真实 Codex 可执行文件               |
+| 变量                  | 作用                                  |
+| --------------------- | ------------------------------------- |
+| `CODEX_HOME`          | Codex 数据与配置目录                  |
+| `CODEX_HUD_CONFIG`    | 覆盖 HUD 配置路径                     |
+| `CODEX_HUD_CODEX_BIN` | 指定真实 Codex 可执行文件             |
 | `CODEX_HUD_BIN_DIR`   | launcher 安装目录，默认`~/.local/bin` |
-| `CODEX_HUD_HEIGHT`    | HUD pane 最大高度，默认 30              |
-| `NO_COLOR`            | 禁用 ANSI 颜色                          |
+| `CODEX_HUD_HEIGHT`    | HUD pane 最大高度，默认 30            |
+| `NO_COLOR`            | 禁用 ANSI 颜色                        |
 
 </details>
 
@@ -277,16 +277,16 @@ New API 需要系统访问令牌和用户 ID，不是用于推理的 `sk-` Key�
 
 例如 `git:(main* ↑1) M2 A1 ?1` 表示分支为 `main`、有未提交改动、领先上游 1 个提交，并包含 2 个修改文件、1 个已暂存新增文件和 1 个未跟踪文件。
 
-| 标记  | 含义           |
-| ----- | -------------- |
-| `M` | 已修改         |
-| `A` | 新增（已暂存） |
-| `D` | 已删除         |
-| `R` | 重命名         |
-| `C` | 复制           |
-| `T` | 类型变更       |
-| `?` | 未跟踪         |
-| `!` | 冲突（未合并） |
+| 标记 | 含义           |
+| ---- | -------------- |
+| `M`  | 已修改         |
+| `A`  | 新增（已暂存） |
+| `D`  | 已删除         |
+| `R`  | 重命名         |
+| `C`  | 复制           |
+| `T`  | 类型变更       |
+| `?`  | 未跟踪         |
+| `!`  | 冲突（未合并） |
 
 </details>
 
@@ -361,13 +361,13 @@ codex-hud render --once --cwd "$PWD" --no-color
 
 常见情况：
 
-| 现象                           | 处理方法                                          |
-| ------------------------------ | ------------------------------------------------- |
+| 现象                           | 处理方法                                      |
+| ------------------------------ | --------------------------------------------- |
 | setup 成功，但当前会话没有 HUD | 退出当前 Codex，运行`hash -r`，再启动 `codex` |
-| `tmux: not found`            | 安装 tmux；cmux 用户无需安装                      |
-| `Session: not found`         | 确保 Codex 和 doctor 使用同一个真实项目目录       |
-| 命令仍指向旧 launcher          | 运行`hash -r` 或打开新终端                      |
-| 想确认问题是否来自 HUD         | 使用`codex --no-hud` 临时绕过                   |
+| `tmux: not found`              | 安装 tmux；cmux 用户无需安装                  |
+| `Session: not found`           | 确保 Codex 和 doctor 使用同一个真实项目目录   |
+| 命令仍指向旧 launcher          | 运行`hash -r` 或打开新终端                    |
+| 想确认问题是否来自 HUD         | 使用`codex --no-hud` 临时绕过                 |
 
 ## 开发
 
