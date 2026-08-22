@@ -23,6 +23,20 @@ describe('normalizeRateLimits', () => {
     expect(usage?.secondary?.label).toBe('1w')
   })
 
+  it('ignores zero credit balances when the plan has no credits', () => {
+    const usage = normalizeRateLimits({
+      primary: { used_percent: 8, window_minutes: 10_080 },
+      credits: { has_credits: false, unlimited: false, balance: '0' },
+      plan_type: 'plus',
+    })
+
+    expect(usage).toMatchObject({
+      primary: { label: '1w', percent: 8 },
+      planType: 'plus',
+      balanceLabel: null,
+    })
+  })
+
   it('merges account updates by duration instead of positional slot', () => {
     const current: UsageData = {
       primary: { label: '5h', percent: 25, resetAt: null, windowMinutes: 300 },
@@ -73,10 +87,13 @@ describe('trustedUsageDataForEndpoint', () => {
     limitReachedType: null,
   }
 
-  it('accepts native limits only from official OpenAI endpoints', () => {
+  it('accepts native limits from official OpenAI endpoints and unresolved native sessions', () => {
     expect(trustedUsageDataForEndpoint('https://chatgpt.com/backend-api/codex/responses', usage, null)).toEqual(usage)
     expect(trustedUsageDataForEndpoint('https://api.openai.com/v1/responses', usage, null)).toEqual(usage)
+    expect(trustedUsageDataForEndpoint(null, usage, null)).toEqual(usage)
+  })
+
+  it('rejects native limits when the endpoint is known to be a relay', () => {
     expect(trustedUsageDataForEndpoint('https://agentrouter.org/v1/responses', usage, null)).toBeNull()
-    expect(trustedUsageDataForEndpoint(null, usage, null)).toBeNull()
   })
 })
