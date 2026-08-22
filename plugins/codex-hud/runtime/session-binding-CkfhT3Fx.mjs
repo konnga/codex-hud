@@ -433,7 +433,7 @@ function normalizeWindow(value, fallbackLabel, individual = false) {
 function normalizeRateLimits(raw) {
 	if (!raw) return null;
 	const credits = raw.credits && typeof raw.credits === "object" ? raw.credits : null;
-	const balance = credits && typeof credits.balance === "string" ? credits.balance : null;
+	const balance = credits && credits.has_credits !== false && typeof credits.balance === "string" ? credits.balance : null;
 	return {
 		primary: normalizeWindow(raw.primary, "limit"),
 		secondary: normalizeWindow(raw.secondary, "limit"),
@@ -475,7 +475,7 @@ function mergeUsageData(current, observed) {
 }
 /** Third-party relays can imitate Codex limit events, but those are not the user's OpenAI subscription limits. */
 function trustedUsageDataForEndpoint(endpoint, current, observed) {
-	return isOfficialOpenAIEndpoint(endpoint) ? mergeUsageData(current, observed) : null;
+	return endpoint === null || isOfficialOpenAIEndpoint(endpoint) ? mergeUsageData(current, observed) : null;
 }
 
 //#endregion
@@ -6008,4 +6008,4 @@ async function waitForNewRootSession(cwd, snapshot, codexHome = getCodexHome(), 
 
 //#endregion
 export { findCodexLogDatabase as A, DEFAULT_CONFIG as C, readConfiguredExternalUsage as D, readCachedConfiguredExternalUsage as E, getCodexHome as F, getConfigPath as I, getHudStateDirectory as L, resolveProcessEndpoint as M, resolveProcessSession as N, findActiveSession as O, resolveSessionEndpoint as P, getLegacyStateDirectory as R, rawConfigVersion as S, readLatestLoggedRateLimits as T, visibleWidth as _, waitForNewRootSession as a, reloadConfig as b, desiredPaneHeight as c, resizeCmuxPane as d, resizeHudPane as f, truncateAnsi as g, safeText as h, snapshotRootSessions as i, isOfficialOpenAIEndpoint as j, RolloutParser as k, hudRenderHeight as l, renderHud as m, createSessionBindingPath as n, writeSessionBinding as o, settleCmuxPaneHeight as p, readSessionBinding as r, buildHudState as s, acquireSessionDiscoveryLock as t, readCmuxPaneGeometry as u, sliceAnsi as v, DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY as w, applyConfigMigrations as x, loadConfig as y };
-//# sourceMappingURL=session-binding-CQ7nE5p-.mjs.map
+//# sourceMappingURL=session-binding-CkfhT3Fx.mjs.map

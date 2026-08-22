@@ -74,7 +74,9 @@ export function normalizeRateLimits(raw: RawRateLimits | null | undefined): Usag
     return null
   }
   const credits = raw.credits && typeof raw.credits === 'object' ? raw.credits : null
-  const balance = credits && typeof credits.balance === 'string' ? credits.balance : null
+  const balance = credits && credits.has_credits !== false && typeof credits.balance === 'string'
+    ? credits.balance
+    : null
   return {
     primary: normalizeWindow(raw.primary, 'limit'),
     secondary: normalizeWindow(raw.secondary, 'limit'),
@@ -146,5 +148,7 @@ export function trustedUsageDataForEndpoint(
   current: UsageData | null,
   observed: UsageData | null,
 ): UsageData | null {
-  return isOfficialOpenAIEndpoint(endpoint) ? mergeUsageData(current, observed) : null
+  return endpoint === null || isOfficialOpenAIEndpoint(endpoint)
+    ? mergeUsageData(current, observed)
+    : null
 }
