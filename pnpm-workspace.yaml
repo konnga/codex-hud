@@ -17,7 +17,10 @@ catalogs:
     vitest: ^4.1.10
   prod:
     '@clack/prompts': ^1.7.0
+    '@modelcontextprotocol/ext-apps': ^1.7.5
+    '@modelcontextprotocol/sdk': ^1.30.0
     slice-ansi: ^9.0.0
     smol-toml: ^1.7.0
     string-width: ^8.2.2
     strip-ansi: ^7.2.0
+    zod: ^4.4.3

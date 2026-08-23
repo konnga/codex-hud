@@ -1,15 +1,16 @@
 {
   "name": "codex-hud",
   "version": "0.5.1+codex.20260813150957",
-  "description": "Persistent Claude HUD-style telemetry and activity display for Codex CLI.",
+  "description": "Persistent telemetry and activity display for Codex CLI and the ChatGPT desktop app.",
   "author": {
     "name": "Codex HUD Contributors"
   },
   "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "Codex HUD",
-    "shortDescription": "Live context, quota, tools, agents, and task status for Codex CLI.",
-    "longDescription": "Codex HUD adds a persistent terminal HUD, guided configuration, diagnostics, and lifecycle integration for local Codex CLI sessions.",
+    "shortDescription": "Live context, quota, tools, agents, and task status for Codex.",
+    "longDescription": "Codex HUD adds a persistent terminal HUD for Codex CLI and an MCP Apps dashboard for local Codex sessions in the ChatGPT desktop app.",
     "developerName": "Codex HUD Contributors",
     "category": "Productivity",
     "capabilities": [
@@ -19,6 +20,7 @@
     ],
     "defaultPrompt": [
       "Set up Codex HUD for this machine.",
+      "Open Codex HUD for this desktop session.",
       "Set up or customize my Codex HUD display.",
       "Review my current Codex HUD fields and let me choose what to enable or disable.",
       "Diagnose why Codex HUD is not updating."

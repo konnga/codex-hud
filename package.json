@@ -16,7 +16,8 @@
   ],
   "bin": {
     "codex-hud": "./dist/cli.mjs",
-    "codex-hud-render": "./dist/render-cli.mjs"
+    "codex-hud-render": "./dist/render-cli.mjs",
+    "codex-hud-mcp": "./dist/mcp-server.mjs"
   },
   "files": [
     "CHANGELOG.md",
@@ -51,10 +52,13 @@
   },
   "dependencies": {
     "@clack/prompts": "catalog:prod",
+    "@modelcontextprotocol/ext-apps": "catalog:prod",
+    "@modelcontextprotocol/sdk": "catalog:prod",
     "slice-ansi": "catalog:prod",
     "smol-toml": "catalog:prod",
     "string-width": "catalog:prod",
-    "strip-ansi": "catalog:prod"
+    "strip-ansi": "catalog:prod",
+    "zod": "catalog:prod"
   },
   "devDependencies": {
     "@antfu/eslint-config": "catalog:dev",

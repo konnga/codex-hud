@@ -3,6 +3,7 @@ import { defineConfig } from 'tsdown'
 export default defineConfig({
   entry: {
     'cli': 'src/cli.ts',
+    'mcp-server': 'src/mcp-server.ts',
     'render-cli': 'src/render-cli.ts',
   },
   format: ['esm'],
@@ -17,10 +18,13 @@ export default defineConfig({
   deps: {
     alwaysBundle: [
       '@clack/prompts',
+      '@modelcontextprotocol/ext-apps',
+      '@modelcontextprotocol/sdk',
       'slice-ansi',
       'smol-toml',
       'string-width',
       'strip-ansi',
+      'zod',
     ],
   },
   failOnWarn: 'ci-only',
