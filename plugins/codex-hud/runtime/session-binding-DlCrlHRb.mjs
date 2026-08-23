@@ -1743,13 +1743,8 @@ function barCharacter(value, fallback) {
 	return Array.from(segmenter.segment(value)).length === 1 ? value : fallback;
 }
 function languageValue(value, fallback) {
-	if (value === "zh") return "zh-Hans";
-	if (value === "zh-TW") return "zh-Hant";
-	return enumValue(value, [
-		"en",
-		"zh-Hans",
-		"zh-Hant"
-	], fallback);
+	if (value === "zh" || value === "zh-TW" || value === "zh-Hant") return "zh-Hans";
+	return enumValue(value, ["en", "zh-Hans"], fallback);
 }
 function elementOrder(value) {
 	if (!Array.isArray(value)) return [...DEFAULT_ELEMENT_ORDER];
@@ -3820,37 +3815,6 @@ const MESSAGES = {
 		output: "输出",
 		turns: "轮次",
 		navigate: "点击 HUD 或按 F12，再按 n 导航"
-	},
-	"zh-Hant": {
-		context: "上下文",
-		usage: "額度",
-		resetsIn: "重置於",
-		tools: "工具",
-		skills: "技能",
-		mcps: "MCP",
-		agents: "子代理",
-		goal: "目標",
-		allComplete: "全部任務已完成",
-		configs: "配置",
-		rules: "規則",
-		hooks: "鉤子",
-		session: "會話",
-		tokens: "Token",
-		compactions: "壓縮",
-		memory: "記憶體",
-		promptCache: "快取有效期",
-		addedDirs: "附加目錄",
-		approval: "審批",
-		permissions: "權限",
-		sandbox: "沙箱",
-		mode: "模式",
-		started: "開始",
-		lastResponse: "最近回應",
-		input: "輸入",
-		cache: "快取",
-		output: "輸出",
-		turns: "輪次",
-		navigate: "點擊 HUD 或按 F12，再按 n 導航"
 	}
 };
 const ICONS = {
@@ -4147,7 +4111,7 @@ function renderSessionLine(ctx) {
 	const parts = [];
 	if (ctx.config.display.showDuration) parts.push(`⏱️ ${formatDuration(ctx.now.getTime() - ctx.state.sessionStart.getTime())}`);
 	if (ctx.config.display.showSessionStartDate && session?.startTime) {
-		const locale = ctx.config.language === "en" ? "en" : ctx.config.language === "zh-Hant" ? "zh-TW" : "zh-CN";
+		const locale = ctx.config.language === "en" ? "en" : "zh-CN";
 		parts.push(`${message(ctx.config.language, "started")} ${session.startTime.toLocaleString(locale)}`);
 	}
 	if (ctx.config.display.showSpeed && session?.outputTokensPerSecond !== void 0) parts.push(`${message(ctx.config.language, "output")}: ${session.outputTokensPerSecond.toFixed(1)} tok/s`);
@@ -6008,4 +5972,4 @@ async function waitForNewRootSession(cwd, snapshot, codexHome = getCodexHome(), 
 
 //#endregion
 export { findCodexLogDatabase as A, DEFAULT_CONFIG as C, readConfiguredExternalUsage as D, readCachedConfiguredExternalUsage as E, getCodexHome as F, getConfigPath as I, getHudStateDirectory as L, resolveProcessEndpoint as M, resolveProcessSession as N, findActiveSession as O, resolveSessionEndpoint as P, getLegacyStateDirectory as R, rawConfigVersion as S, readLatestLoggedRateLimits as T, visibleWidth as _, waitForNewRootSession as a, reloadConfig as b, desiredPaneHeight as c, resizeCmuxPane as d, resizeHudPane as f, truncateAnsi as g, safeText as h, snapshotRootSessions as i, isOfficialOpenAIEndpoint as j, RolloutParser as k, hudRenderHeight as l, renderHud as m, createSessionBindingPath as n, writeSessionBinding as o, settleCmuxPaneHeight as p, readSessionBinding as r, buildHudState as s, acquireSessionDiscoveryLock as t, readCmuxPaneGeometry as u, sliceAnsi as v, DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY as w, applyConfigMigrations as x, loadConfig as y };
-//# sourceMappingURL=session-binding-CQ7nE5p-.mjs.map
+//# sourceMappingURL=session-binding-DlCrlHRb.mjs.map

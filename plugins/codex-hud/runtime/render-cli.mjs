@@ -1,11 +1,26 @@
 #!/usr/bin/env node
-import { D as readConfiguredExternalUsage, E as readCachedConfiguredExternalUsage, M as resolveProcessEndpoint, N as resolveProcessSession, O as findActiveSession, P as resolveSessionEndpoint, T as readLatestLoggedRateLimits, _ as visibleWidth, b as reloadConfig, c as desiredPaneHeight, d as resizeCmuxPane, f as resizeHudPane, g as truncateAnsi, h as safeText, j as isOfficialOpenAIEndpoint, k as RolloutParser, l as hudRenderHeight, m as renderHud, o as writeSessionBinding, p as settleCmuxPaneHeight, r as readSessionBinding, s as buildHudState, u as readCmuxPaneGeometry, v as sliceAnsi, y as loadConfig } from "./session-binding-CQ7nE5p-.mjs";
+import { D as readConfiguredExternalUsage, E as readCachedConfiguredExternalUsage, M as resolveProcessEndpoint, N as resolveProcessSession, O as findActiveSession, P as resolveSessionEndpoint, T as readLatestLoggedRateLimits, _ as visibleWidth, b as reloadConfig, c as desiredPaneHeight, d as resizeCmuxPane, f as resizeHudPane, g as truncateAnsi, h as safeText, j as isOfficialOpenAIEndpoint, k as RolloutParser, l as hudRenderHeight, m as renderHud, o as writeSessionBinding, p as settleCmuxPaneHeight, r as readSessionBinding, s as buildHudState, u as readCmuxPaneGeometry, v as sliceAnsi, y as loadConfig } from "./session-binding-DlCrlHRb.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 
+//#region src/runtime/clipboard.ts
+function copyText(value) {
+	const commands = process.platform === "darwin" ? [["pbcopy", []]] : process.platform === "win32" ? [["clip", []]] : [["wl-copy", []], ["xclip", ["-selection", "clipboard"]]];
+	for (const [command, args] of commands) if (spawnSync(command, args, {
+		input: value,
+		stdio: [
+			"pipe",
+			"ignore",
+			"ignore"
+		]
+	}).status === 0) return true;
+	return false;
+}
+
+//#endregion
 //#region src/images/viewer.ts
 const LABELS$1 = {
 	"en": {
@@ -27,16 +42,6 @@ const LABELS$1 = {
 		previewHelp: "←/→ 上一张/下一张 · j/k 滚动 · o 打开 · y 复制路径 · q/Esc 返回",
 		open: "打开",
 		copied: "路径已复制"
-	},
-	"zh-Hant": {
-		title: "圖片畫廊",
-		images: "張圖片",
-		noImages: "沒有可用圖片",
-		missing: "圖片檔案已不存在",
-		listHelp: "j/k 選擇 · Enter 預覽 · o 開啟 · y 複製路徑 · q/Esc 關閉",
-		previewHelp: "←/→ 上一張/下一張 · j/k 捲動 · o 開啟 · y 複製路徑 · q/Esc 返回",
-		open: "開啟",
-		copied: "路徑已複製"
 	}
 };
 function createImageViewerState() {
@@ -151,16 +156,7 @@ function openImage(image) {
 	else spawnSync("xdg-open", [image.path], { stdio: "ignore" });
 }
 function copyImagePath(image) {
-	const commands = process.platform === "darwin" ? [["pbcopy", []]] : [["wl-copy", []], ["xclip", ["-selection", "clipboard"]]];
-	for (const [command, args] of commands) if (spawnSync(command, args, {
-		input: image.path,
-		stdio: [
-			"pipe",
-			"ignore",
-			"ignore"
-		]
-	}).status === 0) return true;
-	return false;
+	return copyText(image.path);
 }
 
 //#endregion
@@ -174,8 +170,11 @@ const LABELS = {
 		user: "User",
 		assistant: "Assistant",
 		waiting: "Waiting for a response…",
-		listHelp: "j/k move · Enter open · / search · q/Esc close",
-		detailHelp: "j/k scroll · h/←/Esc list · q close"
+		listHelp: "j/k move · Enter open · / search · y copy ID · q/Esc close",
+		detailHelp: "j/k scroll · h/←/Esc list · y copy ID · q close",
+		copy: "⧉  y",
+		copied: "✓ copied",
+		copyFailed: "! copy failed"
 	},
 	"zh-Hans": {
 		title: "会话历史导航",
@@ -185,19 +184,11 @@ const LABELS = {
 		user: "用户",
 		assistant: "助手",
 		waiting: "正在等待回复…",
-		listHelp: "j/k 选择 · Enter 查看 · / 搜索 · q/Esc 关闭",
-		detailHelp: "j/k 滚动 · h/←/Esc 返回 · q 关闭"
-	},
-	"zh-Hant": {
-		title: "會話歷史導航",
-		turns: "輪",
-		search: "搜尋",
-		noMatches: "沒有符合的使用者輸入",
-		user: "使用者",
-		assistant: "助手",
-		waiting: "正在等待回應…",
-		listHelp: "j/k 選擇 · Enter 查看 · / 搜尋 · q/Esc 關閉",
-		detailHelp: "j/k 捲動 · h/←/Esc 返回 · q 關閉"
+		listHelp: "j/k 选择 · Enter 查看 · / 搜索 · y 复制 ID · q/Esc 关闭",
+		detailHelp: "j/k 滚动 · h/←/Esc 返回 · y 复制 ID · q 关闭",
+		copy: "⧉  y",
+		copied: "✓ 已复制",
+		copyFailed: "! 复制失败"
 	}
 };
 function createNavigatorState() {
@@ -207,7 +198,8 @@ function createNavigatorState() {
 		selectedIndex: 0,
 		query: "",
 		searchMode: false,
-		detailScroll: 0
+		detailScroll: 0,
+		copyStatus: "idle"
 	};
 }
 const KEY_SEQUENCES = [
@@ -286,12 +278,18 @@ function timeLabel(date) {
 		minute: "2-digit"
 	});
 }
+function navigatorHeader(title, state, options) {
+	if (!options.sessionId) return title;
+	const labels = LABELS[options.language];
+	const copy = state.copyStatus === "copied" ? labels.copied : state.copyStatus === "failed" ? labels.copyFailed : labels.copy;
+	return `${options.sessionId} [${copy}] · ${title}`;
+}
 function renderList(turns, state, options) {
 	const labels = LABELS[options.language];
 	const width = Math.max(20, options.width);
 	const height = Math.max(5, options.height);
 	const matches = normalizeNavigatorSelection(state, turns);
-	const header = `${options.sessionId ? `${options.sessionId} · ` : ""}${labels.title} · ${String(turns.length)} ${labels.turns}`;
+	const header = navigatorHeader(`${labels.title} · ${String(turns.length)} ${labels.turns}`, state, options);
 	const search = state.searchMode || state.query ? `${labels.search}: ${state.query}${state.searchMode ? "█" : ""}` : "";
 	const rowCount = Math.max(1, height - (search ? 3 : 2));
 	const selectedPosition = Math.max(0, matches.indexOf(state.selectedIndex));
@@ -329,7 +327,7 @@ function renderDetail(turns, state, options) {
 	const scroll = Math.min(maximumScroll, Math.max(0, state.detailScroll));
 	state.detailScroll = scroll;
 	return [
-		truncateAnsi(`${options.sessionId ? `${options.sessionId} · ` : ""}${labels.title} · #${String(state.selectedIndex + 1)}/${String(turns.length)}`, width),
+		truncateAnsi(navigatorHeader(`${labels.title} · #${String(state.selectedIndex + 1)}/${String(turns.length)}`, state, options), width),
 		...body.slice(scroll, scroll + bodyHeight).map((line) => truncateAnsi(line, width)),
 		truncateAnsi(labels.detailHelp, width)
 	].slice(0, height);
@@ -426,6 +424,7 @@ async function runRenderCli(args = process.argv.slice(2)) {
 	let cmuxSelfFraction = null;
 	let latestTurns = parser.getState().conversationTurns;
 	let latestImages = parser.getState().images;
+	let latestSessionId = null;
 	let codexPid = null;
 	const paneId = process.env.TMUX_PANE ?? null;
 	const configMtime = () => {
@@ -493,6 +492,10 @@ async function runRenderCli(args = process.argv.slice(2)) {
 		const state = buildHudState(options.cwd, rollout, startedAt, loaded.config, now, codexProcess, loggedUsage, queriedUsage, endpoint?.url ?? null);
 		latestTurns = state.conversationTurns;
 		latestImages = state.images;
+		if (latestSessionId !== (state.session?.id ?? null)) {
+			latestSessionId = state.session?.id ?? null;
+			navigator.copyStatus = "idle";
+		}
 		const width = process.stdout.columns || Number(process.env.COLUMNS) || loaded.config.maxWidth || 120;
 		const constrainToViewport = options.once || Boolean(options.cmuxPaneId && (cmuxManualHeight || cmuxResizePending));
 		const height = hudRenderHeight(options.maxHeight, process.stdout.rows, constrainToViewport);
@@ -607,6 +610,7 @@ async function runRenderCli(args = process.argv.slice(2)) {
 		navigator.view = "list";
 		navigator.searchMode = false;
 		navigator.detailScroll = 0;
+		navigator.copyStatus = "idle";
 		render();
 		focusCodexPane();
 	};
@@ -644,6 +648,17 @@ async function runRenderCli(args = process.argv.slice(2)) {
 		navigator.detailScroll = 0;
 	};
 	let shutdown = () => {};
+	let copyFeedbackTimer = null;
+	const copySessionId = () => {
+		if (!latestSessionId) return;
+		navigator.copyStatus = copyText(latestSessionId) ? "copied" : "failed";
+		if (copyFeedbackTimer) clearTimeout(copyFeedbackTimer);
+		copyFeedbackTimer = setTimeout(() => {
+			copyFeedbackTimer = null;
+			navigator.copyStatus = "idle";
+			render();
+		}, 1500);
+	};
 	const onKey = (key) => {
 		if (key === "") {
 			shutdown();
@@ -663,6 +678,7 @@ async function runRenderCli(args = process.argv.slice(2)) {
 				navigator.view = "list";
 				navigator.searchMode = false;
 				navigator.detailScroll = 0;
+				navigator.copyStatus = "idle";
 				navigator.selectedIndex = latestTurns.length - 1;
 				render();
 			}
@@ -729,6 +745,11 @@ async function runRenderCli(args = process.argv.slice(2)) {
 			closeNavigator();
 			return;
 		}
+		if (key === "y" || key === "Y") {
+			copySessionId();
+			render();
+			return;
+		}
 		if (navigator.view === "detail") {
 			if (key === "\x1B" || key === "h" || key === "\x1B[D") {
 				navigator.view = "list";
@@ -765,6 +786,7 @@ async function runRenderCli(args = process.argv.slice(2)) {
 		clearInterval(configSafetyInterval);
 		if (debounceTimer) clearTimeout(debounceTimer);
 		if (resizeTimer) clearTimeout(resizeTimer);
+		if (copyFeedbackTimer) clearTimeout(copyFeedbackTimer);
 		sessionWatcher?.close();
 		configWatcher?.close();
 		process.off("SIGWINCH", onResize);

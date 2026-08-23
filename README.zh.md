@@ -190,7 +190,6 @@ HUD 默认使用英文，不会自动跟随 README 或系统语言：
 
 ```bash
 codex-hud configure --language zh-Hans
-codex-hud configure --language zh-Hant
 ```
 
 配置保存在 `${CODEX_HOME:-~/.codex}/codex-hud/config.json`。已经存在 HUD pane 的会话会自动加载保存后的配置；没有通过 Codex HUD launcher 启动的旧会话仍需重启。
@@ -297,6 +296,7 @@ New API 需要系统访问令牌和用户 ID，不是用于推理的 `sk-` Key�
 - `j` / `k` 或方向键：选择上一轮、下一轮
 - `Enter` 或右方向键：打开完整轮次
 - `/`：搜索用户输入和助手回复
+- `y`：复制完整 Codex 会话 ID
 - Page Up / Page Down：滚动当前轮次
 - `Esc`：返回列表，再次按下关闭
 - `q`：立即关闭

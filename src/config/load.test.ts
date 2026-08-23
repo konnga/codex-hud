@@ -78,9 +78,12 @@ describe('configuration validation', () => {
     ])
   })
 
-  it('normalizes Claude HUD language aliases', () => {
+  it('accepts only English and Simplified Chinese language values', () => {
+    expect(validateConfig({ language: 'zh-Hans' }).language).toBe('zh-Hans')
     expect(validateConfig({ language: 'zh' }).language).toBe('zh-Hans')
-    expect(validateConfig({ language: 'zh-TW' }).language).toBe('zh-Hant')
+    expect(validateConfig({ language: 'zh-TW' }).language).toBe('zh-Hans')
+    expect(validateConfig({ language: 'zh-Hant' }).language).toBe('zh-Hans')
+    expect(validateConfig({ language: 'fr' }).language).toBe('en')
   })
 
   it('validates opt-in external usage queries', () => {

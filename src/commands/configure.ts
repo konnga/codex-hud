@@ -32,7 +32,7 @@ function isPreset(value: string | null): value is ConfigPreset {
 }
 
 function isLanguage(value: string | null): value is Language {
-  return value === 'en' || value === 'zh-Hans' || value === 'zh-Hant'
+  return value === 'en' || value === 'zh-Hans'
 }
 
 function isLayout(value: string | null): value is LineLayout {
@@ -232,7 +232,6 @@ export async function runConfigure(args: string[]): Promise<number> {
         options: [
           { value: 'en', label: 'English' },
           { value: 'zh-Hans', label: '简体中文' },
-          { value: 'zh-Hant', label: '繁體中文' },
         ],
       })
       if (cancelled(selected)) {

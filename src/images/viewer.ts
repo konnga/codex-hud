@@ -5,6 +5,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 import { truncateAnsi, visibleWidth } from '../render/format.js'
+import { copyText } from '../runtime/clipboard.js'
 
 export interface ImageViewerState {
   active: boolean
@@ -42,16 +43,6 @@ const LABELS = {
     previewHelp: '←/→ 上一张/下一张 · j/k 滚动 · o 打开 · y 复制路径 · q/Esc 返回',
     open: '打开',
     copied: '路径已复制',
-  },
-  'zh-Hant': {
-    title: '圖片畫廊',
-    images: '張圖片',
-    noImages: '沒有可用圖片',
-    missing: '圖片檔案已不存在',
-    listHelp: 'j/k 選擇 · Enter 預覽 · o 開啟 · y 複製路徑 · q/Esc 關閉',
-    previewHelp: '←/→ 上一張/下一張 · j/k 捲動 · o 開啟 · y 複製路徑 · q/Esc 返回',
-    open: '開啟',
-    copied: '路徑已複製',
   },
 } as const
 
@@ -174,13 +165,5 @@ export function openImage(image: SessionImage): void {
 }
 
 export function copyImagePath(image: SessionImage): boolean {
-  const commands = process.platform === 'darwin'
-    ? [['pbcopy', []] as const]
-    : [['wl-copy', []] as const, ['xclip', ['-selection', 'clipboard']] as const]
-  for (const [command, args] of commands) {
-    const result = spawnSync(command, args, { input: image.path, stdio: ['pipe', 'ignore', 'ignore'] })
-    if (result.status === 0)
-      return true
-  }
-  return false
+  return copyText(image.path)
 }

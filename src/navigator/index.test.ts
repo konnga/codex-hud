@@ -71,4 +71,27 @@ describe('conversation navigator', () => {
     expect(detail.join('\n')).toContain('Assistant')
     expect(detail.length).toBeLessThanOrEqual(9)
   })
+
+  it('renders a session ID copy shortcut and feedback in both views', () => {
+    const state = createNavigatorState()
+    state.active = true
+    state.selectedIndex = 1
+    const options = {
+      width: 100,
+      height: 8,
+      color: false,
+      language: 'zh-Hans' as const,
+      sessionId: '0198d28f-62d0-7d50-bf89-f769647faa12',
+    }
+
+    const list = renderNavigator(turns, state, options)
+    expect(list[0]).toContain('0198d28f-62d0-7d50-bf89-f769647faa12 [⧉  y]')
+    expect(list.at(-1)).toContain('y 复制 ID')
+
+    state.copyStatus = 'copied'
+    state.view = 'detail'
+    const detail = renderNavigator(turns, state, options)
+    expect(detail[0]).toContain('0198d28f-62d0-7d50-bf89-f769647faa12 [✓ 已复制]')
+    expect(detail.at(-1)).toContain('y 复制 ID')
+  })
 })

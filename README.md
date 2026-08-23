@@ -190,7 +190,6 @@ The HUD defaults to English and does not automatically follow the README or syst
 
 ```bash
 codex-hud configure --language zh-Hans
-codex-hud configure --language zh-Hant
 ```
 
 Configuration is stored at `${CODEX_HOME:-~/.codex}/codex-hud/config.json`. Sessions that already have a HUD pane reload saved changes automatically. A Codex process started without the Codex HUD launcher still needs to be restarted.
@@ -297,6 +296,7 @@ When the HUD shows a `Turns` row, click the HUD pane and press `n`:
 - `j` / `k` or arrow keys: select the previous or next turn
 - `Enter` or right arrow: open the full turn
 - `/`: search user and assistant text
+- `y`: copy the full Codex session ID
 - Page Up / Page Down: scroll the open turn
 - `Esc`: return to the list, then close
 - `q`: close immediately

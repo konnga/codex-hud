@@ -1,4 +1,4 @@
-export type Language = 'en' | 'zh-Hans' | 'zh-Hant'
+export type Language = 'en' | 'zh-Hans'
 export type LineLayout = 'compact' | 'expanded'
 export type ContextValueMode = 'percent' | 'tokens' | 'remaining' | 'both'
 export type UsageValueMode = 'percent' | 'remaining'

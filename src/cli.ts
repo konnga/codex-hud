@@ -28,8 +28,8 @@ Usage:
   codex-hud doctor [--json]
   codex-hud setup [--codex-shim] [--preset full|essential|minimal]
                   [--relay-usage|--no-relay-usage]
-                  [--language en|zh-Hans|zh-Hant] [--layout compact|expanded] [--yes]
-  codex-hud configure [--preset full|essential|minimal] [--language en|zh-Hans|zh-Hant]
+                  [--language en|zh-Hans] [--layout compact|expanded] [--yes]
+  codex-hud configure [--preset full|essential|minimal] [--language en|zh-Hans]
   codex-hud configure --status [--json]
   codex-hud configure [--enable <names>] [--disable <names>] --yes
   codex-hud install [--codex-shim] [--dry-run]

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { A as findCodexLogDatabase, C as DEFAULT_CONFIG, D as readConfiguredExternalUsage, F as getCodexHome, I as getConfigPath, L as getHudStateDirectory, O as findActiveSession, P as resolveSessionEndpoint, R as getLegacyStateDirectory, S as rawConfigVersion, T as readLatestLoggedRateLimits, a as waitForNewRootSession, i as snapshotRootSessions, j as isOfficialOpenAIEndpoint, k as RolloutParser, m as renderHud, n as createSessionBindingPath, o as writeSessionBinding, s as buildHudState, t as acquireSessionDiscoveryLock, w as DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY, x as applyConfigMigrations, y as loadConfig } from "./session-binding-CQ7nE5p-.mjs";
+import { A as findCodexLogDatabase, C as DEFAULT_CONFIG, D as readConfiguredExternalUsage, F as getCodexHome, I as getConfigPath, L as getHudStateDirectory, O as findActiveSession, P as resolveSessionEndpoint, R as getLegacyStateDirectory, S as rawConfigVersion, T as readLatestLoggedRateLimits, a as waitForNewRootSession, i as snapshotRootSessions, j as isOfficialOpenAIEndpoint, k as RolloutParser, m as renderHud, n as createSessionBindingPath, o as writeSessionBinding, s as buildHudState, t as acquireSessionDiscoveryLock, w as DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY, x as applyConfigMigrations, y as loadConfig } from "./session-binding-DlCrlHRb.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import process$1, { stdin, stdout } from "node:process";
@@ -1323,7 +1323,7 @@ function isPreset(value) {
 	return value === "full" || value === "essential" || value === "minimal";
 }
 function isLanguage(value) {
-	return value === "en" || value === "zh-Hans" || value === "zh-Hant";
+	return value === "en" || value === "zh-Hans";
 }
 function isLayout(value) {
 	return value === "compact" || value === "expanded";
@@ -1476,20 +1476,13 @@ async function runConfigure(args) {
 		const selected = await select({
 			message: "Choose label language",
 			initialValue: config.language,
-			options: [
-				{
-					value: "en",
-					label: "English"
-				},
-				{
-					value: "zh-Hans",
-					label: "简体中文"
-				},
-				{
-					value: "zh-Hant",
-					label: "繁體中文"
-				}
-			]
+			options: [{
+				value: "en",
+				label: "English"
+			}, {
+				value: "zh-Hans",
+				label: "简体中文"
+			}]
 		});
 		if (cancelled(selected)) return 1;
 		language = selected;
@@ -2668,8 +2661,8 @@ Usage:
   codex-hud doctor [--json]
   codex-hud setup [--codex-shim] [--preset full|essential|minimal]
                   [--relay-usage|--no-relay-usage]
-                  [--language en|zh-Hans|zh-Hant] [--layout compact|expanded] [--yes]
-  codex-hud configure [--preset full|essential|minimal] [--language en|zh-Hans|zh-Hant]
+                  [--language en|zh-Hans] [--layout compact|expanded] [--yes]
+  codex-hud configure [--preset full|essential|minimal] [--language en|zh-Hans]
   codex-hud configure --status [--json]
   codex-hud configure [--enable <names>] [--disable <names>] --yes
   codex-hud install [--codex-shim] [--dry-run]

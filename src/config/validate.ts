@@ -143,11 +143,10 @@ function barCharacter(value: unknown, fallback: string): string {
 }
 
 function languageValue(value: unknown, fallback: Language): Language {
-  if (value === 'zh')
+  if (value === 'zh' || value === 'zh-TW' || value === 'zh-Hant') {
     return 'zh-Hans'
-  if (value === 'zh-TW')
-    return 'zh-Hant'
-  return enumValue<Language>(value, ['en', 'zh-Hans', 'zh-Hant'], fallback)
+  }
+  return enumValue<Language>(value, ['en', 'zh-Hans'], fallback)
 }
 
 function elementOrder(value: unknown): HudElement[] {

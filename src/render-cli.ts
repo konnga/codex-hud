@@ -26,6 +26,7 @@ import {
   splitNavigatorInput,
 } from './navigator/index.js'
 import { renderHud } from './render/index.js'
+import { copyText } from './runtime/clipboard.js'
 import { watchConfigPath } from './runtime/config-watch.js'
 import { createHeartbeatScheduler } from './runtime/heartbeat.js'
 import {
@@ -133,6 +134,7 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
   let cmuxSelfFraction: number | null = null
   let latestTurns = parser.getState().conversationTurns
   let latestImages = parser.getState().images
+  let latestSessionId: string | null = null
   let codexPid: number | null = null
   const paneId = process.env.TMUX_PANE ?? null
   const configMtime = (): number => {
@@ -240,6 +242,10 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
     )
     latestTurns = state.conversationTurns
     latestImages = state.images
+    if (latestSessionId !== (state.session?.id ?? null)) {
+      latestSessionId = state.session?.id ?? null
+      navigator.copyStatus = 'idle'
+    }
     const width = process.stdout.columns || Number(process.env.COLUMNS) || loaded.config.maxWidth || 120
     const constrainToViewport = options.once
       || Boolean(options.cmuxPaneId && (cmuxManualHeight || cmuxResizePending))
@@ -386,6 +392,7 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
     navigator.view = 'list'
     navigator.searchMode = false
     navigator.detailScroll = 0
+    navigator.copyStatus = 'idle'
     render()
     focusCodexPane()
   }
@@ -429,6 +436,21 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
     navigator.detailScroll = 0
   }
   let shutdown = (): void => {}
+  let copyFeedbackTimer: NodeJS.Timeout | null = null
+  const copySessionId = (): void => {
+    if (!latestSessionId) {
+      return
+    }
+    navigator.copyStatus = copyText(latestSessionId) ? 'copied' : 'failed'
+    if (copyFeedbackTimer) {
+      clearTimeout(copyFeedbackTimer)
+    }
+    copyFeedbackTimer = setTimeout(() => {
+      copyFeedbackTimer = null
+      navigator.copyStatus = 'idle'
+      render()
+    }, 1_500)
+  }
   const onKey = (key: string): void => {
     if (key === '\u0003') {
       shutdown()
@@ -453,6 +475,7 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
         navigator.view = 'list'
         navigator.searchMode = false
         navigator.detailScroll = 0
+        navigator.copyStatus = 'idle'
         navigator.selectedIndex = latestTurns.length - 1
         render()
       }
@@ -545,6 +568,11 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
       closeNavigator()
       return
     }
+    if (key === 'y' || key === 'Y') {
+      copySessionId()
+      render()
+      return
+    }
     if (navigator.view === 'detail') {
       if (key === '\u001B' || key === 'h' || key === '\u001B[D') {
         navigator.view = 'list'
@@ -603,6 +631,9 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
     }
     if (resizeTimer) {
       clearTimeout(resizeTimer)
+    }
+    if (copyFeedbackTimer) {
+      clearTimeout(copyFeedbackTimer)
     }
     sessionWatcher?.close()
     configWatcher?.close()

@@ -13,11 +13,11 @@ In its normal state, the HUD shows only the number of recorded user turns and an
 After activation, the same HUD pane expands and displays a searchable list:
 
 ```text
-Conversation navigator · 3 turns
+0198d28f-62d0-7d50-bf89-f769647faa12 [⧉  y] · Conversation navigator · 3 turns
 #01 22:46 The first user request
 #02 22:53 A follow-up question
 > #03 22:56 The current request
-j/k move · Enter open · / search · q/Esc close
+j/k move · Enter open · / search · y copy ID · q/Esc close
 ```
 
 Opening a turn shows the complete user message and the corresponding assistant response. Closing the navigator restores the normal HUD height and returns focus to the Codex pane.
@@ -32,19 +32,20 @@ The navigator is available when the `turns` display element is enabled and the a
 
 ### Key bindings
 
-| Context            | Key                       | Action                                  |
-| ------------------ | ------------------------- | --------------------------------------- |
-| HUD                | `n`, `N`, or `Enter`      | Open the navigator                      |
-| Turn list          | `j`, `k`, Up, Down        | Move between matching user turns        |
-| Turn list          | `g`, `G`                  | Jump to the first or last matching turn |
-| Turn list          | `Enter`, `l`, or Right    | Open the selected turn                  |
-| Turn list          | `/`                       | Start incremental search                |
-| Search             | `Enter` or `Esc`          | Finish editing the query                |
-| Detail             | `j`, `k`, Up, Down        | Scroll one rendered line                |
-| Detail             | Page Up, Page Down, Space | Scroll by a page                        |
-| Detail             | `h`, Left, or `Esc`       | Return to the turn list                 |
-| Any navigator view | `q`                       | Close immediately                       |
-| Turn list          | `Esc`                     | Close the navigator                     |
+| Context             | Key                       | Action                                  |
+| ------------------- | ------------------------- | --------------------------------------- |
+| HUD                 | `n`, `N`, or `Enter`      | Open the navigator                      |
+| Turn list           | `j`, `k`, Up, Down        | Move between matching user turns        |
+| Turn list           | `g`, `G`                  | Jump to the first or last matching turn |
+| Turn list           | `Enter`, `l`, or Right    | Open the selected turn                  |
+| Turn list           | `/`                       | Start incremental search                |
+| Search              | `Enter` or `Esc`          | Finish editing the query                |
+| Turn list or detail | `y`                       | Copy the full Codex session ID          |
+| Detail              | `j`, `k`, Up, Down        | Scroll one rendered line                |
+| Detail              | Page Up, Page Down, Space | Scroll by a page                        |
+| Detail              | `h`, Left, or `Esc`       | Return to the turn list                 |
+| Any navigator view  | `q`                       | Close immediately                       |
+| Turn list           | `Esc`                     | Close the navigator                     |
 
 Search matches both user messages and assistant responses. Terminal input chunks are split into logical key events, so rapidly entered keys and multibyte text remain usable.
 
@@ -137,7 +138,7 @@ These boundaries keep the feature independent of undocumented Codex TUI internal
 1. 通过新的 `codex` 或 `codex-hud` 会话启动最新版 renderer。
 2. 点击 HUD pane，使其获得键盘焦点。
 3. 按 `n` 或 `Enter` 打开导航器。
-4. 使用 `j/k` 选择轮次，`Enter` 查看详情，`/` 搜索，`Esc` 或 `q` 退出。
+4. 使用 `j/k` 选择轮次，`Enter` 查看详情，`/` 搜索，`y` 复制完整会话 ID，`Esc` 或 `q` 退出。
 
 导航器只把 `event_msg.user_message` 识别为真实用户提交，因此不会把环境上下文或 developer 指令列入历史。详情中的 assistant 内容来自相应的 `agent_message`；最终回复到达后会替换执行过程中的 commentary。
 

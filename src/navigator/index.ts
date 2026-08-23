@@ -10,6 +10,7 @@ export interface NavigatorState {
   query: string
   searchMode: boolean
   detailScroll: number
+  copyStatus: 'idle' | 'copied' | 'failed'
 }
 
 export interface NavigatorRenderOptions {
@@ -29,8 +30,11 @@ const LABELS = {
     user: 'User',
     assistant: 'Assistant',
     waiting: 'Waiting for a response…',
-    listHelp: 'j/k move · Enter open · / search · q/Esc close',
-    detailHelp: 'j/k scroll · h/←/Esc list · q close',
+    listHelp: 'j/k move · Enter open · / search · y copy ID · q/Esc close',
+    detailHelp: 'j/k scroll · h/←/Esc list · y copy ID · q close',
+    copy: '⧉  y',
+    copied: '✓ copied',
+    copyFailed: '! copy failed',
   },
   'zh-Hans': {
     title: '会话历史导航',
@@ -40,19 +44,11 @@ const LABELS = {
     user: '用户',
     assistant: '助手',
     waiting: '正在等待回复…',
-    listHelp: 'j/k 选择 · Enter 查看 · / 搜索 · q/Esc 关闭',
-    detailHelp: 'j/k 滚动 · h/←/Esc 返回 · q 关闭',
-  },
-  'zh-Hant': {
-    title: '會話歷史導航',
-    turns: '輪',
-    search: '搜尋',
-    noMatches: '沒有符合的使用者輸入',
-    user: '使用者',
-    assistant: '助手',
-    waiting: '正在等待回應…',
-    listHelp: 'j/k 選擇 · Enter 查看 · / 搜尋 · q/Esc 關閉',
-    detailHelp: 'j/k 捲動 · h/←/Esc 返回 · q 關閉',
+    listHelp: 'j/k 选择 · Enter 查看 · / 搜索 · y 复制 ID · q/Esc 关闭',
+    detailHelp: 'j/k 滚动 · h/←/Esc 返回 · y 复制 ID · q 关闭',
+    copy: '⧉  y',
+    copied: '✓ 已复制',
+    copyFailed: '! 复制失败',
   },
 } as const
 
@@ -64,6 +60,7 @@ export function createNavigatorState(): NavigatorState {
     query: '',
     searchMode: false,
     detailScroll: 0,
+    copyStatus: 'idle',
   }
 }
 
@@ -159,6 +156,23 @@ function timeLabel(date: Date): string {
   return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
+function navigatorHeader(
+  title: string,
+  state: NavigatorState,
+  options: NavigatorRenderOptions,
+): string {
+  if (!options.sessionId) {
+    return title
+  }
+  const labels = LABELS[options.language]
+  const copy = state.copyStatus === 'copied'
+    ? labels.copied
+    : state.copyStatus === 'failed'
+      ? labels.copyFailed
+      : labels.copy
+  return `${options.sessionId} [${copy}] · ${title}`
+}
+
 function renderList(
   turns: ConversationTurn[],
   state: NavigatorState,
@@ -168,8 +182,11 @@ function renderList(
   const width = Math.max(20, options.width)
   const height = Math.max(5, options.height)
   const matches = normalizeNavigatorSelection(state, turns)
-  const sessionPrefix = options.sessionId ? `${options.sessionId} · ` : ''
-  const header = `${sessionPrefix}${labels.title} · ${String(turns.length)} ${labels.turns}`
+  const header = navigatorHeader(
+    `${labels.title} · ${String(turns.length)} ${labels.turns}`,
+    state,
+    options,
+  )
   const search = state.searchMode || state.query
     ? `${labels.search}: ${state.query}${state.searchMode ? '█' : ''}`
     : ''
@@ -225,8 +242,11 @@ function renderDetail(
   const maximumScroll = Math.max(0, body.length - bodyHeight)
   const scroll = Math.min(maximumScroll, Math.max(0, state.detailScroll))
   state.detailScroll = scroll
-  const sessionPrefix = options.sessionId ? `${options.sessionId} · ` : ''
-  const header = `${sessionPrefix}${labels.title} · #${String(state.selectedIndex + 1)}/${String(turns.length)}`
+  const header = navigatorHeader(
+    `${labels.title} · #${String(state.selectedIndex + 1)}/${String(turns.length)}`,
+    state,
+    options,
+  )
   return [
     truncateAnsi(header, width),
     ...body.slice(scroll, scroll + bodyHeight).map(line => truncateAnsi(line, width)),

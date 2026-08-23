@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added a visible copy shortcut beside the conversation navigator's session ID. Press `y` in either navigator view to copy the full ID with success or failure feedback.
+
+### Changed
+
+- Removed Traditional Chinese output. Codex HUD now supports English and Simplified Chinese only, with legacy Chinese values falling back to Simplified Chinese.
+
+---
+
+### 新增
+
+- 在会话历史导航标题的 session ID 旁新增复制快捷入口；列表和详情页均可按 `y` 复制完整 ID，并显示成功或失败反馈。
+
+### 调整
+
+- 移除繁体中文输出；Codex HUD 现在仅支持英文和简体中文，旧中文语言值统一回退到简体中文。
+
 ## 0.5.1 - 2026-08-13
 
 ### Changed
