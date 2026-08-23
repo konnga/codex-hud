@@ -17,7 +17,7 @@ if (!server) {
   process.exit(1)
 }
 
-const child = spawn(process.execPath, [server], {
+const child = spawn(process.execPath, [server, ...process.argv.slice(2)], {
   env: process.env,
   stdio: 'inherit',
 })

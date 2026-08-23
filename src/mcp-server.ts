@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // @env node
+import { createServer } from 'node:http'
 import process from 'node:process'
 import { pathToFileURL } from 'node:url'
 import {
@@ -9,6 +10,7 @@ import {
 } from '@modelcontextprotocol/ext-apps/server'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import { z } from 'zod'
 import { HUD_APP_HTML } from './mcp/hud-app.js'
 import { listLocalSessions, readHudStatus } from './mcp/session-service.js'
@@ -71,7 +73,12 @@ export function createMcpServer(): McpServer {
     mimeType: RESOURCE_MIME_TYPE,
     description: 'Live local Codex session HUD.',
   }, async () => ({
-    contents: [{ uri: RESOURCE_URI, mimeType: RESOURCE_MIME_TYPE, text: HUD_APP_HTML }],
+    contents: [{
+      uri: RESOURCE_URI,
+      mimeType: RESOURCE_MIME_TYPE,
+      text: HUD_APP_HTML,
+      _meta: { ui: { prefersBorder: true } },
+    }],
   }))
 
   return server
@@ -81,8 +88,70 @@ export async function runMcpServer(): Promise<void> {
   await createMcpServer().connect(new StdioServerTransport())
 }
 
+export async function runMcpHttpServer(): Promise<void> {
+  const host = process.env.CODEX_HUD_MCP_HOST || '127.0.0.1'
+  const port = Number(process.env.CODEX_HUD_MCP_PORT || 8787)
+  if (!Number.isInteger(port) || port < 1 || port > 65535)
+    throw new Error(`Invalid CODEX_HUD_MCP_PORT: ${process.env.CODEX_HUD_MCP_PORT}`)
+
+  const httpServer = createServer(async (request, response) => {
+    if (request.url === '/healthz' && request.method === 'GET') {
+      response.writeHead(200, { 'content-type': 'application/json' })
+      response.end(JSON.stringify({ ok: true, service: 'codex-hud' }))
+      return
+    }
+    if (request.url !== '/mcp') {
+      response.writeHead(404, { 'content-type': 'application/json' })
+      response.end(JSON.stringify({ error: 'Not found' }))
+      return
+    }
+
+    response.setHeader('access-control-allow-origin', '*')
+    response.setHeader('access-control-allow-headers', 'content-type, mcp-session-id, mcp-protocol-version, last-event-id')
+    response.setHeader('access-control-allow-methods', 'GET, POST, DELETE, OPTIONS')
+    if (request.method === 'OPTIONS') {
+      response.writeHead(204)
+      response.end()
+      return
+    }
+
+    const server = createMcpServer()
+    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined })
+    try {
+      await server.connect(transport)
+      await transport.handleRequest(request, response)
+    }
+    catch (error) {
+      console.error('Codex HUD MCP HTTP request failed:', error)
+      if (!response.headersSent) {
+        response.writeHead(500, { 'content-type': 'application/json' })
+        response.end(JSON.stringify({ error: 'Internal MCP server error' }))
+      }
+    }
+    finally {
+      await transport.close().catch(() => {})
+      await server.close().catch(() => {})
+    }
+  })
+
+  await new Promise<void>((resolve, reject) => {
+    httpServer.once('error', reject)
+    httpServer.listen(port, host, () => resolve())
+  })
+  console.error(`Codex HUD MCP HTTP server listening on http://${host}:${port}/mcp`)
+
+  await new Promise<void>((resolve) => {
+    const shutdown = () => {
+      httpServer.close(() => resolve())
+    }
+    process.once('SIGINT', shutdown)
+    process.once('SIGTERM', shutdown)
+  })
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  runMcpServer().catch((error) => {
+  const run = process.argv.includes('--http') ? runMcpHttpServer : runMcpServer
+  run().catch((error) => {
     console.error(error)
     process.exitCode = 1
   })

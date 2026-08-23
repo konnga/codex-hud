@@ -39,7 +39,7 @@ function lookupThread(threadId: string, env: NodeJS.ProcessEnv): SessionCandidat
 
 export interface SessionResolution {
   candidate: SessionCandidate | null
-  source: 'thread-id' | 'active-session' | 'none'
+  source: 'thread-id' | 'active-session' | 'recent-session' | 'none'
   reason?: string
 }
 
@@ -52,9 +52,14 @@ export function resolveSession(sessionId?: string, env: NodeJS.ProcessEnv = proc
     return { candidate: null, source: 'none', reason: `Codex thread ${threadId} has no readable local rollout.` }
   }
   const candidate = findActiveSession({ cwd: process.cwd(), codexHome: getCodexHome(env) })
-  return candidate
-    ? { candidate, source: 'active-session' }
-    : { candidate: null, source: 'none', reason: 'No active local Codex session was found.' }
+  if (candidate)
+    return { candidate, source: 'active-session' }
+
+  const recent = listLocalSessions(env)[0]
+  if (recent && Date.now() - recent.mtimeMs <= 5 * 60 * 1000)
+    return { candidate: recent, source: 'recent-session' }
+
+  return { candidate: null, source: 'none', reason: 'No active local Codex session was found.' }
 }
 
 export function listLocalSessions(env: NodeJS.ProcessEnv = process.env): SessionCandidate[] {

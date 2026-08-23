@@ -45,6 +45,73 @@ export const HUD_APP_HTML = String.raw`<!doctype html>
   const bar = value => '<div class="bar"><i style="width:' + pct(value) + '%"></i></div>';
   const list = items => '<ul>' + items.map(item => '<li><i class="dot ' + esc(item.status) + '"></i><span>' + esc(item.name) + '</span><span class="meta">' + esc(item.detail || "") + '</span></li>').join("") + '</ul>';
   let snapshot = window.openai?.toolOutput?.snapshot || window.openai?.toolOutput || null;
+  let bridgeReady;
+  let nextRequestId = 0;
+  const pending = new Map();
+
+  function rpcRequest(method, params, timeoutMs = 5000) {
+    const id = ++nextRequestId;
+    window.parent.postMessage({ jsonrpc: "2.0", id, method, params }, "*");
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        pending.delete(id);
+        reject(new Error("MCP Apps bridge request timed out"));
+      }, timeoutMs);
+      pending.set(id, {
+        resolve: value => { clearTimeout(timer); resolve(value); },
+        reject: error => { clearTimeout(timer); reject(error); }
+      });
+    });
+  }
+
+  function rpcNotification(method, params) {
+    window.parent.postMessage({ jsonrpc: "2.0", method, params }, "*");
+  }
+
+  function updateFromToolResult(result) {
+    render(result?.structuredContent || result);
+  }
+
+  window.addEventListener("message", event => {
+    if (event.source !== window.parent) return;
+    const message = event.data;
+    if (!message || message.jsonrpc !== "2.0") return;
+    if (message.id !== undefined && pending.has(message.id)) {
+      const request = pending.get(message.id);
+      pending.delete(message.id);
+      if (message.error) request.reject(message.error);
+      else request.resolve(message.result);
+      return;
+    }
+    if (message.method === "ui/notifications/tool-result") updateFromToolResult(message.params);
+  }, { passive: true });
+
+  async function initializeBridge() {
+    try {
+      const initialized = await rpcRequest("ui/initialize", {
+        appInfo: { name: "codex-hud", version: "0.5.1" },
+        appCapabilities: { tools: {}, availableDisplayModes: ["inline", "pip"] },
+        protocolVersion: "2026-01-26"
+      }, 1500);
+      rpcNotification("ui/notifications/initialized", {});
+      const modes = initialized?.hostContext?.availableDisplayModes;
+      if (Array.isArray(modes) && !modes.includes("pip")) document.getElementById("pip").hidden = true;
+      if (typeof ResizeObserver === "function") {
+        const notifySize = () => rpcNotification("ui/notifications/size-changed", {
+          width: Math.ceil(window.innerWidth),
+          height: Math.ceil(document.documentElement.getBoundingClientRect().height)
+        });
+        new ResizeObserver(notifySize).observe(document.documentElement);
+        notifySize();
+      }
+      return true;
+    } catch (error) {
+      console.warn("MCP Apps bridge unavailable", error);
+      return false;
+    }
+  }
+
+  bridgeReady = initializeBridge();
 
   function render(next) {
     if (!next) return;
@@ -80,14 +147,24 @@ export const HUD_APP_HTML = String.raw`<!doctype html>
   }
 
   async function refresh() {
-    if (!window.openai?.callTool) return;
-    const result = await window.openai.callTool("codex_hud_refresh", { sessionId: snapshot?.session?.id });
-    render(result?.structuredContent || result);
+    if (await bridgeReady) {
+      const result = await rpcRequest("tools/call", {
+        name: "codex_hud_refresh",
+        arguments: { sessionId: snapshot?.session?.id }
+      });
+      updateFromToolResult(result);
+      return;
+    }
+    if (window.openai?.callTool) updateFromToolResult(await window.openai.callTool("codex_hud_refresh", { sessionId: snapshot?.session?.id }));
   }
 
   document.getElementById("refresh").addEventListener("click", () => refresh().catch(console.error));
   document.getElementById("pip").addEventListener("click", async () => {
-    if (window.openai?.requestDisplayMode) await window.openai.requestDisplayMode({ mode: "pip" });
+    if (await bridgeReady) {
+      await rpcRequest("ui/request-display-mode", { mode: "pip" });
+    } else if (window.openai?.requestDisplayMode) {
+      await window.openai.requestDisplayMode({ mode: "pip" });
+    }
   });
   render(snapshot);
   setInterval(() => refresh().catch(() => {}), 2000);

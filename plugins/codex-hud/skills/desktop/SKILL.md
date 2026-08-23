@@ -7,6 +7,8 @@ description: Open the Codex HUD dashboard for the current local Codex session in
 
 Use the bundled `codex_hud_open` MCP tool without a session ID first. The server automatically binds to `CODEX_THREAD_ID` when the desktop host exposes it.
 
+This Skill is only for the in-chat MCP Apps dashboard. Do not run Codex HUD setup, start `render-cli.mjs`, create a tmux/cmux pane, or open a terminal window.
+
 If automatic binding reports that no readable local rollout exists:
 
 1. Call `codex_hud_list_sessions`.
