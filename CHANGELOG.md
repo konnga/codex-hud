@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## 0.6.0 - 2026-08-23
+
 ### Added
 
 - Added a visible copy shortcut beside the conversation navigator's session ID. Press `y` in either navigator view to copy the full ID with success or failure feedback.
