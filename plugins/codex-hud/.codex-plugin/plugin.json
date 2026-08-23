@@ -1,6 +1,6 @@
 {
   "name": "codex-hud",
-  "version": "0.5.1+codex.20260823091636",
+  "version": "0.5.1+codex.20260823094609",
   "description": "Persistent telemetry and activity display for Codex CLI and the ChatGPT desktop app.",
   "author": {
     "name": "Codex HUD Contributors"
