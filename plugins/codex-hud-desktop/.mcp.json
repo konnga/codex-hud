@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "codex-hud": {
+    "codex-hud-desktop": {
       "command": "node",
       "args": [
         "${PLUGIN_ROOT}/scripts/codex-hud-mcp.mjs"

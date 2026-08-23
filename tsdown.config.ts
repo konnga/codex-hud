@@ -18,13 +18,13 @@ export default defineConfig({
   deps: {
     alwaysBundle: [
       '@clack/prompts',
-      '@modelcontextprotocol/ext-apps',
-      '@modelcontextprotocol/sdk',
+      /^@modelcontextprotocol\/ext-apps(?:\/|$)/,
+      /^@modelcontextprotocol\/sdk(?:\/|$)/,
       'slice-ansi',
       'smol-toml',
       'string-width',
       'strip-ansi',
-      'zod',
+      /^zod(?:\/|$)/,
     ],
   },
   failOnWarn: 'ci-only',

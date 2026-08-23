@@ -7,6 +7,7 @@ export default antfu({
     'coverage/**',
     'plugins/codex-hud/assets/**',
     'plugins/codex-hud/runtime/**',
+    'plugins/codex-hud-desktop/runtime/**',
   ],
   typescript: true,
 })

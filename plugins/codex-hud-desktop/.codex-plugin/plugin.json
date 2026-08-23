@@ -1,0 +1,26 @@
+{
+  "name": "codex-hud-desktop",
+  "version": "0.1.0+codex.20260823111617",
+  "description": "Codex HUD dashboard for the ChatGPT desktop app.",
+  "author": {
+    "name": "Codex HUD Contributors"
+  },
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Codex HUD Desktop",
+    "shortDescription": "Show live Codex session telemetry in the ChatGPT desktop app.",
+    "longDescription": "Codex HUD Desktop adds a read-only MCP Apps dashboard for local Codex sessions in the ChatGPT desktop app. It is independent from the Codex CLI HUD plugin.",
+    "developerName": "Codex HUD Contributors",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Read"
+    ],
+    "defaultPrompt": [
+      "Open Codex HUD Desktop for the current session.",
+      "Show my current Codex session telemetry in the desktop app."
+    ],
+    "brandColor": "#10B981"
+  }
+}

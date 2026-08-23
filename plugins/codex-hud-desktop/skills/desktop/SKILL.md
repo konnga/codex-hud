@@ -1,6 +1,6 @@
 ---
 name: desktop
-description: Open the Codex HUD dashboard for the current local Codex session in the ChatGPT desktop app. Use when the user asks to open, show, display, or refresh Codex HUD in the desktop app.
+description: Open the Codex HUD Desktop dashboard for the current local Codex session. Use when the user asks to open, show, display, or refresh Codex HUD in the ChatGPT desktop app.
 ---
 
 # Codex HUD Desktop

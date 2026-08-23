@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { t as __commonJSMin } from "./rolldown-runtime-DyRPXdT2.mjs";
 import { C as getConfigPath, S as getCodexHome, T as getLegacyStateDirectory, _ as isOfficialOpenAIEndpoint, a as rawConfigVersion, b as resolveSessionEndpoint, g as findCodexLogDatabase, i as applyConfigMigrations, l as readConfiguredExternalUsage, n as loadConfig, o as DEFAULT_CONFIG, p as RolloutParser, s as DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY, t as buildHudState, u as findActiveSession, w as getHudStateDirectory } from "./state-CVI_806k.mjs";
 import { a as waitForNewRootSession, i as snapshotRootSessions, n as createSessionBindingPath, o as writeSessionBinding, p as renderHud, t as acquireSessionDiscoveryLock, v as readLatestLoggedRateLimits } from "./session-binding-M3Kih5-u.mjs";
 import fs from "node:fs";
@@ -11,10 +12,6 @@ import l__default from "node:readline";
 import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
-//#region \0rolldown/runtime.js
-var __commonJSMin = (cb, mod) => () => (mod || (cb((mod = { exports: {} }).exports, mod), cb = null), mod.exports);
-
-//#endregion
 //#region node_modules/.pnpm/fast-string-truncated-width@3.0.3/node_modules/fast-string-truncated-width/dist/utils.js
 const getCodePointsLength = (() => {
 	const SURROGATE_PAIR_RE = /[\uD800-\uDBFF][\uDC00-\uDFFF]/g;

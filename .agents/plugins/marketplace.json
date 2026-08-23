@@ -1,14 +1,14 @@
 {
-  "name": "codex-hud",
+  "name": "codex-hud-desktop",
   "interface": {
-    "displayName": "Codex HUD"
+    "displayName": "Codex HUD Desktop"
   },
   "plugins": [
     {
-      "name": "codex-hud",
+      "name": "codex-hud-desktop",
       "source": {
         "source": "local",
-        "path": "./plugins/codex-hud"
+        "path": "./plugins/codex-hud-desktop"
       },
       "policy": {
         "installation": "AVAILABLE",
