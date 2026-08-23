@@ -6,15 +6,31 @@ Keep context, quota, Git status, tools, agents, tasks, and session details visib
 
 ## Full display preview
 
-With the Full preset, available session telemetry expands into model and project identity, context and quota, live activity, environment policy, and session status:
+With the Full preset, available session telemetry expands into model and project identity, context, tokens, quota and cache status, tools, Skills, MCP servers, agents, plans, goals, turns, images, environment policy, and session totals:
 
 ```text
-[gpt-5.5 high] │ codex-hud git:(main* ↑1) M2 A1 ?1 │ ChatGPT pro
+[gpt-5.6-sol high] │ codex-hud git:(main*) M2 A1 ?1 │ ChatGPT pro
 Context ██████░░░░ 59% │ 5h: ███░░░░░░░ 25% (resets in 1h 30m) │ 1w: ████████░░ 82% (resets in 4d)
+Cache TTL ⏱️ 5m
+Approval: on-request │ Permissions: managed │ Sandbox: workspace-write
 🛠️ Tools: ◐ exec_command: pnpm test │ ✓ view_image ×1
+🧩 ✓ Skills (2): openai-docs, pdf
+🔌 ✓ MCPs (2): github, browser
 🤖 ◐ explorer: Inspect protocol (2m)
 📋 ▸ Render HUD (1/3)
-⏱️ 1h │ Tokens: 55k (in 50k, cache 30k · 60%; out 5k)
+↕ Turns: 6 · click HUD or press F12, then n
+🖼 Images: 2 · hud-preview.png · i gallery
+⏱️ 1h │ Tokens: 55k (in 50k, cache 30k · 60%; out 5k) │ Compactions: 2
+```
+
+Conversation navigator:
+
+```text
+01a02d22-6aa1-7fb0-ba1c-89cb0b5d754d [⧉  y] · Conversation navigator · 3 turns
+#01 13:40 Add a copy-ID shortcut to the conversation navigator
+#02 13:47 Update the local Codex HUD so I can test it
+> #03 14:23 Refresh the Full preset example in the README
+j/k move · Enter open · / search · y copy ID · q/Esc close
 ```
 
 Actual terminal view:
@@ -29,19 +45,19 @@ It does not replace or modify the official Codex binary. Instead, it reads local
 
 Only rows with available telemetry are rendered; unavailable data stays out of the way.
 
-| Category          | Examples                                                                             |
-| ----------------- | ------------------------------------------------------------------------------------ |
-| Model and project | Model, reasoning effort, project path, Git branch, and file status                   |
-| Context and quota | Context usage, cumulative tokens, cache ratio, weekly limit, reset time, and credits |
-| Live activity     | Tool calls, Skills, MCP servers, subagents, plan items, and durable goals            |
-| Environment       | Approval policy, sandbox, permissions, and collaboration mode                        |
-| Session           | Session title, duration, output speed, compactions, and turn navigation              |
+| Category          | Examples                                                                               |
+| ----------------- | -------------------------------------------------------------------------------------- |
+| Model and project | Model, reasoning effort, project paths, Git branch, dirty state, and file status       |
+| Context and quota | Context usage, token/cache breakdown, quota windows, reset times, and provider credits |
+| Live activity     | Tools, Skills, MCP servers, subagents, plans, goals, turns, and session images         |
+| Environment       | Authentication, approval policy, sandbox, and permission profile                       |
+| Session           | Duration, cumulative token totals, prompt-cache TTL, and compaction count              |
 
 See the audited [feature and telemetry support matrix](./docs/claude-hud-parity.md) for exact data sources and fallback behavior.
 
 ## Quick start
 
-For a new installation, follow steps 1–4. Existing users can jump directly to step 5.
+Prepare the environment, then choose one installation path below. Both paths install the same managed runtime and preserve `${CODEX_HOME:-~/.codex}/codex-hud/config.json`.
 
 ```text
 prepare cmux/tmux → install the plugin → run setup → restart Codex
@@ -69,66 +85,44 @@ sudo apt install tmux
 
 `chafa` is optional and enables inline image previews in the terminal. Install it on macOS with `brew install chafa`. Without it, the image gallery still lists image paths and can open files with the system image viewer.
 
-### 2. Install the Codex HUD plugin
+### 2. Choose an installation path
 
-Run in a regular terminal:
+#### Option A: Install and update through Codex
+
+In a Codex session, send the project URL and ask Codex to install and configure it:
+
+```text
+Install Codex HUD from https://github.com/konnga/codex-hud. Register the repository, install the plugin, run setup, preserve my existing configuration, and verify the result with doctor.
+```
+
+Codex will register the repository as a marketplace, install the plugin, run the setup Skill, preserve the existing configuration, and verify the managed runtime.
+
+For later updates, send another request in Codex:
+
+```text
+Update Codex HUD from https://github.com/konnga/codex-hud to the latest version. Preserve my existing configuration, reinstall the plugin if needed, and run doctor when finished.
+```
+
+#### Option B: Run the CLI manually
+
+For a first-time install, run:
 
 ```bash
 codex plugin marketplace add konnga/codex-hud
 codex plugin add codex-hud@codex-hud
-```
-
-### 3. Run first-time setup
-
-Start a new Codex session, then enter:
-
-```text
-$codex-hud:setup
-```
-
-You can also open `/skills` and select the Codex HUD setup Skill. It installs the managed launchers and opens a visible-field selector with a live preview.
-
-> Setup cannot inject a HUD into the Codex TUI that is already running. This is a terminal-pane limitation, not an installation failure.
-
-### 4. Restart Codex
-
-Exit the current session after setup, then run in a regular terminal:
-
-```bash
-hash -r
-codex
-```
-
-Installation is complete when the new session opens with a HUD pane below Codex. To verify the environment, run:
-
-```bash
+codex-hud setup --codex-shim --yes
 codex-hud doctor
 ```
 
-### 5. Update
-
-Tell Codex directly:
-
-```text
-Update Codex HUD to the latest version, preserve my existing configuration, and run doctor when finished.
-```
-
-The AI can refresh the marketplace, reinstall the plugin, update the managed runtime, and verify the installation. The update does not delete `${CODEX_HOME:-~/.codex}/codex-hud/config.json`.
-
-> The current session cannot load newly installed Skills or gain the updated HUD pane. Exit and restart Codex after the update finishes.
-
-<details>
-<summary><strong>Manual update commands</strong></summary>
-
-Codex currently has no separate plugin upgrade command, so refresh the marketplace and reinstall the plugin:
+For a later update, run:
 
 ```bash
 codex plugin marketplace upgrade codex-hud
 codex plugin remove codex-hud@codex-hud
 codex plugin add codex-hud@codex-hud
+codex-hud setup --codex-shim --yes
+codex-hud doctor
 ```
-
-Then start Codex, run `$codex-hud:setup`, and restart Codex once more.
 
 If the marketplace source conflicts or no plugin appears after refreshing, rebuild the registration:
 
@@ -139,9 +133,9 @@ codex plugin marketplace add https://github.com/konnga/codex-hud.git
 codex plugin add codex-hud@codex-hud
 ```
 
-Removing the plugin or marketplace does not delete the existing HUD configuration.
+### 3. Restart Codex
 
-</details>
+After installation or an update, exit the current Codex session and start a new one. If your shell still resolves an older launcher, run `hash -r` before starting `codex` again. The running session cannot load newly installed Skills or receive a new HUD pane; setup cannot add a pane to an already running Codex TUI. The update is complete when the new session opens with a HUD pane below Codex.
 
 ## Everyday commands
 
@@ -157,7 +151,9 @@ Removing the plugin or marketplace does not delete the existing HUD configuratio
 
 Non-interactive commands such as `codex exec`, `plugin`, `login`, `mcp`, `completion`, `--help`, and `--version` pass directly to the official Codex executable.
 
-## Configure the display
+## Features
+
+### Configure the display
 
 Open the interactive selector at any time:
 
@@ -289,7 +285,7 @@ For example, `git:(main* ↑1) M2 A1 ?1` means branch `main` has uncommitted cha
 
 </details>
 
-## Conversation navigator
+### Conversation navigator
 
 When the HUD shows a `Turns` row, click the HUD pane and press `n`:
 
@@ -303,7 +299,7 @@ When the HUD shows a `Turns` row, click the HUD pane and press `n`:
 
 The navigator lists real user submissions only; injected environment context and developer instructions are excluded. See [Conversation navigator](./docs/conversation-navigator.md) for its data model, privacy behavior, and limitations.
 
-## Image gallery
+### Image gallery
 
 When the current Codex session references images from `view_image` or image-generation tools, the HUD adds an `Images` row. Click the HUD pane to focus it, then press `i` to open the gallery. The gallery is scoped to the currently bound Codex session; images from another session in the same project are not included.
 

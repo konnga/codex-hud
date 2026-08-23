@@ -6,15 +6,31 @@
 
 ## 完整展示效果
 
-Full 预设会根据当前会话的可用数据，展示模型与项目、Context 和额度、实时活动、运行环境以及会话状态：
+Full 预设会根据当前会话的可用数据，展示模型与项目、Context、Token、额度与缓存状态、工具、Skills、MCP、子 Agent、计划、Goal、轮次、图片、运行环境策略和会话统计：
 
 ```text
-[gpt-5.5 high] │ codex-hud git:(main* ↑1) M2 A1 ?1 │ ChatGPT pro
+[gpt-5.6-sol high] │ codex-hud git:(main*) M2 A1 ?1 │ ChatGPT pro
 上下文 ██████░░░░ 59% │ 5h: ███░░░░░░░ 25% (重置于 1h 30m) │ 1w: ████████░░ 82% (重置于 4d)
+缓存有效期 ⏱️ 5m
+审批: on-request │ 权限: managed │ 沙箱: workspace-write
 🛠️ 工具: ◐ exec_command: pnpm test │ ✓ view_image ×1
+🧩 ✓ 技能 (2): openai-docs, pdf
+🔌 ✓ MCP (2): github, browser
 🤖 ◐ explorer: 检查协议 (2m)
 📋 ▸ 渲染 HUD (1/3)
-⏱️ 1h │ Token: 55k (输入 50k，缓存 30k · 60%；输出 5k)
+↕ 轮次: 6 · 点击 HUD 或按 F12，再按 n 导航
+🖼 Images: 2 · hud-preview.png · i gallery
+⏱️ 1h │ Token: 55k (输入 50k，缓存 30k · 60%；输出 5k) │ 压缩: 2
+```
+
+会话历史导航：
+
+```text
+01a02d22-6aa1-7fb0-ba1c-89cb0b5d754d [⧉  y] · 会话历史导航 · 3 轮
+#01 13:40 在会话历史导航中新增复制 ID 快捷入口
+#02 13:47 更新本地 Codex HUD，我要测试
+> #03 14:23 更新 README 中的 Full 预设示例
+j/k 选择 · Enter 查看 · / 搜索 · y 复制 ID · q/Esc 关闭
 ```
 
 终端效果：
@@ -29,19 +45,19 @@ Codex HUD 是面向 OpenAI Codex CLI 的常驻终端信息面板。它把 Contex
 
 HUD 只展示当前有数据的行，没有遥测数据的内容会自动隐藏。
 
-| 分类           | 示例                                                              |
-| -------------- | ----------------------------------------------------------------- |
-| 模型与项目     | 模型、reasoning effort、项目路径、Git 分支和文件状态              |
-| Context 与额度 | Context 使用率、累计 Token、缓存占比、周额度、reset 时间、credits |
-| 实时活动       | 工具调用、Skills、MCP server、子 Agent、计划和持久 Goal           |
-| 运行环境       | approval、sandbox、权限和 collaboration mode                      |
-| 会话           | 会话标题、持续时间、输出速度、压缩次数和轮次导航                  |
+| 分类           | 示例                                                                 |
+| -------------- | -------------------------------------------------------------------- |
+| 模型与项目     | 模型、reasoning effort、项目路径、Git 分支、工作区状态和文件状态     |
+| Context 与额度 | Context 使用率、输入/缓存/输出 Token、额度窗口、reset 时间和中转余额 |
+| 实时活动       | 工具、Skills、MCP、子 Agent、计划、Goal、轮次导航和会话图片          |
+| 运行环境       | 认证方式、approval、sandbox 和权限策略                               |
+| 会话           | 会话时长、累计 Token、Prompt Cache 有效期和压缩次数                  |
 
 完整遥测来源和支持边界见[功能与遥测支持矩阵](./docs/claude-hud-parity.md)。
 
 ## 快速开始
 
-首次安装按第 1–4 项操作；已经安装的用户可以直接跳到第 5 项。
+准备好运行环境后，从下面两种安装方式中选择一种。两种方式都会安装相同的受管 runtime，并保留 `${CODEX_HOME:-~/.codex}/codex-hud/config.json`。
 
 ```text
 准备 cmux/tmux → 安装插件 → 运行 setup → 重启 Codex
@@ -69,66 +85,44 @@ sudo apt install tmux
 
 `chafa` 是可选依赖，用于在终端内联预览图片。macOS 可执行 `brew install chafa` 安装。未安装时，图片画廊仍会显示图片路径，并可以调用系统默认图片查看器打开文件。
 
-### 2. 安装 Codex HUD 插件
+### 2. 选择安装方式
 
-在普通终端执行：
+#### 方式 A：直接通过 Codex 安装和更新
+
+在 Codex 会话中直接发送项目地址，让 Codex 完成安装和配置：
+
+```text
+请从 https://github.com/konnga/codex-hud 安装 Codex HUD。请注册仓库、安装插件、运行 setup、保留现有配置，并用 doctor 检查安装结果。
+```
+
+Codex 会把仓库注册为 marketplace、安装插件、运行 setup Skill、保留现有配置，并检查受管 runtime。
+
+后续更新时，继续在 Codex 中发送请求：
+
+```text
+请从 https://github.com/konnga/codex-hud 将 Codex HUD 更新到最新版。保留现有配置，必要时重新安装插件，并在完成后运行 doctor 检查。
+```
+
+#### 方式 B：手动运行 CLI 命令
+
+首次安装时，在普通终端执行：
 
 ```bash
 codex plugin marketplace add konnga/codex-hud
 codex plugin add codex-hud@codex-hud
-```
-
-### 3. 运行首次设置
-
-启动一个新的 Codex 会话，然后输入：
-
-```text
-$codex-hud:setup
-```
-
-也可以输入 `/skills`，选择 Codex HUD 的 setup Skill。它会安装受管 launcher，并打开带实时预览的显示项选择器。
-
-> setup 无法把 HUD 注入当前已经运行的 Codex TUI。这是终端 pane 的限制，不是安装失败。
-
-### 4. 重启 Codex
-
-setup 完成后退出当前会话，在普通终端执行：
-
-```bash
-hash -r
-codex
-```
-
-新会话下方出现 HUD pane 即表示安装完成。需要检查环境时运行：
-
-```bash
+codex-hud setup --codex-shim --yes
 codex-hud doctor
 ```
 
-### 5. 更新版本
-
-在 Codex 中直接输入：
-
-```text
-请帮我把 Codex HUD 更新到最新版，保留现有配置，并在完成后运行 doctor 检查。
-```
-
-AI 会刷新 marketplace、重新安装插件、更新受管 runtime，并检查安装状态。更新不会删除 `${CODEX_HOME:-~/.codex}/codex-hud/config.json`。
-
-> 当前会话无法加载刚安装的新 Skill，也无法立即获得新版 HUD pane。更新完成后仍需退出并重新启动 Codex。
-
-<details>
-<summary><strong>手动更新命令</strong></summary>
-
-Codex 目前没有单独的 plugin upgrade 命令，因此需要刷新 marketplace 后重新安装插件：
+后续更新时，在普通终端执行：
 
 ```bash
 codex plugin marketplace upgrade codex-hud
 codex plugin remove codex-hud@codex-hud
 codex plugin add codex-hud@codex-hud
+codex-hud setup --codex-shim --yes
+codex-hud doctor
 ```
-
-随后启动 Codex，运行 `$codex-hud:setup`，完成后再重启一次 Codex。
 
 如果 marketplace 来源冲突或刷新后找不到插件，可以重建注册：
 
@@ -139,9 +133,9 @@ codex plugin marketplace add https://github.com/konnga/codex-hud.git
 codex plugin add codex-hud@codex-hud
 ```
 
-移除插件或 marketplace 不会删除已有 HUD 配置。
+### 3. 重启 Codex
 
-</details>
+安装或更新完成后，请退出当前 Codex 会话并重新启动。如果 shell 仍然指向旧 launcher，先运行 `hash -r` 刷新命令缓存，再执行 `codex`。正在运行的会话不会加载新安装的 Skill，也不会自动获得新版 HUD pane；setup 也无法为已经运行的 Codex TUI 动态添加 pane。新会话下方出现 HUD pane，即表示安装或更新成功。
 
 ## 常用操作
 
@@ -157,7 +151,9 @@ codex plugin add codex-hud@codex-hud
 
 `codex exec`、`plugin`、`login`、`mcp`、`completion`、`--help` 和 `--version` 等非交互命令会自动直通官方 Codex。
 
-## 配置显示内容
+## 功能
+
+### 配置显示
 
 随时打开交互式选择器：
 
@@ -289,7 +285,7 @@ New API 需要系统访问令牌和用户 ID，不是用于推理的 `sk-` Key�
 
 </details>
 
-## 会话历史导航
+### 会话历史导航
 
 当 HUD 显示“轮次”行时，点击 HUD pane 并按 `n`：
 
@@ -303,7 +299,7 @@ New API 需要系统访问令牌和用户 ID，不是用于推理的 `sk-` Key�
 
 导航器只列出真实的用户提交，不会把注入的环境上下文或 developer 指令当作用户输入。详细的数据来源和隐私边界见[会话历史导航文档](./docs/conversation-navigator.md)。
 
-## 图片画廊
+### 图片画廊
 
 当前 Codex 会话通过 `view_image` 或图片生成工具引用图片时，HUD 会增加 `Images` 行。点击 HUD pane 使其获得焦点，然后按 `i` 打开画廊。画廊只属于当前绑定的 Codex 会话；同一项目中其他会话的图片不会混入。
 
