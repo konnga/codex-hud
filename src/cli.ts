@@ -12,8 +12,9 @@ import { runInstall, runUninstall } from './commands/install.js'
 import { runSetup } from './commands/setup.js'
 import { loadConfig } from './config/load.js'
 import { getCodexHome, getConfigPath, getHudStateDirectory } from './config/paths.js'
-import { cmuxAvailable, createCmuxRunner, isCmuxEnvironment } from './runtime/cmux.js'
+import { auditCmuxOwnership, cmuxAvailable, createCmuxRunner, isCmuxEnvironment } from './runtime/cmux.js'
 import { resolveHubCommand } from './runtime/command.js'
+import { readLatestHudLaunchFailure } from './runtime/diagnostics.js'
 import { launchCodex, runCodexChild } from './runtime/launcher.js'
 import { DEFAULT_HUD_MAX_HEIGHT, INITIAL_HUD_PANE_HEIGHT } from './runtime/pane-size.js'
 import { shouldBypassHud } from './runtime/passthrough.js'
@@ -158,6 +159,7 @@ async function main(args = process.argv.slice(2)): Promise<void> {
     const tmux = findExecutable('tmux')
     const cmuxContext = isCmuxEnvironment()
     const cmuxHealthy = Boolean(cmux && cmuxContext && cmuxAvailable(createCmuxRunner(cmux)))
+    const cmuxOwnership = auditCmuxOwnership()
     const backend = process.env.TMUX
       ? 'tmux'
       : cmuxContext
@@ -170,6 +172,7 @@ async function main(args = process.argv.slice(2)): Promise<void> {
       cmux,
       cmuxContext,
       cmuxHealthy,
+      cmuxOwnership,
       tmux,
       backend,
       cwd,
@@ -193,6 +196,7 @@ async function main(args = process.argv.slice(2)): Promise<void> {
         rows: process.stdout.rows ?? null,
       },
       shimRecursion: codex === cliPath,
+      latestLaunchFailure: readLatestHudLaunchFailure(),
     }
     if (args.includes('--json')) {
       console.log(JSON.stringify(report, null, 2))
@@ -203,6 +207,7 @@ async function main(args = process.argv.slice(2)): Promise<void> {
       console.log(`cmux: ${report.cmux ?? 'not found'}${report.cmuxContext ? report.cmuxHealthy ? ' (ready)' : ' (socket unavailable)' : ''}`)
       console.log(`tmux: ${report.tmux ?? 'not found'}`)
       console.log(`Backend: ${report.backend}`)
+      console.log(`cmux HUD ownership: ${String(report.cmuxOwnership.total)} total, ${String(report.cmuxOwnership.stale)} stale${report.cmuxOwnership.current ? ' · current surface owned' : ''}`)
       console.log(`Config: ${report.configPath}`)
       console.log(`Session: ${report.activeSession ?? 'not found'}`)
       console.log(`Plugin: ${report.pluginManifest ?? 'not installed'}`)
@@ -210,6 +215,10 @@ async function main(args = process.argv.slice(2)): Promise<void> {
       console.log(`Session endpoint: ${report.sessionEndpoint ?? 'unknown'}${report.sessionEndpointSource ? ` (${report.sessionEndpointSource})` : ''}`)
       if (report.shimRecursion)
         console.log('Warning: Codex executable resolves to the Codex HUD CLI itself.')
+      if (report.latestLaunchFailure) {
+        console.log(`Last HUD startup failure: ${report.latestLaunchFailure.backend} · ${report.latestLaunchFailure.error}`)
+        console.log(`  ${report.latestLaunchFailure.cwd} · ${report.latestLaunchFailure.timestamp}`)
+      }
     }
     return
   }

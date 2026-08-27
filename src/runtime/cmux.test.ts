@@ -5,6 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
+  auditCmuxOwnership,
   closeCmuxHud,
   cmuxAvailable,
   cmuxHudOwnershipPath,
@@ -234,6 +235,27 @@ describe('cmux native HUD backend', () => {
     })
   })
 
+  it('audits and removes old ownership whose owner process is gone', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-cmux-audit-'))
+    directories.push(root)
+    const env = { CODEX_HOME: path.join(root, 'codex-home') }
+    const ownershipPath = cmuxHudOwnershipPath('old-workspace', 'old-source', env)
+    fs.mkdirSync(path.dirname(ownershipPath), { recursive: true })
+    fs.writeFileSync(ownershipPath, JSON.stringify({
+      version: 1,
+      workspaceId: 'old-workspace',
+      sourceSurfaceId: 'old-source',
+      paneId: 'old-pane',
+      surfaceId: 'old-surface',
+      ownerPid: 2_147_483_647,
+    }))
+    const old = new Date(Date.now() - 10 * 60_000)
+    fs.utimesSync(ownershipPath, old, old)
+
+    expect(auditCmuxOwnership(env, true)).toMatchObject({ total: 1, stale: 1, removed: 1 })
+    expect(fs.existsSync(ownershipPath)).toBe(false)
+  })
+
   it('cleans up the split when renderer startup fails', () => {
     const { runner, calls } = recordingRunner([
       result(0, JSON.stringify({ caller: { pane_id: 'source-pane' } })),
@@ -254,5 +276,18 @@ describe('cmux native HUD backend', () => {
       '--surface',
       'surface',
     ])
+  })
+
+  it('retries a transient split failure once', () => {
+    const { runner, calls } = recordingRunner([
+      result(0, JSON.stringify({ caller: { pane_id: 'source-pane' } })),
+      result(1, '', 'temporary layout race'),
+      result(0, JSON.stringify({ workspace_id: 'workspace', pane_id: 'pane', surface_id: 'surface' })),
+      result(),
+      result(),
+    ])
+
+    expect(launchCmuxHud(options, runner).surfaceId).toBe('surface')
+    expect(calls.filter(call => call.includes('new-split'))).toHaveLength(2)
   })
 })

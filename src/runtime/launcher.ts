@@ -13,6 +13,7 @@ import {
   isCmuxEnvironment,
   launchCmuxHud,
 } from './cmux.js'
+import { recordHudLaunchFailure } from './diagnostics.js'
 import { findExecutable } from './process.js'
 import {
   acquireSessionDiscoveryLock,
@@ -192,6 +193,7 @@ export async function launchCodex(options: LaunchOptions): Promise<LaunchResult>
     catch (error) {
       removeFile(bindingPath)
       const message = error instanceof Error ? error.message : String(error)
+      recordHudLaunchFailure({ cwd: options.cwd, backend: 'cmux', error: message }, env)
       process.stderr.write(`Codex HUD: cmux HUD startup failed (${message}); starting Codex without the HUD.\n`)
       return runDirect()
     }
@@ -283,6 +285,7 @@ export async function launchCodex(options: LaunchOptions): Promise<LaunchResult>
       removeFile(socketPath)
     }
     const message = error instanceof Error ? error.message : String(error)
+    recordHudLaunchFailure({ cwd: options.cwd, backend: env.TMUX ? 'tmux-existing' : 'tmux', error: message }, env)
     process.stderr.write(`Codex HUD: HUD startup failed (${message}); starting Codex directly.\n`)
     return runDirect()
   }

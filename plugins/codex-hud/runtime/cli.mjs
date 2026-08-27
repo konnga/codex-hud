@@ -1884,6 +1884,8 @@ async function runSetup(args) {
 
 //#endregion
 //#region src/runtime/cmux.ts
+const CMUX_SPLIT_RETRY_DELAY_MS = 50;
+const STALE_OWNERSHIP_AGE_MS = 5 * 6e4;
 function isCmuxEnvironment(env = process$1.env) {
 	return Boolean(env.CMUX_WORKSPACE_ID && env.CMUX_SURFACE_ID);
 }
@@ -1919,6 +1921,46 @@ function removeOwnership(filePath) {
 	try {
 		fs.rmSync(filePath, { force: true });
 	} catch {}
+}
+function pidAlive(pid) {
+	try {
+		process$1.kill(pid, 0);
+		return true;
+	} catch (error) {
+		return error.code === "EPERM";
+	}
+}
+function auditCmuxOwnership(env = process$1.env, removeStale = false, now = Date.now()) {
+	const directory = path.join(getHudStateDirectory(env), "cmux");
+	const currentWorkspace = env.CMUX_WORKSPACE_ID;
+	const currentSurface = env.CMUX_SURFACE_ID;
+	let total = 0;
+	let stale = 0;
+	let removed = 0;
+	let current = null;
+	try {
+		for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+			if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+			const filePath = path.join(directory, entry.name);
+			const ownership = readOwnership(filePath);
+			if (!ownership) continue;
+			total += 1;
+			if (ownership.workspaceId === currentWorkspace && ownership.sourceSurfaceId === currentSurface) current = ownership;
+			if (!pidAlive(ownership.ownerPid)) {
+				stale += 1;
+				if (removeStale && now - fs.statSync(filePath).mtimeMs >= STALE_OWNERSHIP_AGE_MS) {
+					removeOwnership(filePath);
+					removed += 1;
+				}
+			}
+		}
+	} catch {}
+	return {
+		total,
+		stale,
+		removed,
+		current
+	};
 }
 function replacePreviousOwnership(filePath, workspaceId, sourceSurfaceId, runner) {
 	const previous = readOwnership(filePath);
@@ -1970,6 +2012,25 @@ function requiredId(payload, key) {
 	if (typeof value !== "string" || !value) throw new Error(`cmux split did not return ${key}`);
 	return value;
 }
+function newSplit(runner, workspaceId, sourceSurfaceId) {
+	const args = [
+		"--json",
+		"--id-format",
+		"uuids",
+		"new-split",
+		"down",
+		"--workspace",
+		workspaceId,
+		"--surface",
+		sourceSurfaceId,
+		"--focus",
+		"false"
+	];
+	const first = runner.run(args);
+	if (first.status === 0) return first;
+	Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, CMUX_SPLIT_RETRY_DELAY_MS);
+	return runner.run(args);
+}
 function rendererCommand(options, paneId, sourcePaneId, workspaceId) {
 	const args = [
 		"--max-old-space-size=64",
@@ -1997,6 +2058,7 @@ function launchCmuxHud(options, runner) {
 	const workspaceId = options.env?.CMUX_WORKSPACE_ID ?? process$1.env.CMUX_WORKSPACE_ID;
 	const sourceSurfaceId = options.env?.CMUX_SURFACE_ID ?? process$1.env.CMUX_SURFACE_ID;
 	if (!workspaceId || !sourceSurfaceId) throw new Error("cmux workspace or surface context is unavailable");
+	auditCmuxOwnership(options.env, true);
 	const identified = runner.run([
 		"--json",
 		"--id-format",
@@ -2018,19 +2080,7 @@ function launchCmuxHud(options, runner) {
 	if (typeof sourcePaneId !== "string" || !sourcePaneId) throw new Error("cmux identify did not return caller.pane_id");
 	const ownershipPath = cmuxHudOwnershipPath(workspaceId, sourceSurfaceId, options.env);
 	replacePreviousOwnership(ownershipPath, workspaceId, sourceSurfaceId, runner);
-	const split = runner.run([
-		"--json",
-		"--id-format",
-		"uuids",
-		"new-split",
-		"down",
-		"--workspace",
-		workspaceId,
-		"--surface",
-		sourceSurfaceId,
-		"--focus",
-		"false"
-	]);
+	const split = newSplit(runner, workspaceId, sourceSurfaceId);
 	ensureSuccess$1(split, "cmux new-split");
 	const payload = creationPayload(split);
 	const handle = {
@@ -2083,6 +2133,46 @@ function closeCmuxHud(handle, runner) {
 //#region src/runtime/command.ts
 function resolveHubCommand(args) {
 	return args[0] ?? "start";
+}
+
+//#endregion
+//#region src/runtime/diagnostics.ts
+const FAILURE_LOG = "launch-errors.jsonl";
+function failurePath(env = process$1.env) {
+	return path.join(getHudStateDirectory(env), FAILURE_LOG);
+}
+function recordHudLaunchFailure(failure, env = process$1.env) {
+	try {
+		const filePath = failurePath(env);
+		fs.mkdirSync(path.dirname(filePath), {
+			recursive: true,
+			mode: 448
+		});
+		const line = `${JSON.stringify({
+			...failure,
+			timestamp: (/* @__PURE__ */ new Date()).toISOString()
+		})}\n`;
+		let previous = "";
+		try {
+			previous = fs.readFileSync(filePath, "utf8");
+		} catch {}
+		const content = `${previous}${line}`;
+		fs.writeFileSync(filePath, content.slice(-262144), {
+			encoding: "utf8",
+			mode: 384
+		});
+		fs.chmodSync(filePath, 384);
+	} catch {}
+}
+function readLatestHudLaunchFailure(env = process$1.env) {
+	try {
+		const lines = fs.readFileSync(failurePath(env), "utf8").trim().split("\n").reverse();
+		for (const line of lines) try {
+			const value = JSON.parse(line);
+			if (typeof value.timestamp === "string" && typeof value.cwd === "string" && typeof value.backend === "string" && typeof value.error === "string") return value;
+		} catch {}
+	} catch {}
+	return null;
 }
 
 //#endregion
@@ -2441,6 +2531,11 @@ async function launchCodex(options) {
 		} catch (error) {
 			removeFile(bindingPath);
 			const message = error instanceof Error ? error.message : String(error);
+			recordHudLaunchFailure({
+				cwd: options.cwd,
+				backend: "cmux",
+				error: message
+			}, env);
 			process$1.stderr.write(`Codex HUD: cmux HUD startup failed (${message}); starting Codex without the HUD.\n`);
 			return runDirect();
 		}
@@ -2528,6 +2623,11 @@ async function launchCodex(options) {
 		removeFile(bindingPath);
 		if (socketPath) removeFile(socketPath);
 		const message = error instanceof Error ? error.message : String(error);
+		recordHudLaunchFailure({
+			cwd: options.cwd,
+			backend: env.TMUX ? "tmux-existing" : "tmux",
+			error: message
+		}, env);
 		process$1.stderr.write(`Codex HUD: HUD startup failed (${message}); starting Codex directly.\n`);
 		return runDirect();
 	}
@@ -2763,6 +2863,7 @@ async function main(args = process$1.argv.slice(2)) {
 		const tmux = findExecutable("tmux");
 		const cmuxContext = isCmuxEnvironment();
 		const cmuxHealthy = Boolean(cmux && cmuxContext && cmuxAvailable(createCmuxRunner(cmux)));
+		const cmuxOwnership = auditCmuxOwnership();
 		const backend = process$1.env.TMUX ? "tmux" : cmuxContext ? cmuxHealthy ? "cmux" : "none" : tmux ? "tmux" : "none";
 		const cliPath = path.resolve(process$1.argv[1]);
 		const report = {
@@ -2771,6 +2872,7 @@ async function main(args = process$1.argv.slice(2)) {
 			cmux,
 			cmuxContext,
 			cmuxHealthy,
+			cmuxOwnership,
 			tmux,
 			backend,
 			cwd,
@@ -2793,7 +2895,8 @@ async function main(args = process$1.argv.slice(2)) {
 				columns: process$1.stdout.columns ?? null,
 				rows: process$1.stdout.rows ?? null
 			},
-			shimRecursion: codex === cliPath
+			shimRecursion: codex === cliPath,
+			latestLaunchFailure: readLatestHudLaunchFailure()
 		};
 		if (args.includes("--json")) console.log(JSON.stringify(report, null, 2));
 		else {
@@ -2802,12 +2905,17 @@ async function main(args = process$1.argv.slice(2)) {
 			console.log(`cmux: ${report.cmux ?? "not found"}${report.cmuxContext ? report.cmuxHealthy ? " (ready)" : " (socket unavailable)" : ""}`);
 			console.log(`tmux: ${report.tmux ?? "not found"}`);
 			console.log(`Backend: ${report.backend}`);
+			console.log(`cmux HUD ownership: ${String(report.cmuxOwnership.total)} total, ${String(report.cmuxOwnership.stale)} stale${report.cmuxOwnership.current ? " · current surface owned" : ""}`);
 			console.log(`Config: ${report.configPath}`);
 			console.log(`Session: ${report.activeSession ?? "not found"}`);
 			console.log(`Plugin: ${report.pluginManifest ?? "not installed"}`);
 			console.log(`Session parse: ${report.sessionParsed ? "ok" : "not ready"}`);
 			console.log(`Session endpoint: ${report.sessionEndpoint ?? "unknown"}${report.sessionEndpointSource ? ` (${report.sessionEndpointSource})` : ""}`);
 			if (report.shimRecursion) console.log("Warning: Codex executable resolves to the Codex HUD CLI itself.");
+			if (report.latestLaunchFailure) {
+				console.log(`Last HUD startup failure: ${report.latestLaunchFailure.backend} · ${report.latestLaunchFailure.error}`);
+				console.log(`  ${report.latestLaunchFailure.cwd} · ${report.latestLaunchFailure.timestamp}`);
+			}
 		}
 		return;
 	}

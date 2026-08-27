@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## 0.7.1 - 2026-08-27
+
+### Fixed
+
+- Retried transient cmux split failures once, persisted HUD startup failures for later diagnosis, reported the latest failure and cmux ownership health through `doctor`, and cleaned up old ownership metadata after its owner process exits.
+
+---
+
+### 修复
+
+- cmux 分屏瞬时失败时自动重试一次；HUD 启动失败会持久化供后续诊断；`doctor` 现在报告最近失败与 cmux ownership 健康状态，并清理 owner 进程退出后的旧 ownership 元数据。
+
 ## 0.7.0 - 2026-08-27
 
 ### Added

@@ -30,6 +30,16 @@ export interface CmuxHudHandle {
   ownershipPath: string
 }
 
+const CMUX_SPLIT_RETRY_DELAY_MS = 50
+const STALE_OWNERSHIP_AGE_MS = 5 * 60_000
+
+export interface CmuxOwnershipAudit {
+  total: number
+  stale: number
+  removed: number
+  current: CmuxHudOwnership | null
+}
+
 interface CmuxHudOwnership {
   version: 1
   workspaceId: string
@@ -118,6 +128,58 @@ function removeOwnership(filePath: string): void {
   }
 }
 
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  }
+  catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM'
+  }
+}
+
+export function auditCmuxOwnership(
+  env: NodeJS.ProcessEnv = process.env,
+  removeStale = false,
+  now = Date.now(),
+): CmuxOwnershipAudit {
+  const directory = path.join(getHudStateDirectory(env), 'cmux')
+  const currentWorkspace = env.CMUX_WORKSPACE_ID
+  const currentSurface = env.CMUX_SURFACE_ID
+  let total = 0
+  let stale = 0
+  let removed = 0
+  let current: CmuxHudOwnership | null = null
+  try {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith('.json')) {
+        continue
+      }
+      const filePath = path.join(directory, entry.name)
+      const ownership = readOwnership(filePath)
+      if (!ownership) {
+        continue
+      }
+      total += 1
+      if (ownership.workspaceId === currentWorkspace && ownership.sourceSurfaceId === currentSurface) {
+        current = ownership
+      }
+      const isStale = !pidAlive(ownership.ownerPid)
+      if (isStale) {
+        stale += 1
+        if (removeStale && now - fs.statSync(filePath).mtimeMs >= STALE_OWNERSHIP_AGE_MS) {
+          removeOwnership(filePath)
+          removed += 1
+        }
+      }
+    }
+  }
+  catch {
+    // Missing or concurrently changing ownership state is harmless.
+  }
+  return { total, stale, removed, current }
+}
+
 function replacePreviousOwnership(
   filePath: string,
   workspaceId: string,
@@ -187,6 +249,28 @@ function requiredId(payload: CmuxCreationPayload, key: keyof CmuxCreationPayload
   return value
 }
 
+function newSplit(runner: CmuxRunner, workspaceId: string, sourceSurfaceId: string): SpawnSyncReturns<string> {
+  const args = [
+    '--json',
+    '--id-format',
+    'uuids',
+    'new-split',
+    'down',
+    '--workspace',
+    workspaceId,
+    '--surface',
+    sourceSurfaceId,
+    '--focus',
+    'false',
+  ]
+  const first = runner.run(args)
+  if (first.status === 0) {
+    return first
+  }
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, CMUX_SPLIT_RETRY_DELAY_MS)
+  return runner.run(args)
+}
+
 function rendererCommand(
   options: CmuxHudOptions,
   paneId: string,
@@ -227,6 +311,7 @@ export function launchCmuxHud(
   if (!workspaceId || !sourceSurfaceId) {
     throw new Error('cmux workspace or surface context is unavailable')
   }
+  auditCmuxOwnership(options.env, true)
   const identified = runner.run([
     '--json',
     '--id-format',
@@ -251,19 +336,7 @@ export function launchCmuxHud(
   }
   const ownershipPath = cmuxHudOwnershipPath(workspaceId, sourceSurfaceId, options.env)
   replacePreviousOwnership(ownershipPath, workspaceId, sourceSurfaceId, runner)
-  const split = runner.run([
-    '--json',
-    '--id-format',
-    'uuids',
-    'new-split',
-    'down',
-    '--workspace',
-    workspaceId,
-    '--surface',
-    sourceSurfaceId,
-    '--focus',
-    'false',
-  ])
+  const split = newSplit(runner, workspaceId, sourceSurfaceId)
   ensureSuccess(split, 'cmux new-split')
   const payload = creationPayload(split)
   const handle: CmuxHudHandle = {
