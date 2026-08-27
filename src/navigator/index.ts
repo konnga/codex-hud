@@ -1,7 +1,8 @@
 import type { Language } from '../types/config.js'
 import type { ConversationTurn } from '../types/state.js'
 import sliceAnsi from 'slice-ansi'
-import { safeText, truncateAnsi, visibleWidth } from '../render/format.js'
+import { truncateAnsi, visibleWidth } from '../render/format.js'
+import { HUD_VERSION } from '../version.js'
 
 export interface NavigatorState {
   active: boolean
@@ -152,6 +153,70 @@ function padLine(value: string, width: number): string {
   return `${truncated}${' '.repeat(Math.max(0, width - visibleWidth(truncated)))}`
 }
 
+function renderListItem(
+  turn: ConversationTurn,
+  index: number,
+  selected: boolean,
+  width: number,
+  color: boolean,
+): string[] {
+  const prefix = `#${String(index + 1).padStart(2, '0')} ${timeLabel(turn.startedAt)} `
+  const prefixWidth = visibleWidth(prefix)
+  const messageWidth = Math.max(1, width - prefixWidth)
+  const indent = ' '.repeat(prefixWidth)
+  return wrapText(turn.userMessage, messageWidth).map((line, lineIndex) => {
+    const content = `${lineIndex === 0 ? prefix : indent}${line}`
+    const row = padLine(content, width)
+    return selected ? inverse(row, color) : row
+  })
+}
+
+function visibleListItems(
+  items: Array<{ index: number, lines: string[] }>,
+  selectedPosition: number,
+  lineBudget: number,
+): string[] {
+  const selected = items[selectedPosition]
+  if (!selected) {
+    return []
+  }
+  if (selected.lines.length >= lineBudget) {
+    return selected.lines.slice(0, lineBudget)
+  }
+
+  let start = selectedPosition
+  let end = selectedPosition + 1
+  let used = selected.lines.length
+  const beforeTarget = Math.floor((lineBudget - used) / 2)
+  let beforeUsed = 0
+  while (start > 0) {
+    const candidate = items[start - 1]
+    if (!candidate || beforeUsed + candidate.lines.length > beforeTarget) {
+      break
+    }
+    start -= 1
+    beforeUsed += candidate.lines.length
+    used += candidate.lines.length
+  }
+  while (end < items.length) {
+    const candidate = items[end]
+    if (!candidate || used + candidate.lines.length > lineBudget) {
+      break
+    }
+    end += 1
+    used += candidate.lines.length
+  }
+  while (start > 0) {
+    const candidate = items[start - 1]
+    if (!candidate || used + candidate.lines.length > lineBudget) {
+      break
+    }
+    start -= 1
+    used += candidate.lines.length
+  }
+  return items.slice(start, end).flatMap(item => item.lines).slice(0, lineBudget)
+}
+
 function timeLabel(date: Date): string {
   return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
@@ -162,7 +227,7 @@ function navigatorHeader(
   options: NavigatorRenderOptions,
 ): string {
   if (!options.sessionId) {
-    return title
+    return `${title} · HUD v${HUD_VERSION}`
   }
   const labels = LABELS[options.language]
   const copy = state.copyStatus === 'copied'
@@ -170,7 +235,18 @@ function navigatorHeader(
     : state.copyStatus === 'failed'
       ? labels.copyFailed
       : labels.copy
-  return `${options.sessionId} [${copy}] · ${title}`
+  return `${options.sessionId} [${copy}] · ${title} · HUD v${HUD_VERSION}`
+}
+
+function fitNavigatorHeader(value: string, width: number): string {
+  if (visibleWidth(value) <= width) {
+    return value
+  }
+  const versionSeparator = ` · HUD v${HUD_VERSION}`
+  const withoutVersion = value.endsWith(versionSeparator)
+    ? value.slice(0, -versionSeparator.length)
+    : value
+  return truncateAnsi(withoutVersion, width)
 }
 
 function renderList(
@@ -191,28 +267,21 @@ function renderList(
     ? `${labels.search}: ${state.query}${state.searchMode ? '█' : ''}`
     : ''
   const reserved = search ? 3 : 2
-  const rowCount = Math.max(1, height - reserved)
+  const lineBudget = Math.max(1, height - reserved)
   const selectedPosition = Math.max(0, matches.indexOf(state.selectedIndex))
-  const start = Math.max(0, Math.min(
-    selectedPosition - Math.floor(rowCount / 2),
-    matches.length - rowCount,
-  ))
-  const visible = matches.slice(start, start + rowCount)
-  const lines = [truncateAnsi(header, width)]
+  const lines = [fitNavigatorHeader(header, width)]
   if (search) {
     lines.push(truncateAnsi(search, width))
   }
-  if (visible.length === 0) {
+  if (matches.length === 0) {
     lines.push(labels.noMatches)
   }
   else {
-    for (const index of visible) {
-      const turn = turns[index]
-      const prefix = `#${String(index + 1).padStart(2, '0')} ${timeLabel(turn.startedAt)} `
-      const summary = `${prefix}${safeText(turn.userMessage)}`
-      const row = padLine(summary, width)
-      lines.push(index === state.selectedIndex ? inverse(row, options.color) : row)
-    }
+    const items = matches.map(index => ({
+      index,
+      lines: renderListItem(turns[index], index, index === state.selectedIndex, width, options.color),
+    }))
+    lines.push(...visibleListItems(items, selectedPosition, lineBudget))
   }
   lines.push(truncateAnsi(labels.listHelp, width))
   return lines.slice(0, height)
@@ -248,7 +317,7 @@ function renderDetail(
     options,
   )
   return [
-    truncateAnsi(header, width),
+    fitNavigatorHeader(header, width),
     ...body.slice(scroll, scroll + bodyHeight).map(line => truncateAnsi(line, width)),
     truncateAnsi(labels.detailHelp, width),
   ].slice(0, height)

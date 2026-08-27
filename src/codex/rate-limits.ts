@@ -74,7 +74,12 @@ export function normalizeRateLimits(raw: RawRateLimits | null | undefined): Usag
     return null
   }
   const credits = raw.credits && typeof raw.credits === 'object' ? raw.credits : null
-  const balance = credits && typeof credits.balance === 'string' ? credits.balance : null
+  const rawBalance = credits && typeof credits.balance === 'string' ? credits.balance.trim() : ''
+  const balance = credits
+    && rawBalance
+    && !(credits.has_credits === false && rawBalance === '0')
+    ? rawBalance
+    : null
   return {
     primary: normalizeWindow(raw.primary, 'limit'),
     secondary: normalizeWindow(raw.secondary, 'limit'),

@@ -2,6 +2,28 @@
 
 ## [Unreleased]
 
+## 0.7.0 - 2026-08-27
+
+### Added
+
+- Added the Codex HUD version to conversation navigator headers, omitting it first when a narrow terminal cannot fit the full title.
+
+### Fixed
+
+- Stopped rendering the literal `0` credit balance emitted for ChatGPT accounts that do not have purchased credits.
+- Allowed multiline user messages to wrap in the conversation navigator list instead of collapsing and truncating them to one row.
+
+---
+
+### 新增
+
+- 会话历史导航标题现在显示 Codex HUD 版本；终端较窄时会优先省略版本号。
+
+### 修复
+
+- ChatGPT 账户未购买额外 credits 时，不再显示服务端返回的字面量余额 `0`。
+- 会话历史导航列表现在支持用户消息按原始换行和终端宽度折行，不再强制压缩并截断为单行。
+
 ## 0.6.0 - 2026-08-23
 
 ### Added

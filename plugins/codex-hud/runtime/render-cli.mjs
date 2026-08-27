@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { D as readConfiguredExternalUsage, E as readCachedConfiguredExternalUsage, M as resolveProcessEndpoint, N as resolveProcessSession, O as findActiveSession, P as resolveSessionEndpoint, T as readLatestLoggedRateLimits, _ as visibleWidth, b as reloadConfig, c as desiredPaneHeight, d as resizeCmuxPane, f as resizeHudPane, g as truncateAnsi, h as safeText, j as isOfficialOpenAIEndpoint, k as RolloutParser, l as hudRenderHeight, m as renderHud, o as writeSessionBinding, p as settleCmuxPaneHeight, r as readSessionBinding, s as buildHudState, u as readCmuxPaneGeometry, v as sliceAnsi, y as loadConfig } from "./session-binding-DlCrlHRb.mjs";
+import { A as isOfficialOpenAIEndpoint, D as findActiveSession, E as readConfiguredExternalUsage, M as resolveProcessSession, N as resolveSessionEndpoint, O as RolloutParser, T as readCachedConfiguredExternalUsage, _ as sliceAnsi, c as desiredPaneHeight, d as resizeCmuxPane, f as resizeHudPane, g as visibleWidth, h as truncateAnsi, j as resolveProcessEndpoint, l as hudRenderHeight, m as renderHud, o as writeSessionBinding, p as settleCmuxPaneHeight, r as readSessionBinding, s as buildHudState, u as readCmuxPaneGeometry, v as loadConfig, w as readLatestLoggedRateLimits, y as reloadConfig } from "./session-binding-CQCWFJCt.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -160,6 +160,14 @@ function copyImagePath(image) {
 }
 
 //#endregion
+//#region package.json
+var version = "0.7.0";
+
+//#endregion
+//#region src/version.ts
+const HUD_VERSION = version;
+
+//#endregion
 //#region src/navigator/index.ts
 const LABELS = {
 	"en": {
@@ -272,6 +280,46 @@ function padLine(value, width) {
 	const truncated = truncateAnsi(value, width);
 	return `${truncated}${" ".repeat(Math.max(0, width - visibleWidth(truncated)))}`;
 }
+function renderListItem(turn, index, selected, width, color) {
+	const prefix = `#${String(index + 1).padStart(2, "0")} ${timeLabel(turn.startedAt)} `;
+	const prefixWidth = visibleWidth(prefix);
+	const messageWidth = Math.max(1, width - prefixWidth);
+	const indent = " ".repeat(prefixWidth);
+	return wrapText(turn.userMessage, messageWidth).map((line, lineIndex) => {
+		const row = padLine(`${lineIndex === 0 ? prefix : indent}${line}`, width);
+		return selected ? inverse(row, color) : row;
+	});
+}
+function visibleListItems(items, selectedPosition, lineBudget) {
+	const selected = items[selectedPosition];
+	if (!selected) return [];
+	if (selected.lines.length >= lineBudget) return selected.lines.slice(0, lineBudget);
+	let start = selectedPosition;
+	let end = selectedPosition + 1;
+	let used = selected.lines.length;
+	const beforeTarget = Math.floor((lineBudget - used) / 2);
+	let beforeUsed = 0;
+	while (start > 0) {
+		const candidate = items[start - 1];
+		if (!candidate || beforeUsed + candidate.lines.length > beforeTarget) break;
+		start -= 1;
+		beforeUsed += candidate.lines.length;
+		used += candidate.lines.length;
+	}
+	while (end < items.length) {
+		const candidate = items[end];
+		if (!candidate || used + candidate.lines.length > lineBudget) break;
+		end += 1;
+		used += candidate.lines.length;
+	}
+	while (start > 0) {
+		const candidate = items[start - 1];
+		if (!candidate || used + candidate.lines.length > lineBudget) break;
+		start -= 1;
+		used += candidate.lines.length;
+	}
+	return items.slice(start, end).flatMap((item) => item.lines).slice(0, lineBudget);
+}
 function timeLabel(date) {
 	return date.toLocaleTimeString([], {
 		hour: "2-digit",
@@ -279,10 +327,15 @@ function timeLabel(date) {
 	});
 }
 function navigatorHeader(title, state, options) {
-	if (!options.sessionId) return title;
+	if (!options.sessionId) return `${title} · HUD v${HUD_VERSION}`;
 	const labels = LABELS[options.language];
 	const copy = state.copyStatus === "copied" ? labels.copied : state.copyStatus === "failed" ? labels.copyFailed : labels.copy;
-	return `${options.sessionId} [${copy}] · ${title}`;
+	return `${options.sessionId} [${copy}] · ${title} · HUD v${HUD_VERSION}`;
+}
+function fitNavigatorHeader(value, width) {
+	if (visibleWidth(value) <= width) return value;
+	const versionSeparator = ` · HUD v${HUD_VERSION}`;
+	return truncateAnsi(value.endsWith(versionSeparator) ? value.slice(0, -versionSeparator.length) : value, width);
 }
 function renderList(turns, state, options) {
 	const labels = LABELS[options.language];
@@ -291,17 +344,17 @@ function renderList(turns, state, options) {
 	const matches = normalizeNavigatorSelection(state, turns);
 	const header = navigatorHeader(`${labels.title} · ${String(turns.length)} ${labels.turns}`, state, options);
 	const search = state.searchMode || state.query ? `${labels.search}: ${state.query}${state.searchMode ? "█" : ""}` : "";
-	const rowCount = Math.max(1, height - (search ? 3 : 2));
+	const lineBudget = Math.max(1, height - (search ? 3 : 2));
 	const selectedPosition = Math.max(0, matches.indexOf(state.selectedIndex));
-	const start = Math.max(0, Math.min(selectedPosition - Math.floor(rowCount / 2), matches.length - rowCount));
-	const visible = matches.slice(start, start + rowCount);
-	const lines = [truncateAnsi(header, width)];
+	const lines = [fitNavigatorHeader(header, width)];
 	if (search) lines.push(truncateAnsi(search, width));
-	if (visible.length === 0) lines.push(labels.noMatches);
-	else for (const index of visible) {
-		const turn = turns[index];
-		const row = padLine(`${`#${String(index + 1).padStart(2, "0")} ${timeLabel(turn.startedAt)} `}${safeText(turn.userMessage)}`, width);
-		lines.push(index === state.selectedIndex ? inverse(row, options.color) : row);
+	if (matches.length === 0) lines.push(labels.noMatches);
+	else {
+		const items = matches.map((index) => ({
+			index,
+			lines: renderListItem(turns[index], index, index === state.selectedIndex, width, options.color)
+		}));
+		lines.push(...visibleListItems(items, selectedPosition, lineBudget));
 	}
 	lines.push(truncateAnsi(labels.listHelp, width));
 	return lines.slice(0, height);
@@ -327,7 +380,7 @@ function renderDetail(turns, state, options) {
 	const scroll = Math.min(maximumScroll, Math.max(0, state.detailScroll));
 	state.detailScroll = scroll;
 	return [
-		truncateAnsi(navigatorHeader(`${labels.title} · #${String(state.selectedIndex + 1)}/${String(turns.length)}`, state, options), width),
+		fitNavigatorHeader(navigatorHeader(`${labels.title} · #${String(state.selectedIndex + 1)}/${String(turns.length)}`, state, options), width),
 		...body.slice(scroll, scroll + bodyHeight).map((line) => truncateAnsi(line, width)),
 		truncateAnsi(labels.detailHelp, width)
 	].slice(0, height);

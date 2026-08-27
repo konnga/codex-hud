@@ -23,6 +23,32 @@ describe('normalizeRateLimits', () => {
     expect(usage?.secondary?.label).toBe('1w')
   })
 
+  it('does not display the zero balance sent for accounts without credits', () => {
+    const usage = normalizeRateLimits({
+      primary: { used_percent: 0, window_minutes: 300 },
+      credits: { has_credits: false, unlimited: false, balance: '0' },
+      plan_type: 'pro',
+    })
+
+    expect(usage).toMatchObject({
+      primary: { label: '5h', percent: 0 },
+      planType: 'pro',
+      balanceLabel: null,
+    })
+  })
+
+  it('keeps an available credit balance', () => {
+    expect(normalizeRateLimits({
+      credits: { has_credits: true, unlimited: false, balance: '$12.50' },
+    })?.balanceLabel).toBe('$12.50')
+  })
+
+  it('keeps nonzero balances from legacy events without a credits flag', () => {
+    expect(normalizeRateLimits({
+      credits: { balance: '$3.00' },
+    })?.balanceLabel).toBe('$3.00')
+  })
+
   it('merges account updates by duration instead of positional slot', () => {
     const current: UsageData = {
       primary: { label: '5h', percent: 25, resetAt: null, windowMinutes: 300 },

@@ -433,7 +433,8 @@ function normalizeWindow(value, fallbackLabel, individual = false) {
 function normalizeRateLimits(raw) {
 	if (!raw) return null;
 	const credits = raw.credits && typeof raw.credits === "object" ? raw.credits : null;
-	const balance = credits && typeof credits.balance === "string" ? credits.balance : null;
+	const rawBalance = credits && typeof credits.balance === "string" ? credits.balance.trim() : "";
+	const balance = credits && rawBalance && !(credits.has_credits === false && rawBalance === "0") ? rawBalance : null;
 	return {
 		primary: normalizeWindow(raw.primary, "limit"),
 		secondary: normalizeWindow(raw.secondary, "limit"),
@@ -5971,5 +5972,5 @@ async function waitForNewRootSession(cwd, snapshot, codexHome = getCodexHome(), 
 }
 
 //#endregion
-export { findCodexLogDatabase as A, DEFAULT_CONFIG as C, readConfiguredExternalUsage as D, readCachedConfiguredExternalUsage as E, getCodexHome as F, getConfigPath as I, getHudStateDirectory as L, resolveProcessEndpoint as M, resolveProcessSession as N, findActiveSession as O, resolveSessionEndpoint as P, getLegacyStateDirectory as R, rawConfigVersion as S, readLatestLoggedRateLimits as T, visibleWidth as _, waitForNewRootSession as a, reloadConfig as b, desiredPaneHeight as c, resizeCmuxPane as d, resizeHudPane as f, truncateAnsi as g, safeText as h, snapshotRootSessions as i, isOfficialOpenAIEndpoint as j, RolloutParser as k, hudRenderHeight as l, renderHud as m, createSessionBindingPath as n, writeSessionBinding as o, settleCmuxPaneHeight as p, readSessionBinding as r, buildHudState as s, acquireSessionDiscoveryLock as t, readCmuxPaneGeometry as u, sliceAnsi as v, DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY as w, applyConfigMigrations as x, loadConfig as y };
-//# sourceMappingURL=session-binding-DlCrlHRb.mjs.map
+export { isOfficialOpenAIEndpoint as A, DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY as C, findActiveSession as D, readConfiguredExternalUsage as E, getConfigPath as F, getHudStateDirectory as I, getLegacyStateDirectory as L, resolveProcessSession as M, resolveSessionEndpoint as N, RolloutParser as O, getCodexHome as P, DEFAULT_CONFIG as S, readCachedConfiguredExternalUsage as T, sliceAnsi as _, waitForNewRootSession as a, applyConfigMigrations as b, desiredPaneHeight as c, resizeCmuxPane as d, resizeHudPane as f, visibleWidth as g, truncateAnsi as h, snapshotRootSessions as i, resolveProcessEndpoint as j, findCodexLogDatabase as k, hudRenderHeight as l, renderHud as m, createSessionBindingPath as n, writeSessionBinding as o, settleCmuxPaneHeight as p, readSessionBinding as r, buildHudState as s, acquireSessionDiscoveryLock as t, readCmuxPaneGeometry as u, loadConfig as v, readLatestLoggedRateLimits as w, rawConfigVersion as x, reloadConfig as y };
+//# sourceMappingURL=session-binding-CQCWFJCt.mjs.map
