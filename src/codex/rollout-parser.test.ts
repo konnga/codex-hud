@@ -123,6 +123,137 @@ describe('rollout parser', () => {
     expect(parser.parse().compactCount).toBe(2)
   })
 
+  it('preserves complete rate-limit windows across sparse token updates', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-rollout-usage-'))
+    temporaryDirectories.push(directory)
+    const filePath = path.join(directory, 'rollout.jsonl')
+    fs.writeFileSync(filePath, [
+      JSON.stringify({
+        timestamp: '2026-07-16T08:00:00Z',
+        type: 'session_meta',
+        payload: { session_id: 'usage-session', cwd: directory },
+      }),
+      JSON.stringify({
+        timestamp: '2026-07-16T08:00:01Z',
+        type: 'event_msg',
+        payload: {
+          type: 'token_count',
+          rate_limits: {
+            primary: { used_percent: 25, window_minutes: 300 },
+            secondary: { used_percent: 12, window_minutes: 10_080 },
+            plan_type: 'prolite',
+          },
+        },
+      }),
+      '',
+    ].join('\n'), 'utf8')
+    const parser = new RolloutParser()
+    parser.setFile(filePath)
+    expect(parser.parse().usage).toMatchObject({
+      primary: { label: '5h', percent: 25 },
+      secondary: { label: '1w', percent: 12 },
+      planType: 'prolite',
+    })
+
+    fs.appendFileSync(filePath, `${JSON.stringify({
+      timestamp: '2026-07-16T08:00:02Z',
+      type: 'event_msg',
+      payload: {
+        type: 'token_count',
+        rate_limits: {
+          primary: { used_percent: 26, window_minutes: 300 },
+          secondary: null,
+          plan_type: null,
+        },
+      },
+    })}\n`, 'utf8')
+    expect(parser.parse().usage).toMatchObject({
+      primary: { label: '5h', percent: 26 },
+      secondary: { label: '1w', percent: 12 },
+      planType: 'prolite',
+    })
+
+    fs.appendFileSync(filePath, `${JSON.stringify({
+      timestamp: '2026-07-16T08:00:03Z',
+      type: 'event_msg',
+      payload: {
+        type: 'token_count',
+        rate_limits: {
+          primary: null,
+          secondary: null,
+          plan_type: null,
+        },
+      },
+    })}\n`, 'utf8')
+    expect(parser.parse().usage).toMatchObject({
+      primary: { label: '5h', percent: 26 },
+      secondary: { label: '1w', percent: 12 },
+      planType: 'prolite',
+    })
+  })
+
+  it('updates a Pro-style weekly-only limit without losing it on an empty event', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-rollout-weekly-'))
+    temporaryDirectories.push(directory)
+    const filePath = path.join(directory, 'rollout.jsonl')
+    fs.writeFileSync(filePath, [
+      JSON.stringify({
+        timestamp: '2026-07-16T08:00:00Z',
+        type: 'session_meta',
+        payload: { session_id: 'weekly-session', cwd: directory },
+      }),
+      JSON.stringify({
+        timestamp: '2026-07-16T08:00:01Z',
+        type: 'event_msg',
+        payload: {
+          type: 'token_count',
+          rate_limits: {
+            primary: { used_percent: 12, window_minutes: 10_080 },
+            secondary: null,
+            plan_type: 'pro',
+          },
+        },
+      }),
+      '',
+    ].join('\n'), 'utf8')
+    const parser = new RolloutParser()
+    parser.setFile(filePath)
+    expect(parser.parse().usage).toMatchObject({
+      primary: { label: '1w', percent: 12 },
+      secondary: null,
+      planType: 'pro',
+    })
+
+    fs.appendFileSync(filePath, [
+      JSON.stringify({
+        timestamp: '2026-07-16T08:01:00Z',
+        type: 'event_msg',
+        payload: {
+          type: 'token_count',
+          rate_limits: {
+            primary: { used_percent: 13, window_minutes: 10_080 },
+            secondary: null,
+            plan_type: null,
+          },
+        },
+      }),
+      JSON.stringify({
+        timestamp: '2026-07-16T08:02:00Z',
+        type: 'event_msg',
+        payload: {
+          type: 'token_count',
+          rate_limits: { primary: null, secondary: null, plan_type: null },
+        },
+      }),
+      '',
+    ].join('\n'), 'utf8')
+    expect(parser.parse().usage).toMatchObject({
+      primary: { label: '1w', percent: 13 },
+      secondary: null,
+      planType: 'pro',
+    })
+  })
+
   it('records MCP servers from the event Codex actually writes', () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-rollout-'))
     temporaryDirectories.push(directory)

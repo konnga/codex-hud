@@ -810,7 +810,8 @@ var RolloutParser = class {
 			this.latestTokenUsage = payload.info ?? this.latestTokenUsage;
 			this.state.context = calculateContextUsage(this.latestTokenUsage?.last_token_usage, this.latestTokenUsage?.model_context_window);
 			this.state.sessionTokens = toSessionTokens(this.latestTokenUsage?.total_token_usage);
-			this.state.usage = normalizeRateLimits(payload.rate_limits) ?? this.state.usage;
+			const observedUsage = normalizeRateLimits(payload.rate_limits);
+			this.state.usage = mergeUsageData(this.state.usage, observedUsage);
 			return;
 		}
 		if (payload.type === "plan_update") {
@@ -5973,4 +5974,4 @@ async function waitForNewRootSession(cwd, snapshot, codexHome = getCodexHome(), 
 
 //#endregion
 export { isOfficialOpenAIEndpoint as A, DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY as C, findActiveSession as D, readConfiguredExternalUsage as E, getConfigPath as F, getHudStateDirectory as I, getLegacyStateDirectory as L, resolveProcessSession as M, resolveSessionEndpoint as N, RolloutParser as O, getCodexHome as P, DEFAULT_CONFIG as S, readCachedConfiguredExternalUsage as T, sliceAnsi as _, waitForNewRootSession as a, applyConfigMigrations as b, desiredPaneHeight as c, resizeCmuxPane as d, resizeHudPane as f, visibleWidth as g, truncateAnsi as h, snapshotRootSessions as i, resolveProcessEndpoint as j, findCodexLogDatabase as k, hudRenderHeight as l, renderHud as m, createSessionBindingPath as n, writeSessionBinding as o, settleCmuxPaneHeight as p, readSessionBinding as r, buildHudState as s, acquireSessionDiscoveryLock as t, readCmuxPaneGeometry as u, loadConfig as v, readLatestLoggedRateLimits as w, rawConfigVersion as x, reloadConfig as y };
-//# sourceMappingURL=session-binding-CQCWFJCt.mjs.map
+//# sourceMappingURL=session-binding-DEHWeSAS.mjs.map

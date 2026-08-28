@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## 0.7.2 - 2026-08-28
+
+### Fixed
+
+- Kept the most recent ChatGPT subscription usage windows and plan metadata when later rollout token-count events contain partial or empty rate-limit data, so displayed weekly usage no longer disappears between updates.
+
+---
+
+### 修复
+
+- 后续 rollout token-count 事件只包含部分或空的 rate-limit 数据时，继续保留最近一次的 ChatGPT 订阅额度窗口和套餐信息，避免周额度在更新间隙消失。
+
 ## 0.7.1 - 2026-08-27
 
 ### Fixed

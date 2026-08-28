@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { A as isOfficialOpenAIEndpoint, D as findActiveSession, E as readConfiguredExternalUsage, M as resolveProcessSession, N as resolveSessionEndpoint, O as RolloutParser, T as readCachedConfiguredExternalUsage, _ as sliceAnsi, c as desiredPaneHeight, d as resizeCmuxPane, f as resizeHudPane, g as visibleWidth, h as truncateAnsi, j as resolveProcessEndpoint, l as hudRenderHeight, m as renderHud, o as writeSessionBinding, p as settleCmuxPaneHeight, r as readSessionBinding, s as buildHudState, u as readCmuxPaneGeometry, v as loadConfig, w as readLatestLoggedRateLimits, y as reloadConfig } from "./session-binding-CQCWFJCt.mjs";
+import { A as isOfficialOpenAIEndpoint, D as findActiveSession, E as readConfiguredExternalUsage, M as resolveProcessSession, N as resolveSessionEndpoint, O as RolloutParser, T as readCachedConfiguredExternalUsage, _ as sliceAnsi, c as desiredPaneHeight, d as resizeCmuxPane, f as resizeHudPane, g as visibleWidth, h as truncateAnsi, j as resolveProcessEndpoint, l as hudRenderHeight, m as renderHud, o as writeSessionBinding, p as settleCmuxPaneHeight, r as readSessionBinding, s as buildHudState, u as readCmuxPaneGeometry, v as loadConfig, w as readLatestLoggedRateLimits, y as reloadConfig } from "./session-binding-DEHWeSAS.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -161,7 +161,7 @@ function copyImagePath(image) {
 
 //#endregion
 //#region package.json
-var version = "0.7.1";
+var version = "0.7.2";
 
 //#endregion
 //#region src/version.ts
