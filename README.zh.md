@@ -10,7 +10,7 @@ Full 预设会根据当前会话的可用数据，展示模型与项目、Contex
 
 ```text
 [gpt-5.6-sol high] │ codex-hud git:(main*) M2 A1 ?1 │ ChatGPT pro
-上下文 ██████░░░░ 59% │ 5h: ███░░░░░░░ 25% (重置于 1h 30m) │ 1w: ████████░░ 82% (重置于 4d)
+上下文 ██████░░░░ 59% │ 5h: ███░░░░░░░ 25% (重置于 7月16日 18:30) │ 1w: ████████░░ 82% (重置于 7月20日 17:00)
 缓存有效期 ⏱️ 5m
 审批: on-request │ 权限: managed │ 沙箱: workspace-write
 🛠️ 工具: ◐ exec_command: pnpm test │ ✓ view_image ×1
@@ -45,13 +45,13 @@ Codex HUD 是面向 OpenAI Codex CLI 的常驻终端信息面板。它把 Contex
 
 HUD 只展示当前有数据的行，没有遥测数据的内容会自动隐藏。
 
-| 分类           | 示例                                                                 |
-| -------------- | -------------------------------------------------------------------- |
-| 模型与项目     | 模型、reasoning effort、项目路径、Git 分支、工作区状态和文件状态     |
-| Context 与额度 | Context 使用率、输入/缓存/输出 Token、额度窗口、reset 时间和中转余额 |
-| 实时活动       | 工具、Skills、MCP、子 Agent、计划、Goal、轮次导航和会话图片          |
-| 运行环境       | 认证方式、approval、sandbox 和权限策略                               |
-| 会话           | 会话时长、累计 Token、Prompt Cache 有效期和压缩次数                  |
+| 分类           | 示例                                                                                  |
+| -------------- | ------------------------------------------------------------------------------------- |
+| 模型与项目     | 模型、reasoning effort、项目路径、Git 分支、工作区状态和文件状态                      |
+| Context 与额度 | Context 使用率、输入/缓存/输出 Token、额度窗口、服务端提供的本地 reset 时间和中转余额 |
+| 实时活动       | 工具、Skills、MCP、子 Agent、计划、Goal、轮次导航和会话图片                           |
+| 运行环境       | 认证方式、approval、sandbox 和权限策略                                                |
+| 会话           | 会话时长、累计 Token、Prompt Cache 有效期和压缩次数                                   |
 
 完整遥测来源和支持边界见[功能与遥测支持矩阵](./docs/claude-hud-parity.md)。
 
@@ -229,7 +229,7 @@ Codex HUD 支持 CC Switch 常见的余额与用量返回格式，以及 New API
 
 默认的 `general` 模板兼容 CC Switch 的常见查询格式：先请求 `GET /user/balance` 并读取 `balance`；若未返回 JSON 用量数据，再请求当前 API Base URL 下的 `/usage`，读取 `remaining`（或 `balance`）、`unit` 和 `planName`。两次请求都使用 Bearer API Key，且严格限制在当前中转 origin。查询复用当前 `OPENAI_API_KEY`；显式配置 `apiKeyEnv` 后只使用该专用查询 Key，变量缺失时不会回退发送推理 Key。这些接口只是常见约定，并非所有中转站都支持；不支持时 HUD 静默不显示余额。
 
-第三方中转返回的 Codex 格式 `codex.rate_limits` 事件会被忽略，因为它可能描述共享上游账户池，而不是用户自己的 OpenAI 套餐。原生用量窗口仅信任 ChatGPT 和 OpenAI API 官方端点。
+第三方中转返回的 Codex 格式 `codex.rate_limits` 事件会被忽略，因为它可能描述共享上游账户池，而不是用户自己的 OpenAI 套餐。原生用量窗口仅信任 ChatGPT 和 OpenAI API 官方端点。如果 Codex 提供了 `reset_at` / `resets_at`，HUD 会将服务端时间转换为本地日期和时间显示；如果没有返回重置时间，HUD 不会自行估算。
 
 New API 需要系统访问令牌和用户 ID，不是用于推理的 `sk-` Key；Sub2API 使用面板登录 JWT。New API 默认按 500,000 quota 单位显示为 1 美元，可通过 `quotaPerCredit` 适配不同部署。缓存按实际凭据和用户隔离；查询在后台刷新，不会阻塞 HUD 渲染。请求三秒超时，响应体上限为 64 KiB；短暂失败时继续显示上一次成功结果，但失败后的旧值最多保留 15 分钟。
 
@@ -238,21 +238,21 @@ New API 需要系统访问令牌和用户 ID，不是用于推理的 `sk-` Key�
 
 可用于 `--enable` / `--disable` 的名称：
 
-| 名称                            | 内容                                       |
-| ------------------------------- | ------------------------------------------ |
-| `git`                           | Git 分支和工作区状态                       |
-| `usage`                         | 额度窗口、reset 时间和 credits             |
-| `promptCache`                   | Prompt Cache 倒计时                        |
-| `tools` / `skills` / `mcp`      | 工具、Skill 和 MCP 活动                    |
-| `agents`                        | 子 Agent 状态                              |
-| `todos` / `goal`                | 计划、任务和持久 Goal                      |
-| `turns`                         | 会话轮次和导航提示                         |
-| `configCounts`                  | 配置、规则、Skill 和 MCP 数量              |
-| `auth`                          | ChatGPT 套餐或当前会话实际 endpoint 主机名 |
-| `memory`                        | 近似系统内存                               |
-| `duration` / `speed`            | 会话时长和回复速度                         |
-| `sessionName` / `sessionTokens` | 会话标题和累计 Token                       |
-| `compactions`                   | Context 压缩次数                           |
+| 名称                            | 内容                                            |
+| ------------------------------- | ----------------------------------------------- |
+| `git`                           | Git 分支和工作区状态                            |
+| `usage`                         | 额度窗口、服务端提供的本地 reset 时间和 credits |
+| `promptCache`                   | Prompt Cache 倒计时                             |
+| `tools` / `skills` / `mcp`      | 工具、Skill 和 MCP 活动                         |
+| `agents`                        | 子 Agent 状态                                   |
+| `todos` / `goal`                | 计划、任务和持久 Goal                           |
+| `turns`                         | 会话轮次和导航提示                              |
+| `configCounts`                  | 配置、规则、Skill 和 MCP 数量                   |
+| `auth`                          | ChatGPT 套餐或当前会话实际 endpoint 主机名      |
+| `memory`                        | 近似系统内存                                    |
+| `duration` / `speed`            | 会话时长和回复速度                              |
+| `sessionName` / `sessionTokens` | 会话标题和累计 Token                            |
+| `compactions`                   | Context 压缩次数                                |
 
 常用环境变量：
 

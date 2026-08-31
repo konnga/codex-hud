@@ -10,7 +10,7 @@ With the Full preset, available session telemetry expands into model and project
 
 ```text
 [gpt-5.6-sol high] │ codex-hud git:(main*) M2 A1 ?1 │ ChatGPT pro
-Context ██████░░░░ 59% │ 5h: ███░░░░░░░ 25% (resets in 1h 30m) │ 1w: ████████░░ 82% (resets in 4d)
+Context ██████░░░░ 59% │ 5h: ███░░░░░░░ 25% (at Jul 16, 18:30) │ 1w: ████████░░ 82% (at Jul 20, 17:00)
 Cache TTL ⏱️ 5m
 Approval: on-request │ Permissions: managed │ Sandbox: workspace-write
 🛠️ Tools: ◐ exec_command: pnpm test │ ✓ view_image ×1
@@ -45,13 +45,13 @@ It does not replace or modify the official Codex binary. Instead, it reads local
 
 Only rows with available telemetry are rendered; unavailable data stays out of the way.
 
-| Category          | Examples                                                                               |
-| ----------------- | -------------------------------------------------------------------------------------- |
-| Model and project | Model, reasoning effort, project paths, Git branch, dirty state, and file status       |
-| Context and quota | Context usage, token/cache breakdown, quota windows, reset times, and provider credits |
-| Live activity     | Tools, Skills, MCP servers, subagents, plans, goals, turns, and session images         |
-| Environment       | Authentication, approval policy, sandbox, and permission profile                       |
-| Session           | Duration, cumulative token totals, prompt-cache TTL, and compaction count              |
+| Category          | Examples                                                                                                             |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------- |
+| Model and project | Model, reasoning effort, project paths, Git branch, dirty state, and file status                                     |
+| Context and quota | Context usage, token/cache breakdown, quota windows, server-provided reset dates in local time, and provider credits |
+| Live activity     | Tools, Skills, MCP servers, subagents, plans, goals, turns, and session images                                       |
+| Environment       | Authentication, approval policy, sandbox, and permission profile                                                     |
+| Session           | Duration, cumulative token totals, prompt-cache TTL, and compaction count                                            |
 
 See the audited [feature and telemetry support matrix](./docs/claude-hud-parity.md) for exact data sources and fallback behavior.
 
@@ -229,7 +229,7 @@ No configuration is required for a relay that implements the general protocol. T
 
 The default `general` template follows CC Switch's common query shapes. It first requests `GET /user/balance` and reads `balance`; if that does not return JSON usage data, it also tries the active API base URL's `/usage` endpoint and reads `remaining` (or `balance`), `unit`, and `planName`. Both requests use a Bearer API key and stay on the active relay origin. The query reuses the current `OPENAI_API_KEY`; after an explicit entry sets `apiKeyEnv`, only that dedicated query key is used, and a missing variable never falls back to the inference key. These endpoints are common conventions, not an industry standard, so unsupported relays simply show no balance.
 
-Codex-shaped `codex.rate_limits` events returned by third-party relays are ignored because they may describe a shared upstream pool rather than the user's OpenAI subscription. Native usage windows are trusted only for official ChatGPT and OpenAI API endpoints.
+Codex-shaped `codex.rate_limits` events returned by third-party relays are ignored because they may describe a shared upstream pool rather than the user's OpenAI subscription. Native usage windows are trusted only for official ChatGPT and OpenAI API endpoints. When Codex provides `reset_at`/`resets_at`, HUD displays that server-provided timestamp as a local date and time; if no reset timestamp is available, it does not invent one.
 
 For New API, use its system access token and user ID, not the inference `sk-` key. For Sub2API, use the panel login JWT. New API quota units default to 500,000 per displayed dollar; change `quotaPerCredit` for deployments with a different conversion. Cache entries are isolated by the actual credential and user. Queries refresh in the background without blocking HUD rendering. Requests time out after three seconds and response bodies are capped at 64 KiB; transient failures preserve the last successful value for at most 15 minutes after a failed refresh.
 
@@ -241,7 +241,7 @@ Names accepted by `--enable` and `--disable`:
 | Name                            | Content                                                          |
 | ------------------------------- | ---------------------------------------------------------------- |
 | `git`                           | Git branch and working-tree status                               |
-| `usage`                         | Usage windows, reset times, and credits                          |
+| `usage`                         | Usage windows, server-provided local reset dates, and credits    |
 | `promptCache`                   | Prompt-cache countdown                                           |
 | `tools` / `skills` / `mcp`      | Tool, Skill, and MCP activity                                    |
 | `agents`                        | Subagent status                                                  |

@@ -278,6 +278,20 @@ describe('configuration persistence', () => {
 })
 
 describe('configuration migrations', () => {
+  it('changes the legacy default reset format to absolute dates', () => {
+    const { env, configPath } = temporaryConfigEnv()
+    fs.writeFileSync(configPath, JSON.stringify({
+      configVersion: 1,
+      display: { timeFormat: 'relative' },
+    }))
+
+    expect(loadConfig(env).config.display.timeFormat).toBe('absolute')
+    expect(migrateConfig({ env })).toMatchObject({ migrated: true, fromVersion: 1 })
+    const migrated = JSON.parse(fs.readFileSync(configPath, 'utf8'))
+    expect(migrated.configVersion).toBe(CURRENT_CONFIG_VERSION)
+    expect(migrated.display.timeFormat).toBe('absolute')
+  })
+
   it('enables git file stats once for an unversioned legacy config', () => {
     const { env, configPath } = temporaryConfigEnv()
     fs.writeFileSync(configPath, JSON.stringify({

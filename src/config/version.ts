@@ -1,6 +1,6 @@
 import type { HudConfig } from '../types/config.js'
 
-export const CURRENT_CONFIG_VERSION = 1
+export const CURRENT_CONFIG_VERSION = 2
 
 export interface ConfigMigration {
   config: HudConfig
@@ -26,6 +26,14 @@ export function applyConfigMigrations(
   const migrated = structuredClone(config)
   if (fromVersion < 1) {
     migrated.gitStatus.showFileStats = true
+  }
+  if (fromVersion < 2) {
+    const rawDisplay = typeof raw.display === 'object' && raw.display !== null && !Array.isArray(raw.display)
+      ? raw.display as Record<string, unknown>
+      : {}
+    if (rawDisplay.timeFormat === 'relative') {
+      migrated.display.timeFormat = 'absolute'
+    }
   }
   return {
     config: migrated,

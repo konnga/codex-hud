@@ -86,12 +86,19 @@ export function formatResetTime(
   now: Date,
   mode: TimeFormatMode,
   windowMinutes?: number | null,
+  locale = 'en-US',
 ): string | null {
   if (!resetAt) {
     return null
   }
   const relative = relativeTime(resetAt, now)
-  const absolute = resetAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  const absolute = resetAt.toLocaleString(locale, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  })
   if (mode === 'absolute') {
     return absolute
   }

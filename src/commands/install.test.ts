@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
 import { afterEach, describe, expect, it } from 'vitest'
+import { CURRENT_CONFIG_VERSION } from '../config/version.js'
 import { runInstall, runUninstall } from './install.js'
 
 const directories: string[] = []
@@ -96,7 +97,7 @@ describe('managed installer', () => {
     expect(runInstall([])).toBe(0)
 
     const migrated = JSON.parse(fs.readFileSync(configPath, 'utf8'))
-    expect(migrated.configVersion).toBe(1)
+    expect(migrated.configVersion).toBe(CURRENT_CONFIG_VERSION)
     expect(migrated.gitStatus.showFileStats).toBe(true)
   })
 

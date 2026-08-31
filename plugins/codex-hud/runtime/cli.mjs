@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { A as isOfficialOpenAIEndpoint, C as DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY, D as findActiveSession, E as readConfiguredExternalUsage, F as getConfigPath, I as getHudStateDirectory, L as getLegacyStateDirectory, N as resolveSessionEndpoint, O as RolloutParser, P as getCodexHome, S as DEFAULT_CONFIG, a as waitForNewRootSession, b as applyConfigMigrations, i as snapshotRootSessions, k as findCodexLogDatabase, m as renderHud, n as createSessionBindingPath, o as writeSessionBinding, s as buildHudState, t as acquireSessionDiscoveryLock, v as loadConfig, w as readLatestLoggedRateLimits, x as rawConfigVersion } from "./session-binding-DEHWeSAS.mjs";
+import { A as isOfficialOpenAIEndpoint, C as DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY, D as findActiveSession, E as readConfiguredExternalUsage, F as getConfigPath, I as getHudStateDirectory, L as getLegacyStateDirectory, N as resolveSessionEndpoint, O as RolloutParser, P as getCodexHome, S as DEFAULT_CONFIG, a as waitForNewRootSession, b as applyConfigMigrations, i as snapshotRootSessions, k as findCodexLogDatabase, m as renderHud, n as createSessionBindingPath, o as writeSessionBinding, s as buildHudState, t as acquireSessionDiscoveryLock, v as loadConfig, w as readLatestLoggedRateLimits, x as rawConfigVersion } from "./session-binding-DKZrgQTi.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import process$1, { stdin, stdout } from "node:process";
@@ -1562,10 +1562,10 @@ function migrateConfig(options = {}) {
 	const env = options.env ?? process$1.env;
 	const loaded = loadConfig(env);
 	const fromVersion = rawConfigVersion(loaded.raw);
-	if (loaded.error || !fs.existsSync(loaded.path) || fromVersion >= 1) return {
+	if (loaded.error || !fs.existsSync(loaded.path) || fromVersion >= 2) return {
 		path: loaded.path,
 		fromVersion,
-		toVersion: Math.max(fromVersion, 1),
+		toVersion: Math.max(fromVersion, 2),
 		migrated: false
 	};
 	const migration = applyConfigMigrations(loaded.config, loaded.raw);

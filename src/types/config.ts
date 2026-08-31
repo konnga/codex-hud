@@ -262,7 +262,7 @@ export const DEFAULT_CONFIG: HudConfig = {
     providerName: '',
     customLine: '',
     customLinePosition: 'last',
-    timeFormat: 'relative',
+    timeFormat: 'absolute',
     autoCompactWindow: null,
   },
   colors: {

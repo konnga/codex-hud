@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## 0.8.0 - 2026-08-31
+
+### Changed
+
+- Display quota reset times as compact, server-provided local dates and times by default instead of countdowns. Legacy configurations using the previous default are migrated automatically, while other time format modes remain available.
+
+---
+
+### 调整
+
+- 额度重置时间默认改为显示服务端提供的本地日期和时间，并使用更紧凑的文案，不再只显示倒计时。旧配置中的默认格式会自动迁移，其他时间格式仍可继续使用。
+
 ## 0.7.2 - 2026-08-28
 
 ### Fixed

@@ -15,9 +15,17 @@ function renderWindow(ctx: RenderContext, window: UsageWindow): string | null {
   const bar = ctx.config.display.usageBarEnabled && !ctx.config.display.usageCompact
     ? `${progressBar(window.percent, 10, ctx.config.colors.barFilled, ctx.config.colors.barEmpty)} `
     : ''
-  const reset = formatResetTime(window.resetAt, ctx.now, ctx.config.display.timeFormat, window.windowMinutes)
+  const resetMode = ctx.config.display.timeFormat
+  const reset = formatResetTime(
+    window.resetAt,
+    ctx.now,
+    resetMode,
+    window.windowMinutes,
+    ctx.config.language === 'zh-Hans' ? 'zh-CN' : 'en-US',
+  )
+  const resetLabel = resetMode === 'absolute' ? 'resetsAt' : 'resetsIn'
   const resetText = reset
-    ? ` (${ctx.config.display.showResetLabel ? `${message(ctx.config.language, 'resetsIn')} ` : ''}${reset})`
+    ? ` (${ctx.config.display.showResetLabel ? `${message(ctx.config.language, resetLabel)} ` : ''}${reset})`
     : ''
   return `${window.label}: ${bar}${value}${suffix}${resetText}`
 }

@@ -1643,7 +1643,7 @@ const DEFAULT_CONFIG = {
 		providerName: "",
 		customLine: "",
 		customLinePosition: "last",
-		timeFormat: "relative",
+		timeFormat: "absolute",
 		autoCompactWindow: null
 	},
 	colors: {
@@ -1908,14 +1908,14 @@ function validateConfig(value) {
 
 //#endregion
 //#region src/config/version.ts
-const CURRENT_CONFIG_VERSION = 1;
+const CURRENT_CONFIG_VERSION = 2;
 function rawConfigVersion(raw) {
 	const value = raw.configVersion;
 	return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : 0;
 }
 function applyConfigMigrations(config, raw) {
 	const fromVersion = rawConfigVersion(raw);
-	if (fromVersion >= 1) return {
+	if (fromVersion >= 2) return {
 		config,
 		fromVersion,
 		toVersion: fromVersion,
@@ -1923,10 +1923,13 @@ function applyConfigMigrations(config, raw) {
 	};
 	const migrated = structuredClone(config);
 	if (fromVersion < 1) migrated.gitStatus.showFileStats = true;
+	if (fromVersion < 2) {
+		if ((typeof raw.display === "object" && raw.display !== null && !Array.isArray(raw.display) ? raw.display : {}).timeFormat === "relative") migrated.display.timeFormat = "absolute";
+	}
 	return {
 		config: migrated,
 		fromVersion,
-		toVersion: 1,
+		toVersion: 2,
 		migrated: true
 	};
 }
@@ -3726,12 +3729,15 @@ function formatMinuteDuration(milliseconds, rounding) {
 function relativeTime(resetAt, now) {
 	return formatMinuteDuration(Math.max(0, resetAt.getTime() - now.getTime()), "ceil");
 }
-function formatResetTime(resetAt, now, mode, windowMinutes) {
+function formatResetTime(resetAt, now, mode, windowMinutes, locale = "en-US") {
 	if (!resetAt) return null;
 	const relative = relativeTime(resetAt, now);
-	const absolute = resetAt.toLocaleTimeString([], {
+	const absolute = resetAt.toLocaleString(locale, {
+		month: "short",
+		day: "numeric",
 		hour: "2-digit",
-		minute: "2-digit"
+		minute: "2-digit",
+		hour12: false
 	});
 	if (mode === "absolute") return absolute;
 	if (mode === "both") return `${relative} (${absolute})`;
@@ -3760,6 +3766,7 @@ const MESSAGES = {
 		context: "Context",
 		usage: "Usage",
 		resetsIn: "resets in",
+		resetsAt: "at",
 		tools: "Tools",
 		skills: "Skills",
 		mcps: "MCPs",
@@ -3791,6 +3798,7 @@ const MESSAGES = {
 		context: "上下文",
 		usage: "额度",
 		resetsIn: "重置于",
+		resetsAt: "重置于",
 		tools: "工具",
 		skills: "技能",
 		mcps: "MCP",
@@ -4146,8 +4154,10 @@ function renderWindow(ctx, window) {
 	const value = ctx.config.display.usageValue === "remaining" ? 100 - window.percent : window.percent;
 	const suffix = ctx.config.display.usageValue === "remaining" ? "% left" : "%";
 	const bar = ctx.config.display.usageBarEnabled && !ctx.config.display.usageCompact ? `${progressBar(window.percent, 10, ctx.config.colors.barFilled, ctx.config.colors.barEmpty)} ` : "";
-	const reset = formatResetTime(window.resetAt, ctx.now, ctx.config.display.timeFormat, window.windowMinutes);
-	const resetText = reset ? ` (${ctx.config.display.showResetLabel ? `${message(ctx.config.language, "resetsIn")} ` : ""}${reset})` : "";
+	const resetMode = ctx.config.display.timeFormat;
+	const reset = formatResetTime(window.resetAt, ctx.now, resetMode, window.windowMinutes, ctx.config.language === "zh-Hans" ? "zh-CN" : "en-US");
+	const resetLabel = resetMode === "absolute" ? "resetsAt" : "resetsIn";
+	const resetText = reset ? ` (${ctx.config.display.showResetLabel ? `${message(ctx.config.language, resetLabel)} ` : ""}${reset})` : "";
 	return `${window.label}: ${bar}${value}${suffix}${resetText}`;
 }
 function renderUsageLine(ctx) {
@@ -5974,4 +5984,4 @@ async function waitForNewRootSession(cwd, snapshot, codexHome = getCodexHome(), 
 
 //#endregion
 export { isOfficialOpenAIEndpoint as A, DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY as C, findActiveSession as D, readConfiguredExternalUsage as E, getConfigPath as F, getHudStateDirectory as I, getLegacyStateDirectory as L, resolveProcessSession as M, resolveSessionEndpoint as N, RolloutParser as O, getCodexHome as P, DEFAULT_CONFIG as S, readCachedConfiguredExternalUsage as T, sliceAnsi as _, waitForNewRootSession as a, applyConfigMigrations as b, desiredPaneHeight as c, resizeCmuxPane as d, resizeHudPane as f, visibleWidth as g, truncateAnsi as h, snapshotRootSessions as i, resolveProcessEndpoint as j, findCodexLogDatabase as k, hudRenderHeight as l, renderHud as m, createSessionBindingPath as n, writeSessionBinding as o, settleCmuxPaneHeight as p, readSessionBinding as r, buildHudState as s, acquireSessionDiscoveryLock as t, readCmuxPaneGeometry as u, loadConfig as v, readLatestLoggedRateLimits as w, rawConfigVersion as x, reloadConfig as y };
-//# sourceMappingURL=session-binding-DEHWeSAS.mjs.map
+//# sourceMappingURL=session-binding-DKZrgQTi.mjs.map
