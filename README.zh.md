@@ -1,5 +1,10 @@
 # Codex HUD
 
+[![版本](https://img.shields.io/github/v/release/konnga/codex-hud)](https://github.com/konnga/codex-hud/releases/latest)
+[![构建状态](https://github.com/konnga/codex-hud/actions/workflows/ci.yml/badge.svg)](https://github.com/konnga/codex-hud/actions/workflows/ci.yml)
+[![Node.js](https://img.shields.io/badge/node-%3E%3D20-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
+[![许可证](https://img.shields.io/github/license/konnga/codex-hud)](./LICENSE)
+
 > 🌐 [English](./README.md) | 中文文档
 
 在 Codex 输入区下方常驻显示上下文、额度、Git 状态、工具、Agent、任务和会话信息。无需修改官方 Codex 二进制。

@@ -5,6 +5,13 @@ import { visibleWidth } from './format.js'
 import { renderHud } from './index.js'
 
 const now = new Date('2026-07-16T09:00:00Z')
+const resetDateTimeOptions: Intl.DateTimeFormatOptions = {
+  month: 'short',
+  day: 'numeric',
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: false,
+}
 
 function state(): HudState {
   return {
@@ -121,8 +128,15 @@ describe('hud renderer', () => {
       options: { width: 180, height: 20, color: false },
       now,
     })
+    const primaryReset = state().usage?.primary?.resetAt?.toLocaleString('en-US', resetDateTimeOptions)
+    const secondaryReset = state().usage?.secondary?.resetAt?.toLocaleString('en-US', resetDateTimeOptions)
+    const stableLines = lines.map(line => line
+      .replace(`at ${primaryReset}`, 'at <5h reset>')
+      .replace(`at ${secondaryReset}`, 'at <1w reset>'))
 
-    expect(lines).toMatchSnapshot()
+    expect(stableLines).toMatchSnapshot()
+    expect(lines.join('\n')).toContain(`5h: ███░░░░░░░ 25% (at ${primaryReset})`)
+    expect(lines.join('\n')).toContain(`1w: ████████░░ 82% (at ${secondaryReset})`)
     expect(lines[0]).toContain('[gpt-5.5 high]')
     expect(lines[0]).toContain('codex-hud +shared git:(main* ↑1)')
     expect(lines[0]).not.toContain('+shared │ git:')

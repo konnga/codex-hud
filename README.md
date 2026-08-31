@@ -1,5 +1,10 @@
 # Codex HUD
 
+[![Release](https://img.shields.io/github/v/release/konnga/codex-hud)](https://github.com/konnga/codex-hud/releases/latest)
+[![CI](https://github.com/konnga/codex-hud/actions/workflows/ci.yml/badge.svg)](https://github.com/konnga/codex-hud/actions/workflows/ci.yml)
+[![Node.js](https://img.shields.io/badge/node-%3E%3D20-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
+[![License](https://img.shields.io/github/license/konnga/codex-hud)](./LICENSE)
+
 > 🌐 English | [中文文档](./README.zh.md)
 
 Keep context, quota, Git status, tools, agents, tasks, and session details visible in a persistent pane below Codex. The official Codex binary remains untouched.
