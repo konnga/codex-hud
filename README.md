@@ -15,8 +15,8 @@ With the Full preset, available session telemetry expands into model and project
 
 ```text
 [gpt-5.6-sol high] │ codex-hud git:(main*) M2 A1 ?1 │ ChatGPT pro
-Context ██████░░░░ 59% │ 5h: ███░░░░░░░ 25% (at Jul 16, 18:30) │ 1w: ████████░░ 82% (at Jul 20, 17:00)
-Cache TTL ⏱️ 5m
+Context ██████░░░░ ~59% │ 5h: ███░░░░░░░ 25% (at Jul 16, 18:30) │ 1w: ████████░░ 82% (at Jul 20, 17:00)
+Cache estimate ~⏱️ 5m
 Approval: on-request │ Permissions: managed │ Sandbox: workspace-write
 🛠️ Tools: ◐ exec_command: pnpm test │ ✓ view_image ×1
 🧩 ✓ Skills (2): openai-docs, pdf
@@ -56,7 +56,7 @@ Only rows with available telemetry are rendered; unavailable data stays out of t
 | Context and quota | Context usage, token/cache breakdown, quota windows, server-provided reset dates in local time, and provider credits |
 | Live activity     | Tools, Skills, MCP servers, subagents, plans, goals, turns, and session images                                       |
 | Environment       | Authentication, approval policy, sandbox, and permission profile                                                     |
-| Session           | Duration, cumulative token totals, prompt-cache TTL, and compaction count                                            |
+| Session           | Duration, cumulative token totals, prompt-cache estimate, and compaction count                                       |
 
 See the audited [feature and telemetry support matrix](./docs/claude-hud-parity.md) for exact data sources and fallback behavior.
 
@@ -86,7 +86,7 @@ brew install tmux
 sudo apt install tmux
 ```
 
-`sqlite3` is optional and enables session titles and per-session endpoint detection.
+`sqlite3` is optional. It enables session titles, verifies the endpoint actually used by each session, and recovers account-wide limit events from Codex logs. ChatGPT-authenticated sessions can still show rollout-provided subscription limits when the endpoint is unavailable; API-key and custom-provider sessions stay conservative until their endpoint can be verified.
 
 `chafa` is optional and enables inline image previews in the terminal. Install it on macOS with `brew install chafa`. Without it, the image gallery still lists image paths and can open files with the system image viewer.
 
@@ -153,6 +153,7 @@ After installation or an update, exit the current Codex session and start a new 
 | Terminal     | `codex`                                           | Start interactive Codex with the HUD                           |
 | Terminal     | `codex --no-hud`                                  | Temporarily bypass the HUD and run official Codex directly     |
 | Terminal     | `codex-hud render --once --cwd "$PWD" --no-color` | Print one plain-text HUD frame                                 |
+| Terminal     | `codex-hud hud-version`                           | Print the running HUD version                                  |
 
 Non-interactive commands such as `codex exec`, `plugin`, `login`, `mcp`, `completion`, `--help`, and `--version` pass directly to the official Codex executable.
 
@@ -168,16 +169,18 @@ codex-hud configure
 
 Or apply a preset directly:
 
-| Preset      | Best for                                           |
-| ----------- | -------------------------------------------------- |
-| `full`      | First-time use and complete day-to-day information |
-| `essential` | Project, context, quota, and primary activity only |
-| `minimal`   | A small information set for narrow terminals       |
+| Preset         | Best for                                                                    |
+| -------------- | --------------------------------------------------------------------------- |
+| `full`         | First-time use and complete day-to-day information                          |
+| `essential`    | Project, context, quota, and primary activity only                          |
+| `minimal`      | A small information set for narrow terminals                                |
+| `presentation` | Screen sharing without transcript, auth-user, image, or tool-target details |
 
 ```bash
 codex-hud configure --preset full --yes
 codex-hud configure --preset essential --yes
 codex-hud configure --preset minimal --yes
+codex-hud configure --preset presentation --yes
 ```
 
 Enable or disable exact fields:
@@ -232,7 +235,7 @@ No configuration is required for a relay that implements the general protocol. T
 }
 ```
 
-The default `general` template follows CC Switch's common query shapes. It first requests `GET /user/balance` and reads `balance`; if that does not return JSON usage data, it also tries the active API base URL's `/usage` endpoint and reads `remaining` (or `balance`), `unit`, and `planName`. Both requests use a Bearer API key and stay on the active relay origin. The query reuses the current `OPENAI_API_KEY`; after an explicit entry sets `apiKeyEnv`, only that dedicated query key is used, and a missing variable never falls back to the inference key. These endpoints are common conventions, not an industry standard, so unsupported relays simply show no balance.
+The default `general` template follows CC Switch's common query shapes. It first requests `GET /user/balance` and reads `balance`; if that does not return JSON usage data, it also tries the active API base URL's `/usage` endpoint and reads `remaining` (or `balance`), `unit`, and `planName`. Both requests use a Bearer API key and stay on the active relay origin. Credential-bearing queries require HTTPS, except for explicit loopback development endpoints on `localhost`, `127.0.0.1`, or `[::1]`. The query reuses the current `OPENAI_API_KEY`; after an explicit entry sets `apiKeyEnv`, only that dedicated query key is used, and a missing variable never falls back to the inference key. These endpoints are common conventions, not an industry standard, so unsupported relays simply show no balance.
 
 Codex-shaped `codex.rate_limits` events returned by third-party relays are ignored because they may describe a shared upstream pool rather than the user's OpenAI subscription. Native usage windows are trusted only for official ChatGPT and OpenAI API endpoints. When Codex provides `reset_at`/`resets_at`, HUD displays that server-provided timestamp as a local date and time; if no reset timestamp is available, it does not invent one.
 
@@ -247,11 +250,12 @@ Names accepted by `--enable` and `--disable`:
 | ------------------------------- | ---------------------------------------------------------------- |
 | `git`                           | Git branch and working-tree status                               |
 | `usage`                         | Usage windows, server-provided local reset dates, and credits    |
-| `promptCache`                   | Prompt-cache countdown                                           |
+| `promptCache`                   | Configured prompt-cache reuse-window estimate                    |
 | `tools` / `skills` / `mcp`      | Tool, Skill, and MCP activity                                    |
 | `agents`                        | Subagent status                                                  |
 | `todos` / `goal`                | Plans, tasks, and durable goals                                  |
 | `turns`                         | Conversation count and navigator hint                            |
+| `images`                        | Session image count and gallery entry point                      |
 | `configCounts`                  | Config, rule, Skill, and MCP counts                              |
 | `auth`                          | ChatGPT plan or the actual endpoint host for the current session |
 | `memory`                        | Approximate system memory                                        |
@@ -347,7 +351,7 @@ See [Image viewer](./docs/image-viewer.md) for supported image sources, controls
 | WSL2                  | Supported            | Node.js, Codex, tmux, and Codex HUD must be installed in the same Linux distribution       |
 | Native Windows        | Full HUD unsupported | PowerShell, Command Prompt, and native Windows Terminal cannot create a supported HUD pane |
 
-Every supported environment requires Node.js 20 or newer and a working official Codex CLI installation. `sqlite3` is optional and enables session titles and actual endpoint detection.
+Every supported environment requires Node.js 20 or newer and a working official Codex CLI installation. `sqlite3` is optional and adds session titles, actual endpoint detection, and logged limit recovery.
 
 If no usable cmux/tmux environment is available or HUD startup fails, Codex HUD runs official Codex directly. Commands remain available, but no HUD is displayed.
 
@@ -358,6 +362,7 @@ Start with:
 ```bash
 codex-hud doctor
 codex-hud render --once --cwd "$PWD" --no-color
+codex-hud hud-version
 ```
 
 Common cases:
@@ -376,6 +381,7 @@ Building from source requires pnpm 10:
 
 ```bash
 pnpm install
+pnpm test:coverage
 pnpm build
 node dist/cli.mjs setup --codex-shim
 hash -r
@@ -401,8 +407,10 @@ Uninstall does not delete the HUD configuration, official Codex data, or files t
 
 - By default, the HUD reads local Codex rollout data, configuration metadata, and Git status only. Relay balance queries require an explicit setup choice or configuration entry.
 - Explicitly enabled relay balance queries send the configured management credential to the matching session origin only; credentials are read from environment variables and are not persisted by Codex HUD.
-- The persistent HUD does not display user prompts, model response bodies, or tool output bodies.
+- Credential-bearing relay queries require HTTPS, except for loopback-only local development endpoints.
+- The persistent HUD does not display user prompts, model response bodies, or tool output bodies. Common credentials in retained tool targets are redacted before rendering.
 - Conversation content is displayed only after the user explicitly opens the navigator and remains local.
+- The `presentation` preset hides transcript navigation, auth user, image paths, and tool details for screen sharing.
 - All rendered text is stripped of terminal control characters.
 - Codex HUD does not modify the official Codex binary, and `--no-hud` bypasses it at any time.
 

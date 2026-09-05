@@ -7,9 +7,11 @@ import process from 'node:process'
 import { pathToFileURL } from 'node:url'
 import { readCachedConfiguredExternalUsage, readConfiguredExternalUsage } from './codex/external-usage.js'
 import { readLatestLoggedRateLimits } from './codex/log-rate-limits.js'
+import { evaluateUsageTrust } from './codex/rate-limits.js'
 import { RolloutParser } from './codex/rollout-parser.js'
 import { isOfficialOpenAIEndpoint, resolveProcessEndpoint, resolveProcessSession, resolveSessionEndpoint } from './codex/session-endpoint.js'
 import { findActiveSession } from './codex/session-finder.js'
+import { hasTrustedOpenAiAuth } from './collectors/session-metadata.js'
 import { loadConfig, reloadConfig } from './config/load.js'
 import {
   copyImagePath,
@@ -116,7 +118,7 @@ function parseOptions(args: string[]): RenderCliOptions {
 export async function runRenderCli(args = process.argv.slice(2)): Promise<void> {
   const options = parseOptions(args)
   let loaded = loadConfig()
-  const parser = new RolloutParser()
+  const parser = new RolloutParser({ captureConversationBodies: false })
   const navigator = createNavigatorState()
   const imageViewer = createImageViewerState()
   let currentSessionPath = options.sessionPath
@@ -214,9 +216,14 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
     const endpoint = rollout.session
       ? resolveSessionEndpoint(rollout.session.id)
       : codexProcess ? resolveProcessEndpoint(codexProcess.pid, codexProcess.launchedAt) : null
+    const usageTrust = evaluateUsageTrust(
+      endpoint?.url ?? null,
+      hasTrustedOpenAiAuth(rollout.session, process.env),
+    )
     const loggedUsage = (loaded.config.display.showUsage || loaded.config.display.showAuth)
-      && isOfficialOpenAIEndpoint(endpoint?.url)
-      ? readLatestLoggedRateLimits(process.env, now.getTime(), endpoint?.url ?? null)?.usage ?? null
+      && usageTrust.trusted
+      && isOfficialOpenAIEndpoint(usageTrust.effectiveEndpoint)
+      ? readLatestLoggedRateLimits(process.env, now.getTime(), usageTrust.effectiveEndpoint)?.usage ?? null
       : null
     const queriedUsage = loaded.config.display.showAuth
       ? options.once
@@ -393,6 +400,7 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
     navigator.searchMode = false
     navigator.detailScroll = 0
     navigator.copyStatus = 'idle'
+    parser.setConversationCapture(false)
     render()
     focusCodexPane()
   }
@@ -415,7 +423,12 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
     }
     imageViewer.previewPath = image.path
     imageViewer.previewScroll = 0
-    imageViewer.previewLines = createImagePreview(image, process.stdout.columns || 120, options.maxHeight)
+    imageViewer.previewLines = createImagePreview(
+      image,
+      process.stdout.columns || 120,
+      options.maxHeight,
+      loaded.config.language,
+    )
   }
   const moveImageSelection = (delta: number): void => {
     if (latestImages.length === 0)
@@ -458,7 +471,7 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
     }
     if (!navigator.active && !imageViewer.active) {
       if (key === 'i' || key === 'I') {
-        if (latestImages.length === 0)
+        if (!loaded.config.display.showImages || latestImages.length === 0)
           return
         imageViewer.active = true
         imageViewer.view = 'list'
@@ -471,6 +484,8 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
         && (key === 'n' || key === 'N' || key === '\r')
         && latestTurns.length > 0
       ) {
+        parser.setConversationCapture(true)
+        latestTurns = parser.parse().conversationTurns
         navigator.active = true
         navigator.view = 'list'
         navigator.searchMode = false

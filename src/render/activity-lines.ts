@@ -30,7 +30,7 @@ export function renderToolsLine(ctx: RenderContext): string | null {
   const running = ctx.state.tools.filter(tool => tool.status === 'running').slice(-2)
   const completed = ctx.state.tools.filter(tool => tool.status !== 'running')
   const parts = running.map((tool) => {
-    const target = tool.target ? `: ${safeText(tool.target)}` : ''
+    const target = ctx.config.display.showToolTargets && tool.target ? `: ${safeText(tool.target)}` : ''
     return `${color('◐', 'yellow', ctx.options.color)} ${color(safeText(toolName(ctx, tool.name)), 'cyan', ctx.options.color)}${target}`
   })
   const counts = new Map<string, number>()
@@ -47,13 +47,13 @@ export function renderToolsLine(ctx: RenderContext): string | null {
 }
 
 export function renderImagesLine(ctx: RenderContext): string | null {
-  if (ctx.state.images.length === 0) {
+  if (!ctx.config.display.showImages || ctx.state.images.length === 0) {
     return null
   }
   const latest = ctx.state.images.at(-1)
   const filename = latest ? path.basename(latest.path) : ''
   const suffix = filename ? ` · ${safeText(filename)}` : ''
-  return `🖼 Images: ${ctx.state.images.length}${suffix} · i gallery`
+  return `🖼 ${message(ctx.config.language, 'images')}: ${ctx.state.images.length}${suffix} · i ${message(ctx.config.language, 'gallery')}`
 }
 
 function renderNames(ctx: RenderContext, title: 'skills' | 'mcps', names: string[]): string | null {
@@ -62,7 +62,7 @@ function renderNames(ctx: RenderContext, title: 'skills' | 'mcps', names: string
   }
   const visible = names.slice(0, 4).map(name => color(safeText(name), 'cyan', ctx.options.color))
   if (names.length > 4) {
-    visible.push(`+${names.length - 4} more`)
+    visible.push(`+${names.length - 4} ${message(ctx.config.language, 'more')}`)
   }
   return `${icon(title)} ${color('✓', 'green', ctx.options.color)} ${message(ctx.config.language, title)} (${names.length}): ${visible.join(', ')}`
 }

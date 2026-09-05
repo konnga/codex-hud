@@ -45,6 +45,32 @@ jobs:
       - run: pnpm release:check
       - run: pnpm lint
       - run: pnpm typecheck
+      - run: pnpm test:coverage
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage/
+      - run: pnpm build
+      - name: Verify generated runtime is committed
+        run: git diff --exit-code
+
+  macos:
+    name: macOS and cmux compatibility
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: brew install sqlite3
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm release:check
+      - run: pnpm lint
+      - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
       - name: Verify generated runtime is committed

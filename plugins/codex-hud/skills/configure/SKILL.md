@@ -9,14 +9,14 @@ description: Interactively review and selectively change visible Codex HUD eleme
 2. If the user already named the desired changes, do not ask again. Otherwise summarize the current state and ask one concise question for everything to enable and disable. Use an interactive input control when available; otherwise accept a comma-separated or natural-language answer.
 3. Map user-facing names to CLI names:
    - Git → `git`; quota/limits → `usage`; tools → `tools`; Skills → `skills`; MCP → `mcp`; subagents → `agents`; tasks/todos → `todos`; durable goal → `goal`.
-   - config counts → `configCounts`; duration → `duration`; output speed → `speed`; prompt cache → `promptCache`; session title → `sessionName`; authentication → `auth`; memory → `memory`; session tokens → `sessionTokens`; compactions → `compactions`.
+   - images/gallery → `images`; config counts → `configCounts`; duration → `duration`; output speed → `speed`; prompt-cache estimate → `promptCache`; session title → `sessionName`; authentication → `auth`; memory → `memory`; session tokens → `sessionTokens`; compactions → `compactions`.
 4. Apply only the selected changes:
 
    ```bash
    codex-hud configure --enable <comma-separated-names> --disable <comma-separated-names> --yes
    ```
 
-   Omit an option when its list is empty. Never apply a preset unless the user explicitly requests a reset to Full, Essential, or Minimal.
+   Omit an option when its list is empty. Never apply a preset unless the user explicitly requests a reset to Full, Essential, Minimal, or Presentation.
 
 5. Preview with `codex-hud render --once --cwd <current-project> --no-color`, then validate with `codex-hud doctor --json --cwd <current-project>`.
 6. Report the saved config path and the resulting enabled/disabled changes. The running HUD watches the config and should refresh in the current session without restarting Codex.

@@ -2,6 +2,18 @@ import type { RawRateLimits, RawRateLimitWindow } from '../types/rollout.js'
 import type { UsageData, UsageWindow } from '../types/state.js'
 import { isOfficialOpenAIEndpoint } from './session-endpoint.js'
 
+export type UsageTrustReason
+  = | 'official-endpoint'
+    | 'chatgpt-auth'
+    | 'untrusted-endpoint'
+    | 'endpoint-unknown'
+
+export interface UsageTrustDecision {
+  trusted: boolean
+  reason: UsageTrustReason
+  effectiveEndpoint: string | null
+}
+
 function numberValue(...values: unknown[]): number | null {
   for (const value of values) {
     if (typeof value === 'number' && Number.isFinite(value)) {
@@ -145,11 +157,35 @@ export function mergeUsageData(current: UsageData | null, observed: UsageData | 
   }
 }
 
+export function evaluateUsageTrust(
+  endpoint: string | null,
+  trustedOpenAiAuth: boolean,
+): UsageTrustDecision {
+  if (isOfficialOpenAIEndpoint(endpoint)) {
+    return { trusted: true, reason: 'official-endpoint', effectiveEndpoint: endpoint }
+  }
+  if (endpoint) {
+    return { trusted: false, reason: 'untrusted-endpoint', effectiveEndpoint: endpoint }
+  }
+  if (trustedOpenAiAuth) {
+    return { trusted: true, reason: 'chatgpt-auth', effectiveEndpoint: 'https://chatgpt.com' }
+  }
+  return { trusted: false, reason: 'endpoint-unknown', effectiveEndpoint: null }
+}
+
+export function trustedUsageData(
+  trust: UsageTrustDecision,
+  current: UsageData | null,
+  observed: UsageData | null,
+): UsageData | null {
+  return trust.trusted ? mergeUsageData(current, observed) : null
+}
+
 /** Third-party relays can imitate Codex limit events, but those are not the user's OpenAI subscription limits. */
 export function trustedUsageDataForEndpoint(
   endpoint: string | null,
   current: UsageData | null,
   observed: UsageData | null,
 ): UsageData | null {
-  return isOfficialOpenAIEndpoint(endpoint) ? mergeUsageData(current, observed) : null
+  return trustedUsageData(evaluateUsageTrust(endpoint, false), current, observed)
 }

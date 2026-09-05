@@ -20,6 +20,7 @@ describe('guided HUD elements', () => {
       'todos',
       'goal',
       'turns',
+      'images',
       'configCounts',
       'auth',
       'memory',

@@ -1,6 +1,6 @@
 import type { HudConfig } from '../types/config.js'
 
-export const CURRENT_CONFIG_VERSION = 2
+export const CURRENT_CONFIG_VERSION = 3
 
 export interface ConfigMigration {
   config: HudConfig
@@ -34,6 +34,9 @@ export function applyConfigMigrations(
     if (rawDisplay.timeFormat === 'relative') {
       migrated.display.timeFormat = 'absolute'
     }
+  }
+  if (fromVersion < 3 && (raw.refreshIntervalMs === undefined || raw.refreshIntervalMs === 300)) {
+    migrated.refreshIntervalMs = 1_000
   }
   return {
     config: migrated,

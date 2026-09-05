@@ -8,9 +8,11 @@ import {
 describe('default HUD configuration', () => {
   it('starts in the Claude HUD-compatible expanded layout', () => {
     expect(DEFAULT_CONFIG.lineLayout).toBe('expanded')
-    expect(DEFAULT_CONFIG.refreshIntervalMs).toBe(300)
+    expect(DEFAULT_CONFIG.refreshIntervalMs).toBe(1_000)
     expect(DEFAULT_CONFIG.display.showModel).toBe(true)
     expect(DEFAULT_CONFIG.display.showAuth).toBe(true)
+    expect(DEFAULT_CONFIG.display.showToolTargets).toBe(true)
+    expect(DEFAULT_CONFIG.display.showImages).toBe(true)
     expect(DEFAULT_CONFIG.display.externalUsageQueries).toEqual([])
   })
 

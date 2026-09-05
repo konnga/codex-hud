@@ -15,7 +15,7 @@ function addedDirectories(ctx: RenderContext, prefix: boolean): string[] {
     })
   const extra = ctx.state.project.workspaceRoots.filter(root => root.replace(/[\\/]+$/, '') !== projectRoot).length - roots.length
   if (extra > 0) {
-    roots.push(prefix ? `+${extra} more` : `+${extra} more`)
+    roots.push(`+${extra} ${message(ctx.config.language, 'more')}`)
   }
   return roots
 }

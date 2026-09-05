@@ -11,7 +11,9 @@ function renderWindow(ctx: RenderContext, window: UsageWindow): string | null {
   const value = ctx.config.display.usageValue === 'remaining'
     ? 100 - window.percent
     : window.percent
-  const suffix = ctx.config.display.usageValue === 'remaining' ? '% left' : '%'
+  const suffix = ctx.config.display.usageValue === 'remaining'
+    ? `% ${message(ctx.config.language, 'left')}`
+    : '%'
   const bar = ctx.config.display.usageBarEnabled && !ctx.config.display.usageCompact
     ? `${progressBar(window.percent, 10, ctx.config.colors.barFilled, ctx.config.colors.barEmpty)} `
     : ''
@@ -45,7 +47,11 @@ export function renderUsageLine(ctx: RenderContext): string | null {
       ? color(`${message(ctx.config.language, 'usage')} ${usage.balanceLabel}`, ctx.config.colors.usage, ctx.options.color)
       : null
   }
-  const secondary = usage.secondary && (!usage.primary || (usage.secondary.percent ?? 0) >= ctx.config.display.sevenDayThreshold)
+  const secondary = usage.secondary && (
+    ctx.config.lineLayout === 'expanded'
+    || !usage.primary
+    || (usage.secondary.percent ?? 0) >= ctx.config.display.sevenDayThreshold
+  )
     ? usage.secondary
     : null
   const renderedWindows = [usage.primary, secondary, usage.individual]

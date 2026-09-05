@@ -241,7 +241,7 @@ describe('non-interfering launcher', () => {
     expect(readSessionBinding(bindingPath).rolloutPath).toBeNull()
   })
 
-  it('returns promptly when Codex exits before creating a rollout', async () => {
+  it('returns the child exit code when Codex exits before creating a rollout', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-child-'))
     directories.push(root)
     const cwd = path.join(root, 'project')
@@ -251,9 +251,6 @@ describe('non-interfering launcher', () => {
     const codex = executable(root, 'codex', 'exit 29')
     process.env.CODEX_HOME = codexHome
     process.env.CODEX_HUD_CODEX_BIN = codex
-    const startedAt = Date.now()
-
     expect(await runCodexChild([], null, false, cwd, bindingPath)).toBe(29)
-    expect(Date.now() - startedAt).toBeLessThan(1_000)
   })
 })

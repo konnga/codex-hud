@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { readLatestLoggedRateLimits } from './log-rate-limits.js'
+import { inspectLoggedRateLimitTargets, readLatestLoggedRateLimits } from './log-rate-limits.js'
 
 const directories: string[] = []
 const now = Date.parse('2026-08-11T06:00:00Z')
@@ -43,11 +43,17 @@ function codexHomeWithLogs(rows: LogRow[]): string {
   return codexHome
 }
 
-function rateLimit(ts: number, processUuid: string, usedPercent: number, resetAt = nowSeconds + 604_800): LogRow {
+function rateLimit(
+  ts: number,
+  processUuid: string,
+  usedPercent: number,
+  resetAt = nowSeconds + 604_800,
+  target = 'codex_api::sse::responses',
+): LogRow {
   return {
     ts,
     processUuid,
-    target: 'codex_api::sse::responses',
+    target,
     body: `SSE event: ${JSON.stringify({
       type: 'codex.rate_limits',
       plan_type: 'team',
@@ -98,6 +104,26 @@ describe('logged rate limits', () => {
     if (process.platform !== 'win32') {
       expect(fs.statSync(path.join(codexHome, 'codex-hud', 'account-usage.json')).mode & 0o777).toBe(0o600)
     }
+  })
+
+  it('discovers rate-limit events after Codex changes the tracing target', () => {
+    const codexHome = codexHomeWithLogs([
+      rateLimit(nowSeconds - 30, 'pid:1:chatgpt', 44, nowSeconds + 604_800, 'codex_core::new_stream_target'),
+      request(nowSeconds - 30, 'pid:1:chatgpt', 'https://chatgpt.com/backend-api/codex/responses'),
+      {
+        ts: nowSeconds - 1,
+        processUuid: 'pid:2:diagnostic',
+        target: 'codex_tui::chatwidget::protocol_requests',
+        body: 'tool command mentions SSE event: and codex.rate_limits but is not an event',
+      },
+    ])
+
+    expect(readLatestLoggedRateLimits({ CODEX_HOME: codexHome }, now, 'https://chatgpt.com')).toMatchObject({
+      usage: { primary: { percent: 44 } },
+    })
+    expect(inspectLoggedRateLimitTargets({ CODEX_HOME: codexHome }, now)).toEqual([
+      { target: 'codex_core::new_stream_target', count: 1 },
+    ])
   })
 
   it('rejects a logged window after its reset time', () => {

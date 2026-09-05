@@ -47,4 +47,11 @@ describe('image viewer', () => {
     const lines = createImagePreview(image, 80, 12)
     expect(lines.join('\n')).toContain(`Path: ${image.path}`)
   })
+
+  it('localizes the metadata fallback in Simplified Chinese', () => {
+    const image = fixtureImage()
+    const lines = createImagePreview(image, 80, 12, 'zh-Hans')
+    expect(lines.join('\n')).toContain(`路径: ${image.path}`)
+    expect(lines.join('\n')).toContain('内联预览需要安装 chafa。')
+  })
 })

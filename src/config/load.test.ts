@@ -8,6 +8,7 @@ import { loadConfig, reloadConfig } from './load.js'
 import { CURRENT_CONFIG_VERSION, migrateConfig } from './migrate.js'
 import { createPreset } from './presets.js'
 import { validateConfig } from './validate.js'
+import { applyConfigMigrations } from './version.js'
 import { writeConfig } from './write.js'
 
 const temporaryDirectories: string[] = []
@@ -107,25 +108,61 @@ describe('configuration validation', () => {
             apiKeyEnv: '',
             accessTokenEnv: 'SUB2_TOKEN',
           },
+          {
+            enabled: true,
+            origin: 'http://relay.example.com',
+            template: 'general',
+          },
+          {
+            enabled: true,
+            origin: 'http://127.0.0.1:8787/path',
+            template: 'general',
+          },
         ],
       },
     })
 
-    expect(config.display.externalUsageQueries).toEqual([{
-      enabled: true,
-      origin: 'https://relay.example.com',
-      template: 'newApi',
-      apiKeyEnv: '',
-      accessTokenEnv: 'RELAY_TOKEN',
-      userIdEnv: 'RELAY_USER',
-      refreshMs: 10_000,
-      quotaPerCredit: 500_000,
-    }])
+    expect(config.display.externalUsageQueries).toEqual([
+      {
+        enabled: true,
+        origin: 'https://relay.example.com',
+        template: 'newApi',
+        apiKeyEnv: '',
+        accessTokenEnv: 'RELAY_TOKEN',
+        userIdEnv: 'RELAY_USER',
+        refreshMs: 10_000,
+        quotaPerCredit: 500_000,
+      },
+      {
+        enabled: true,
+        origin: 'http://127.0.0.1:8787',
+        template: 'general',
+        apiKeyEnv: '',
+        accessTokenEnv: '',
+        userIdEnv: '',
+        refreshMs: 300_000,
+        quotaPerCredit: 500_000,
+      },
+    ])
     expect(DEFAULT_CONFIG.display.externalUsageQueries).toEqual([])
   })
 
   it('keeps relay balance queries disabled unless explicitly enabled', () => {
     expect(validateConfig({ display: { externalUsageQueries: [] } }).display.externalUsageQueries).toEqual([])
+  })
+
+  it('allows cleartext relay credentials only on loopback origins', () => {
+    const origins = validateConfig({
+      display: {
+        externalUsageQueries: [
+          { enabled: true, origin: 'http://localhost:8787', template: 'general' },
+          { enabled: true, origin: 'http://[::1]:8788', template: 'general' },
+          { enabled: true, origin: 'http://192.168.1.5:8789', template: 'general' },
+        ],
+      },
+    }).display.externalUsageQueries.map(query => query.origin)
+
+    expect(origins).toEqual(['http://localhost:8787', 'http://[::1]:8788'])
   })
 })
 
@@ -275,6 +312,27 @@ describe('configuration persistence', () => {
     expect(report.disabled).toContain('memory')
     expect(fs.statSync(configPath).mtimeMs).toBe(before)
   })
+
+  it('prints guided status labels in the configured Simplified Chinese language', async () => {
+    const { env } = temporaryConfigEnv()
+    const previous = process.env.CODEX_HUD_CONFIG
+    process.env.CODEX_HUD_CONFIG = env.CODEX_HUD_CONFIG
+    const config = createPreset('essential')
+    config.language = 'zh-Hans'
+    writeConfig(config, {}, env)
+    const output = vi.spyOn(process.stdout, 'write').mockImplementation(() => true)
+    try {
+      expect(await runConfigure(['--status'])).toBe(0)
+    }
+    finally {
+      if (previous === undefined)
+        delete process.env.CODEX_HUD_CONFIG
+      else process.env.CODEX_HUD_CONFIG = previous
+    }
+
+    expect(String(output.mock.calls[0]?.[0])).toContain('配置:')
+    expect(String(output.mock.calls[0]?.[0])).toContain('已启用:')
+  })
 })
 
 describe('configuration migrations', () => {
@@ -336,6 +394,20 @@ describe('configuration migrations', () => {
     expect(migrateConfig({ env, dryRun: true })).toMatchObject({ migrated: true, fromVersion: 0 })
     expect(fs.readFileSync(configPath, 'utf8')).toBe(source)
   })
+
+  it('moves only the legacy refresh default to the one-second polling interval', () => {
+    const legacyDefault = applyConfigMigrations(validateConfig({ refreshIntervalMs: 300 }), {
+      configVersion: 2,
+      refreshIntervalMs: 300,
+    })
+    const explicitOverride = applyConfigMigrations(validateConfig({ refreshIntervalMs: 750 }), {
+      configVersion: 2,
+      refreshIntervalMs: 750,
+    })
+
+    expect(legacyDefault.config.refreshIntervalMs).toBe(1_000)
+    expect(explicitOverride.config.refreshIntervalMs).toBe(750)
+  })
 })
 
 describe('configuration presets', () => {
@@ -350,6 +422,27 @@ describe('configuration presets', () => {
     expect(config.display.showTodos).toBe(true)
     expect(config.display.showPermissionProfile).toBe(true)
     expect(config.display.showSessionTokens).toBe(true)
+    expect(config.display.showToolTargets).toBe(true)
+    expect(config.display.showImages).toBe(true)
+  })
+
+  it('keeps quota visible in the essential preset', () => {
+    const config = createPreset('essential')
+    expect(config.display.showUsage).toBe(true)
+  })
+
+  it('hides identifying and transcript-derived details in the presentation preset', () => {
+    const config = createPreset('presentation')
+    expect(config.lineLayout).toBe('compact')
+    expect(config.display.showUsage).toBe(true)
+    expect(config.display.showAuth).toBe(true)
+    expect(config.display.showAuthUser).toBe(false)
+    expect(config.display.showTools).toBe(false)
+    expect(config.display.showToolTargets).toBe(false)
+    expect(config.display.showTurns).toBe(false)
+    expect(config.display.showImages).toBe(false)
+    expect(config.display.showSessionName).toBe(false)
+    expect(config.display.showSessionId).toBe(false)
   })
 
   it('keeps the minimal preset focused on model, project, and context', () => {

@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { collectAuthInfo, collectSessionTitle } from './session-metadata.js'
+import { collectAuthInfo, collectSessionTitle, hasTrustedOpenAiAuth } from './session-metadata.js'
 
 const SESSION_START = Date.parse('2026-07-20T00:00:00Z')
 const directories: string[] = []
@@ -108,6 +108,55 @@ describe('session metadata collectors', () => {
     expect(collectAuthInfo('team', session('session-chatgpt'), { CODEX_HOME: codexHome })).toEqual({
       method: 'ChatGPT team',
     })
+  })
+
+  it('trusts an unchanged provider that explicitly uses OpenAI authentication', () => {
+    const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-auth-openai-'))
+    directories.push(codexHome)
+    fs.writeFileSync(path.join(codexHome, 'auth.json'), JSON.stringify({
+      tokens: { access_token: 'not-a-jwt' },
+    }))
+    const configPath = path.join(codexHome, 'config.toml')
+    fs.writeFileSync(configPath, [
+      'model_provider = "custom"',
+      '[model_providers.custom]',
+      'requires_openai_auth = true',
+    ].join('\n'))
+    const seconds = (SESSION_START - 1_000) / 1_000
+    fs.utimesSync(configPath, seconds, seconds)
+    const current = { ...session('session-openai-auth'), modelProvider: 'custom' }
+
+    expect(hasTrustedOpenAiAuth(current, { CODEX_HOME: codexHome })).toBe(true)
+  })
+
+  it('does not trust OpenAI auth when a custom provider routes it to another origin', () => {
+    const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-auth-relayed-openai-'))
+    directories.push(codexHome)
+    fs.writeFileSync(path.join(codexHome, 'auth.json'), JSON.stringify({ tokens: { access_token: 'token' } }))
+    const configPath = path.join(codexHome, 'config.toml')
+    fs.writeFileSync(configPath, [
+      '[model_providers.custom]',
+      'requires_openai_auth = true',
+      'base_url = "https://relay.example.com/v1"',
+    ].join('\n'))
+    const seconds = (SESSION_START - 1_000) / 1_000
+    fs.utimesSync(configPath, seconds, seconds)
+
+    expect(hasTrustedOpenAiAuth(
+      { ...session('session-relay-auth'), modelProvider: 'custom' },
+      { CODEX_HOME: codexHome },
+    )).toBe(false)
+  })
+
+  it('does not treat an arbitrary nonempty auth file as ChatGPT authentication', () => {
+    const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-auth-incomplete-'))
+    directories.push(codexHome)
+    fs.writeFileSync(path.join(codexHome, 'auth.json'), JSON.stringify({ last_refresh: '2026-07-20' }))
+
+    expect(hasTrustedOpenAiAuth(
+      { ...session('session-incomplete-auth'), modelProvider: 'openai' },
+      { CODEX_HOME: codexHome },
+    )).toBe(false)
   })
 
   it('prefers an actual ChatGPT endpoint when an API key remains in the environment', () => {

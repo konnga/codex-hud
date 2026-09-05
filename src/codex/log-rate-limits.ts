@@ -18,6 +18,7 @@ export interface LoggedUsageSnapshot {
 }
 
 const EVENT_PREFIX = 'SSE event: '
+const EVENT_TYPE_MARKER = 'codex.rate_limits'
 const QUERY_TIMEOUT_MS = 750
 const CACHE_MS = 15_000
 const MAX_EVENT_AGE_SECONDS = 8 * 24 * 60 * 60
@@ -30,6 +31,11 @@ const CACHE_MAX_AGE_MS = 30 * 60_000
 const CACHE_MAX_ENTRIES = 64
 
 const cache = new Map<string, { at: number, value: LoggedUsageSnapshot | null }>()
+
+export interface LoggedRateLimitTarget {
+  target: string
+  count: number
+}
 
 function record(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -238,12 +244,12 @@ export function readLatestLoggedRateLimits(
   }
   const since = Math.floor(now / 1_000) - MAX_EVENT_AGE_SECONDS
   const sql = [
-    `SELECT ts || '|' || hex(process_uuid) || '|' || hex(feedback_log_body)`,
+    `SELECT ts || '|' || hex(process_uuid) || '|' || hex(substr(feedback_log_body, 1, ${MAX_STORED_BODY_LENGTH}))`,
     '  FROM logs',
     ` WHERE id >= (SELECT max(id) - ${MAX_ROW_LOOKBACK} FROM logs)`,
     `   AND ts >= ${since}`,
-    `   AND target = 'codex_api::sse::responses'`,
-    `   AND instr(feedback_log_body, '"type":"codex.rate_limits"') > 0`,
+    `   AND instr(feedback_log_body, '${EVENT_PREFIX}') > 0`,
+    `   AND instr(feedback_log_body, '${EVENT_TYPE_MARKER}') > 0`,
     ' ORDER BY id DESC',
     ` LIMIT ${MAX_EVENT_CANDIDATES};`,
   ].join('\n')
@@ -283,4 +289,45 @@ export function readLatestLoggedRateLimits(
     return remember({ usage: fresh, observedAt, origin })
   }
   return remember(previous)
+}
+
+export function inspectLoggedRateLimitTargets(
+  env: NodeJS.ProcessEnv = process.env,
+  now = Date.now(),
+): LoggedRateLimitTarget[] {
+  const database = findCodexLogDatabase(getCodexHome(env))
+  if (!database) {
+    return []
+  }
+  const since = Math.floor(now / 1_000) - MAX_EVENT_AGE_SECONDS
+  const sql = [
+    `SELECT hex(target) || '|' || hex(substr(feedback_log_body, 1, ${MAX_STORED_BODY_LENGTH}))`,
+    '  FROM logs',
+    ` WHERE id >= (SELECT max(id) - ${MAX_ROW_LOOKBACK} FROM logs)`,
+    `   AND ts >= ${since}`,
+    `   AND instr(feedback_log_body, '${EVENT_PREFIX}') > 0`,
+    `   AND instr(feedback_log_body, '${EVENT_TYPE_MARKER}') > 0`,
+    ' ORDER BY id DESC',
+    ` LIMIT ${MAX_EVENT_CANDIDATES};`,
+  ].join('\n')
+  const result = spawnSync('sqlite3', ['-readonly', '-noheader', '-batch', database, sql], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+    timeout: QUERY_TIMEOUT_MS,
+  })
+  if (typeof result.stdout !== 'string') {
+    return []
+  }
+  const counts = new Map<string, number>()
+  for (const line of result.stdout.split('\n')) {
+    const [targetValue, bodyValue] = line.split('|')
+    const target = decodeHex(targetValue ?? '')
+    const body = decodeHex(bodyValue ?? '')
+    if (target && body && parseEvent(body)) {
+      counts.set(target, (counts.get(target) ?? 0) + 1)
+    }
+  }
+  return [...counts.entries()]
+    .map(([target, count]) => ({ target, count }))
+    .sort((left, right) => right.count - left.count || left.target.localeCompare(right.target))
 }

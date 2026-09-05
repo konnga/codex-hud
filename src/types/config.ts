@@ -103,6 +103,7 @@ export interface DisplayConfig {
   usageCompact: boolean
   showResetLabel: boolean
   showTools: boolean
+  showToolTargets: boolean
   showSkills: boolean
   showMcp: boolean
   toolNameMaxLength: number
@@ -111,6 +112,7 @@ export interface DisplayConfig {
   showTodos: boolean
   showGoal: boolean
   showTurns: boolean
+  showImages: boolean
   showSessionName: boolean
   showAuth: boolean
   showAuthUser: boolean
@@ -191,7 +193,7 @@ export const DEFAULT_CONFIG: HudConfig = {
   pathLevels: 1,
   maxWidth: null,
   forceMaxWidth: false,
-  refreshIntervalMs: 300,
+  refreshIntervalMs: 1_000,
   elementOrder: [...DEFAULT_ELEMENT_ORDER],
   gitStatus: {
     enabled: true,
@@ -220,6 +222,7 @@ export const DEFAULT_CONFIG: HudConfig = {
     usageCompact: false,
     showResetLabel: true,
     showTools: false,
+    showToolTargets: true,
     showSkills: false,
     showMcp: false,
     toolNameMaxLength: 0,
@@ -228,6 +231,7 @@ export const DEFAULT_CONFIG: HudConfig = {
     showTodos: false,
     showGoal: true,
     showTurns: true,
+    showImages: true,
     showSessionName: false,
     showAuth: true,
     showAuthUser: false,

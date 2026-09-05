@@ -2,6 +2,44 @@
 
 ## [Unreleased]
 
+### Added
+
+- Expanded `doctor --json` with usage provenance, trust decisions, freshness, hidden reasons, parsed windows, context and prompt-cache provenance, live Codex log schema targets, plugin/runtime version matching, and managed-install checksum validation. Added `codex-hud hud-version` for a direct runtime version check.
+- Added a Presentation preset plus independent controls for tool-target and image details, with localized setup/configure prompts and render fallbacks in Simplified Chinese.
+- Added all-source coverage gates and artifacts to CI, a macOS/cmux compatibility job, and a captured Codex 0.153 rollout fixture for schema regression coverage.
+
+### Changed
+
+- Essential and Expanded layouts now keep trusted subscription usage visible, including low weekly usage that was previously omitted. ChatGPT authentication can recover official usage without relying on a stale endpoint only when verified ChatGPT credentials and provider settings agree.
+- Reduced idle work by migrating the default refresh interval from 300 ms to 1 second and loading conversation bodies only when the navigator is opened.
+- Hardened Codex log discovery to follow live rate-limit event shapes and bounded payloads instead of matching diagnostic command text or fixed source targets.
+
+### Fixed
+
+- Persisted the last confirmed origin for each active session, with bounded atomic state and schema-aware fallback, so log rotation or compaction no longer makes valid 5-hour and weekly usage disappear.
+- Redacted sensitive command text from HUD output and restricted relay credentials to HTTPS endpoints, while retaining explicit localhost development support.
+- Recorded managed runtime versions and checksums during setup so stale or partially replaced installations can be identified reliably.
+
+---
+
+### 新增
+
+- 扩展 `doctor --json`：现在会报告用量来源、可信判定、新鲜度、隐藏原因、解析后的窗口、上下文与 prompt cache 来源、Codex 实时日志 schema/目标、插件与 runtime 版本匹配，以及托管安装 checksum 校验；新增 `codex-hud hud-version`，可直接核对当前 runtime 版本。
+- 新增演示预设，并可分别控制工具目标和图片详情；setup/configure 提示、渲染降级文案与图片回退均补齐简体中文。
+- CI 新增全源码覆盖率门禁与产物、macOS/cmux 兼容性任务，并加入 Codex 0.153 rollout 夹具，持续覆盖日志 schema 兼容性。
+
+### 调整
+
+- Essential 与 Expanded 布局会持续显示可信的订阅用量，包括此前可能被省略的低占用周额度；只有 ChatGPT 凭据与 provider 配置均通过核验时，才允许在端点暂时缺失时恢复官方 ChatGPT 用量。
+- 默认刷新间隔由 300 毫秒迁移为 1 秒，会话正文改为仅在打开导航器时加载，降低空闲开销。
+- Codex 日志发现改为跟随真实 rate-limit 事件结构并限制负载大小，不再因诊断命令文本或固定 source target 产生误判。
+
+### 修复
+
+- 按活动会话持久化最近一次已确认的 origin，并使用有界、原子和 schema 感知的状态回退；日志轮换或压缩后，有效的 5 小时与周额度不再消失。
+- HUD 输出会遮蔽敏感命令文本；中转凭据仅允许发送到 HTTPS 端点，同时保留显式的 localhost 本地开发支持。
+- setup 会记录托管 runtime 版本与 checksum，能够可靠识别陈旧或替换不完整的安装。
+
 ## 0.8.0 - 2026-08-31
 
 ### Changed

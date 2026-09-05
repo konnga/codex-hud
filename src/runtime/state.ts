@@ -5,7 +5,7 @@ import type { HudConfig } from '../types/config.js'
 import type { HudState, UsageData } from '../types/state.js'
 import process from 'node:process'
 import { resolveUsageData } from '../codex/external-usage.js'
-import { trustedUsageDataForEndpoint } from '../codex/rate-limits.js'
+import { evaluateUsageTrust, trustedUsageData } from '../codex/rate-limits.js'
 import {
   collectAgentEntries,
   collectAuthInfo,
@@ -13,6 +13,7 @@ import {
   collectMemoryInfo,
   collectProjectInfo,
   collectSessionTitle,
+  hasTrustedOpenAiAuth,
 } from '../collectors/index.js'
 
 export function buildHudState(
@@ -27,8 +28,12 @@ export function buildHudState(
   endpoint: string | null = null,
 ): HudState {
   const workspaceRoots = rollout.session?.workspaceRoots ?? []
+  const usageTrust = evaluateUsageTrust(
+    endpoint,
+    hasTrustedOpenAiAuth(rollout.session, process.env),
+  )
   const usage = resolveUsageData(
-    trustedUsageDataForEndpoint(endpoint, rollout.usage, loggedUsage),
+    trustedUsageData(usageTrust, rollout.usage, loggedUsage),
     config.display,
     now,
   )

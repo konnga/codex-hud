@@ -144,7 +144,7 @@ describe('hud renderer', () => {
     expect(lines.join('\n')).not.toContain('Memory')
     expect(lines.join('\n')).not.toContain('configs')
     expect(lines.join('\n')).not.toContain('Started')
-    expect(lines.join('\n')).toContain('Context ██████░░░░ 59% │ 5h:')
+    expect(lines.join('\n')).toContain('Context ██████░░░░ ~59% │ 5h:')
     expect(lines.join('\n')).not.toContain('Usage 5h:')
     expect(lines.join('\n')).toContain('Tokens: 55K (in 50K, cache 30K · 60%; out 5K)')
   })
@@ -166,7 +166,7 @@ describe('hud renderer', () => {
       now,
     })
 
-    expect(lines.join('\n')).toContain('Context ██████░░░░ 59% │ Usage $12.50')
+    expect(lines.join('\n')).toContain('Context ██████░░░░ ~59% │ Usage $12.50')
   })
 
   it('keeps long goals compact at screenshot width', () => {
@@ -247,6 +247,7 @@ describe('hud renderer', () => {
   it('renders nested cache usage in Chinese', () => {
     const config = createPreset('full')
     config.language = 'zh-Hans'
+    config.display.contextCriticalThreshold = 50
     const lines = renderHud({
       config,
       state: state(),
@@ -255,6 +256,7 @@ describe('hud renderer', () => {
     })
 
     expect(lines.join('\n')).toContain('Token: 55K (输入 50K，缓存 30K · 60%；输出 5K)')
+    expect(lines.join('\n')).toContain('输入 20K 缓存 50K 输出 10K')
   })
 
   it('clips lines to terminal width', () => {
@@ -283,8 +285,8 @@ describe('hud renderer', () => {
     const lines = renderHud({ config, state: state(), options: { width: 220, height: 20, color: false }, now })
     expect(lines.join('\n')).toContain('+shared')
     expect(lines.join('\n')).toContain('M2 A1 ?1')
-    expect(lines.join('\n')).toContain('Cache TTL ⏱️ 5m')
-    expect(lines.join('\n')).toContain('Context ██████████ 100%')
+    expect(lines.join('\n')).toContain('Cache estimate ~⏱️ 5m')
+    expect(lines.join('\n')).toContain('Context ██████████ ~100%')
     expect(lines[0]).toContain('HUD fidelity audit')
     expect(lines.join('\n')).toContain('ChatGPT pro (builder)')
     expect(lines.join('\n')).toContain('out: 42.1 tok/s')
@@ -303,5 +305,39 @@ describe('hud renderer', () => {
     expect(lines[0]).toContain('anyrouter · $12.50')
     expect(lines.filter(line => line.includes('$12.50'))).toHaveLength(1)
     expect(lines.join('\n')).not.toContain('Usage $12.50')
+  })
+
+  it('keeps low weekly usage visible in expanded layouts only', () => {
+    const current = state()
+    current.usage!.primary!.percent = 5
+    current.usage!.secondary!.percent = 12
+
+    const expanded = createPreset('essential')
+    expanded.lineLayout = 'expanded'
+    const compact = structuredClone(expanded)
+    compact.lineLayout = 'compact'
+
+    const expandedText = renderHud({ config: expanded, state: current, options: { width: 180, height: 20, color: false }, now }).join('\n')
+    const compactText = renderHud({ config: compact, state: current, options: { width: 180, height: 20, color: false }, now }).join('\n')
+
+    expect(expandedText).toContain('1w: █░░░░░░░░░ 12%')
+    expect(compactText).not.toContain('1w:')
+  })
+
+  it('uses the presentation preset without exposing user, tool target, turns, or images', () => {
+    const current = state()
+    current.images = [{ path: '/private/demo-secret.png', source: 'view_image', createdAt: now }]
+    const output = renderHud({
+      config: createPreset('presentation'),
+      state: current,
+      options: { width: 220, height: 20, color: false },
+      now,
+    }).join('\n')
+
+    expect(output).toContain('ChatGPT pro')
+    expect(output).not.toContain('builder')
+    expect(output).not.toContain('pnpm test')
+    expect(output).not.toContain('Turns:')
+    expect(output).not.toContain('demo-secret.png')
   })
 })
