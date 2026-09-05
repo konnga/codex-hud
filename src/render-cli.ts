@@ -6,7 +6,7 @@ import fs from 'node:fs'
 import process from 'node:process'
 import { pathToFileURL } from 'node:url'
 import { readCachedConfiguredExternalUsage, readConfiguredExternalUsage } from './codex/external-usage.js'
-import { readLatestLoggedRateLimits } from './codex/log-rate-limits.js'
+import { persistRolloutRateLimits, readLatestLoggedRateLimits } from './codex/log-rate-limits.js'
 import { evaluateUsageTrust } from './codex/rate-limits.js'
 import { RolloutParser } from './codex/rollout-parser.js'
 import { isOfficialOpenAIEndpoint, resolveProcessEndpoint, resolveProcessSession, resolveSessionEndpoint } from './codex/session-endpoint.js'
@@ -220,6 +220,13 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
       endpoint?.url ?? null,
       hasTrustedOpenAiAuth(rollout.session, process.env),
     )
+    if ((loaded.config.display.showUsage || loaded.config.display.showAuth) && usageTrust.trusted) {
+      persistRolloutRateLimits(
+        rollout.usage,
+        rollout.usageObservedAt,
+        usageTrust.effectiveEndpoint,
+      )
+    }
     const loggedUsage = (loaded.config.display.showUsage || loaded.config.display.showAuth)
       && usageTrust.trusted
       && isOfficialOpenAIEndpoint(usageTrust.effectiveEndpoint)

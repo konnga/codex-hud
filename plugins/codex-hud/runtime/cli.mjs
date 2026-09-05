@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { A as trustedUsageData, B as HUD_VERSION, C as DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY, D as inspectLoggedRateLimitTargets, E as RolloutParser, F as inspectCodexLogSchema, H as getConfigPath, I as isOfficialOpenAIEndpoint, M as readConfiguredExternalUsage, N as resolveUsageData, O as readLatestLoggedRateLimits, P as findCodexLogDatabase, S as DEFAULT_CONFIG, T as findActiveSession, U as getHudStateDirectory, V as getCodexHome, W as getLegacyStateDirectory, a as waitForNewRootSession, b as applyConfigMigrations, i as snapshotRootSessions, k as evaluateUsageTrust, m as renderHud, n as createSessionBindingPath, o as writeSessionBinding, s as buildHudState, t as acquireSessionDiscoveryLock, v as loadConfig, w as hasTrustedOpenAiAuth, x as rawConfigVersion, z as resolveSessionEndpoint } from "./session-binding-VWoGw0mN.mjs";
+import { A as evaluateUsageTrust, B as resolveSessionEndpoint, C as DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY, D as inspectLoggedRateLimitTargets, E as RolloutParser, F as findCodexLogDatabase, G as getLegacyStateDirectory, H as getCodexHome, I as inspectCodexLogSchema, L as isOfficialOpenAIEndpoint, N as readConfiguredExternalUsage, O as persistRolloutRateLimits, P as resolveUsageData, S as DEFAULT_CONFIG, T as findActiveSession, U as getConfigPath, V as HUD_VERSION, W as getHudStateDirectory, a as waitForNewRootSession, b as applyConfigMigrations, i as snapshotRootSessions, j as trustedUsageData, k as readLatestLoggedRateLimits, m as renderHud, n as createSessionBindingPath, o as writeSessionBinding, s as buildHudState, t as acquireSessionDiscoveryLock, v as loadConfig, w as hasTrustedOpenAiAuth, x as rawConfigVersion } from "./session-binding-C78ZzxyE.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import process$1, { stdin, stdout } from "node:process";
@@ -1540,6 +1540,7 @@ async function preview(config) {
 	const rollout = parser.parse();
 	const endpoint = rollout.session ? resolveSessionEndpoint(rollout.session.id) : null;
 	const usageTrust = evaluateUsageTrust(endpoint?.url ?? null, hasTrustedOpenAiAuth(rollout.session, process$1.env));
+	if (usageTrust.trusted) persistRolloutRateLimits(rollout.usage, rollout.usageObservedAt, usageTrust.effectiveEndpoint);
 	const loggedUsage = usageTrust.trusted && isOfficialOpenAIEndpoint(usageTrust.effectiveEndpoint) ? readLatestLoggedRateLimits(process$1.env, now.getTime(), usageTrust.effectiveEndpoint)?.usage ?? null : null;
 	const queriedUsage = config.display.showAuth ? await readConfiguredExternalUsage(config.display.externalUsageQueries, endpoint?.url ?? null, process$1.env, now.getTime()) : null;
 	return renderHud({
@@ -3097,13 +3098,15 @@ async function main(args = process$1.argv.slice(2)) {
 		const parsed = parser.parse();
 		const endpoint = parsed.session ? resolveSessionEndpoint(parsed.session.id) : null;
 		const usageTrust = evaluateUsageTrust(endpoint?.url ?? null, hasTrustedOpenAiAuth(parsed.session, process$1.env));
+		if (usageTrust.trusted) persistRolloutRateLimits(parsed.usage, parsed.usageObservedAt, usageTrust.effectiveEndpoint);
 		const loggedSnapshot = usageTrust.trusted && usageTrust.effectiveEndpoint ? readLatestLoggedRateLimits(process$1.env, Date.now(), usageTrust.effectiveEndpoint) : null;
 		const nativeUsage = trustedUsageData(usageTrust, parsed.usage, loggedSnapshot?.usage ?? null);
 		const resolvedUsage = resolveUsageData(nativeUsage, {
 			...config.config.display,
 			externalUsageWritePath: ""
 		}, /* @__PURE__ */ new Date());
-		const usageSource = nativeUsage ? parsed.usage && loggedSnapshot ? "rollout+log" : parsed.usage ? "rollout" : "log" : resolvedUsage ? "external-snapshot" : null;
+		const nativeUsageSources = [parsed.usage ? "rollout" : null, loggedSnapshot?.source ?? null].filter((source) => Boolean(source));
+		const usageSource = nativeUsage ? [...new Set(nativeUsageSources)].join("+") : resolvedUsage ? "external-snapshot" : null;
 		const usageHiddenReason = !config.config.display.showUsage ? "display-disabled" : parsed.usage && !usageTrust.trusted ? usageTrust.reason : !resolvedUsage ? "no-fresh-usage-observation" : null;
 		const pluginManifest = installedPluginManifest();
 		const managedInstall = inspectManagedInstall();

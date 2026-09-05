@@ -8,13 +8,14 @@ import path from 'node:path'
 import process from 'node:process'
 import { getCodexHome, getHudStateDirectory } from '../config/paths.js'
 import { setTimedCache } from '../runtime/timed-cache.js'
-import { normalizeRateLimits } from './rate-limits.js'
-import { endpointOrigin, findCodexLogDatabase } from './session-endpoint.js'
+import { normalizeAccountRateLimits } from './rate-limits.js'
+import { endpointOrigin, findCodexLogDatabase, isOfficialOpenAIEndpoint } from './session-endpoint.js'
 
 export interface LoggedUsageSnapshot {
   usage: UsageData
   observedAt: Date
   origin: string
+  source: 'log' | 'rollout-cache'
 }
 
 const EVENT_PREFIX = 'SSE event: '
@@ -72,11 +73,39 @@ function parseEvent(body: string): UsageData | null {
       plan_type: typeof event.plan_type === 'string' ? event.plan_type : null,
       rate_limit_reached_type: limits.limit_reached === true ? 'rate_limit_reached' : null,
     }
-    return normalizeRateLimits(raw)
+    return normalizeAccountRateLimits(raw)
   }
   catch {
     return null
   }
+}
+
+function rawWindow(window: UsageWindow | null): Record<string, unknown> | null {
+  return window
+    ? {
+        used_percent: window.percent,
+        window_minutes: window.windowMinutes ?? null,
+        resets_at: window.resetAt?.toISOString() ?? null,
+      }
+    : null
+}
+
+function rolloutSnapshotBody(usage: UsageData): string {
+  return `${EVENT_PREFIX}${JSON.stringify({
+    type: EVENT_TYPE_MARKER,
+    plan_type: usage.planType,
+    rate_limits: {
+      limit_id: 'codex',
+      limit_name: 'Codex',
+      primary: rawWindow(usage.primary),
+      secondary: rawWindow(usage.secondary),
+      individual_limit: rawWindow(usage.individual),
+      limit_reached: Boolean(usage.limitReachedType),
+    },
+    credits: usage.balanceLabel
+      ? { has_credits: true, unlimited: false, balance: usage.balanceLabel }
+      : null,
+  })}`
 }
 
 function freshWindow(window: UsageWindow | null, observedAt: Date, now: number): UsageWindow | null {
@@ -133,7 +162,12 @@ function readStoredSnapshot(
       const usage = parseEvent(body)
       const fresh = usage ? freshUsage(usage, observedAt, now) : null
       if (fresh && (!newest || observedAt > newest.observedAt)) {
-        newest = { usage: fresh, observedAt, origin }
+        newest = {
+          usage: fresh,
+          observedAt,
+          origin,
+          source: entry?.source === 'rollout-cache' ? 'rollout-cache' : 'log',
+        }
       }
     }
     return newest
@@ -143,7 +177,13 @@ function readStoredSnapshot(
   }
 }
 
-function writeStoredSnapshot(env: NodeJS.ProcessEnv, body: string, observedAt: Date, origin: string): void {
+function writeStoredSnapshot(
+  env: NodeJS.ProcessEnv,
+  body: string,
+  observedAt: Date,
+  origin: string,
+  source: LoggedUsageSnapshot['source'],
+): void {
   if (body.length > MAX_STORED_BODY_LENGTH) {
     return
   }
@@ -161,10 +201,10 @@ function writeStoredSnapshot(env: NodeJS.ProcessEnv, body: string, observedAt: D
     const entries = currentEntries ? { ...currentEntries } : {}
     const current = record(entries[origin])
     const currentObservedAt = typeof current?.observed_at === 'string' ? new Date(current.observed_at) : null
-    if (currentObservedAt && !Number.isNaN(currentObservedAt.getTime()) && currentObservedAt > observedAt) {
+    if (currentObservedAt && !Number.isNaN(currentObservedAt.getTime()) && currentObservedAt >= observedAt) {
       return
     }
-    entries[origin] = { observed_at: observedAt.toISOString(), body }
+    entries[origin] = { observed_at: observedAt.toISOString(), source, body }
     fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 })
     fs.writeFileSync(temporaryPath, `${JSON.stringify({
       version: 2,
@@ -181,6 +221,27 @@ function writeStoredSnapshot(env: NodeJS.ProcessEnv, body: string, observedAt: D
       // The account snapshot is optional and must never break the HUD.
     }
   }
+}
+
+/**
+ * Share an account-wide rollout observation with sibling HUD sessions. Recent
+ * Codex builds can emit limits only into rollout JSONL, while a concurrent
+ * model-specific session has no account quota of its own to display.
+ */
+export function persistRolloutRateLimits(
+  usage: UsageData | null,
+  observedAt: Date | null,
+  endpoint: string | null,
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  if (!usage || !observedAt || Number.isNaN(observedAt.getTime()) || !endpoint || !isOfficialOpenAIEndpoint(endpoint)) {
+    return
+  }
+  const origin = endpointOrigin(endpoint)
+  if (!origin) {
+    return
+  }
+  writeStoredSnapshot(env, rolloutSnapshotBody(usage), observedAt, origin, 'rollout-cache')
 }
 
 function eventOrigin(database: string, processUuid: string, timestamp: number): string | null {
@@ -206,9 +267,9 @@ function eventOrigin(database: string, processUuid: string, timestamp: number): 
 
 /**
  * Codex currently logs `codex.rate_limits` SSE events but does not copy them
- * into rollout token-count events for every provider. The newest event per
- * provider origin is account-wide, so persist it for other open HUD processes
- * too. `expectedEndpoint` names the provider the caller is bound to; passing
+ * into rollout token-count events for every provider. Keep the newest
+ * account-wide event per provider origin and share it with other open HUD
+ * processes. `expectedEndpoint` names the provider the caller is bound to; passing
  * null means the endpoint is unknown, and showing no usage beats showing
  * another provider's account.
  */
@@ -235,7 +296,12 @@ export function readLatestLoggedRateLimits(
   if (cached?.value) {
     const fallback = freshUsage(cached.value.usage, cached.value.observedAt, now)
     if (fallback) {
-      previous = { usage: fallback, observedAt: cached.value.observedAt, origin: cached.value.origin }
+      previous = {
+        usage: fallback,
+        observedAt: cached.value.observedAt,
+        origin: cached.value.origin,
+        source: cached.value.source,
+      }
     }
   }
   const database = findCodexLogDatabase(codexHome)
@@ -285,8 +351,8 @@ export function readLatestLoggedRateLimits(
     if (!origin || (expectedOrigin !== undefined && origin !== expectedOrigin)) {
       continue
     }
-    writeStoredSnapshot(env, body, observedAt, origin)
-    return remember({ usage: fresh, observedAt, origin })
+    writeStoredSnapshot(env, body, observedAt, origin, 'log')
+    return remember({ usage: fresh, observedAt, origin, source: 'log' })
   }
   return remember(previous)
 }

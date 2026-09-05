@@ -805,7 +805,7 @@ function normalizeRateLimits(raw) {
 	const credits = raw.credits && typeof raw.credits === "object" ? raw.credits : null;
 	const rawBalance = credits && typeof credits.balance === "string" ? credits.balance.trim() : "";
 	const balance = credits && rawBalance && !(credits.has_credits === false && rawBalance === "0") ? rawBalance : null;
-	return {
+	const usage = {
 		primary: normalizeWindow(raw.primary, "limit"),
 		secondary: normalizeWindow(raw.secondary, "limit"),
 		individual: normalizeWindow(raw.individual_limit, "spend", true),
@@ -813,6 +813,17 @@ function normalizeRateLimits(raw) {
 		balanceLabel: balance,
 		limitReachedType: typeof raw.rate_limit_reached_type === "string" ? raw.rate_limit_reached_type : raw.spend_control_reached === true ? "spend_control_reached" : null
 	};
+	return usage.primary || usage.secondary || usage.individual || usage.planType || usage.balanceLabel || usage.limitReachedType ? usage : null;
+}
+/**
+* Normalize only the account-wide Codex quota. Newer Codex builds also emit
+* named, model-specific limits (for example `codex_bengalfox`) through the
+* same field; those must not replace the ChatGPT account windows in the HUD.
+* Older rollout contracts had no limit id, so an absent id remains valid.
+*/
+function normalizeAccountRateLimits(raw) {
+	const limitId = typeof raw?.limit_id === "string" ? raw.limit_id.trim().toLowerCase() : "";
+	return !limitId || limitId === "codex" ? normalizeRateLimits(raw) : null;
 }
 function sameWindow(left, right) {
 	if (left.windowMinutes !== null && left.windowMinutes !== void 0 && right.windowMinutes !== null && right.windowMinutes !== void 0) return left.windowMinutes === right.windowMinutes;
@@ -903,7 +914,7 @@ function parseEvent(body) {
 		const event = record$1(JSON.parse(body.slice(marker + 11)));
 		const limits = record$1(event?.rate_limits);
 		if (event?.type !== "codex.rate_limits" || !limits) return null;
-		return normalizeRateLimits({
+		return normalizeAccountRateLimits({
 			...limits,
 			credits: record$1(event.credits),
 			plan_type: typeof event.plan_type === "string" ? event.plan_type : null,
@@ -912,6 +923,32 @@ function parseEvent(body) {
 	} catch {
 		return null;
 	}
+}
+function rawWindow(window) {
+	return window ? {
+		used_percent: window.percent,
+		window_minutes: window.windowMinutes ?? null,
+		resets_at: window.resetAt?.toISOString() ?? null
+	} : null;
+}
+function rolloutSnapshotBody(usage) {
+	return `${EVENT_PREFIX}${JSON.stringify({
+		type: EVENT_TYPE_MARKER,
+		plan_type: usage.planType,
+		rate_limits: {
+			limit_id: "codex",
+			limit_name: "Codex",
+			primary: rawWindow(usage.primary),
+			secondary: rawWindow(usage.secondary),
+			individual_limit: rawWindow(usage.individual),
+			limit_reached: Boolean(usage.limitReachedType)
+		},
+		credits: usage.balanceLabel ? {
+			has_credits: true,
+			unlimited: false,
+			balance: usage.balanceLabel
+		} : null
+	})}`;
 }
 function freshWindow(window, observedAt, now) {
 	if (!window) return null;
@@ -953,7 +990,8 @@ function readStoredSnapshot(env, now, expectedOrigin) {
 			if (fresh && (!newest || observedAt > newest.observedAt)) newest = {
 				usage: fresh,
 				observedAt,
-				origin
+				origin,
+				source: entry?.source === "rollout-cache" ? "rollout-cache" : "log"
 			};
 		}
 		return newest;
@@ -961,7 +999,7 @@ function readStoredSnapshot(env, now, expectedOrigin) {
 		return null;
 	}
 }
-function writeStoredSnapshot(env, body, observedAt, origin) {
+function writeStoredSnapshot(env, body, observedAt, origin, source) {
 	if (body.length > MAX_STORED_BODY_LENGTH) return;
 	const filePath = storedSnapshotPath(env);
 	const temporaryPath = `${filePath}.${process.pid}.tmp`;
@@ -974,9 +1012,10 @@ function writeStoredSnapshot(env, body, observedAt, origin) {
 		const entries = currentEntries ? { ...currentEntries } : {};
 		const current = record$1(entries[origin]);
 		const currentObservedAt = typeof current?.observed_at === "string" ? new Date(current.observed_at) : null;
-		if (currentObservedAt && !Number.isNaN(currentObservedAt.getTime()) && currentObservedAt > observedAt) return;
+		if (currentObservedAt && !Number.isNaN(currentObservedAt.getTime()) && currentObservedAt >= observedAt) return;
 		entries[origin] = {
 			observed_at: observedAt.toISOString(),
+			source,
 			body
 		};
 		fs.mkdirSync(path.dirname(filePath), {
@@ -997,6 +1036,17 @@ function writeStoredSnapshot(env, body, observedAt, origin) {
 			fs.rmSync(temporaryPath, { force: true });
 		} catch {}
 	}
+}
+/**
+* Share an account-wide rollout observation with sibling HUD sessions. Recent
+* Codex builds can emit limits only into rollout JSONL, while a concurrent
+* model-specific session has no account quota of its own to display.
+*/
+function persistRolloutRateLimits(usage, observedAt, endpoint, env = process.env) {
+	if (!usage || !observedAt || Number.isNaN(observedAt.getTime()) || !endpoint || !isOfficialOpenAIEndpoint(endpoint)) return;
+	const origin = endpointOrigin(endpoint);
+	if (!origin) return;
+	writeStoredSnapshot(env, rolloutSnapshotBody(usage), observedAt, origin, "rollout-cache");
 }
 function eventOrigin(database, processUuid, timestamp) {
 	const result = spawnSync("sqlite3", [
@@ -1028,9 +1078,9 @@ function eventOrigin(database, processUuid, timestamp) {
 }
 /**
 * Codex currently logs `codex.rate_limits` SSE events but does not copy them
-* into rollout token-count events for every provider. The newest event per
-* provider origin is account-wide, so persist it for other open HUD processes
-* too. `expectedEndpoint` names the provider the caller is bound to; passing
+* into rollout token-count events for every provider. Keep the newest
+* account-wide event per provider origin and share it with other open HUD
+* processes. `expectedEndpoint` names the provider the caller is bound to; passing
 * null means the endpoint is unknown, and showing no usage beats showing
 * another provider's account.
 */
@@ -1054,7 +1104,8 @@ function readLatestLoggedRateLimits(env = process.env, now = Date.now(), expecte
 		if (fallback) previous = {
 			usage: fallback,
 			observedAt: cached.value.observedAt,
-			origin: cached.value.origin
+			origin: cached.value.origin,
+			source: cached.value.source
 		};
 	}
 	const database = findCodexLogDatabase(codexHome);
@@ -1099,11 +1150,12 @@ function readLatestLoggedRateLimits(env = process.env, now = Date.now(), expecte
 		const origin = origins.has(processUuid) ? origins.get(processUuid) ?? null : eventOrigin(database, processUuid, timestamp);
 		origins.set(processUuid, origin);
 		if (!origin || expectedOrigin !== void 0 && origin !== expectedOrigin) continue;
-		writeStoredSnapshot(env, body, observedAt, origin);
+		writeStoredSnapshot(env, body, observedAt, origin, "log");
 		return remember({
 			usage: fresh,
 			observedAt,
-			origin
+			origin,
+			source: "log"
 		});
 	}
 	return remember(previous);
@@ -1569,7 +1621,7 @@ var RolloutParser = class {
 			this.latestTokenUsage = payload.info ?? this.latestTokenUsage;
 			this.state.context = calculateContextUsage(this.latestTokenUsage?.last_token_usage, this.latestTokenUsage?.model_context_window);
 			this.state.sessionTokens = toSessionTokens(this.latestTokenUsage?.total_token_usage);
-			const observedUsage = normalizeRateLimits(payload.rate_limits);
+			const observedUsage = normalizeAccountRateLimits(payload.rate_limits);
 			this.state.usage = mergeUsageData(this.state.usage, observedUsage);
 			if (observedUsage) this.state.usageObservedAt = timestamp;
 			return;
@@ -6233,5 +6285,5 @@ async function waitForNewRootSession(cwd, snapshot, codexHome = getCodexHome(), 
 }
 
 //#endregion
-export { trustedUsageData as A, HUD_VERSION as B, DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY as C, inspectLoggedRateLimitTargets as D, RolloutParser as E, inspectCodexLogSchema as F, getConfigPath as H, isOfficialOpenAIEndpoint as I, resolveProcessEndpoint as L, readConfiguredExternalUsage as M, resolveUsageData as N, readLatestLoggedRateLimits as O, findCodexLogDatabase as P, resolveProcessSession as R, DEFAULT_CONFIG as S, findActiveSession as T, getHudStateDirectory as U, getCodexHome as V, getLegacyStateDirectory as W, sliceAnsi as _, waitForNewRootSession as a, applyConfigMigrations as b, desiredPaneHeight as c, resizeCmuxPane as d, resizeHudPane as f, visibleWidth as g, truncateAnsi as h, snapshotRootSessions as i, readCachedConfiguredExternalUsage as j, evaluateUsageTrust as k, hudRenderHeight as l, renderHud as m, createSessionBindingPath as n, writeSessionBinding as o, settleCmuxPaneHeight as p, readSessionBinding as r, buildHudState as s, acquireSessionDiscoveryLock as t, readCmuxPaneGeometry as u, loadConfig as v, hasTrustedOpenAiAuth as w, rawConfigVersion as x, reloadConfig as y, resolveSessionEndpoint as z };
-//# sourceMappingURL=session-binding-VWoGw0mN.mjs.map
+export { evaluateUsageTrust as A, resolveSessionEndpoint as B, DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY as C, inspectLoggedRateLimitTargets as D, RolloutParser as E, findCodexLogDatabase as F, getLegacyStateDirectory as G, getCodexHome as H, inspectCodexLogSchema as I, isOfficialOpenAIEndpoint as L, readCachedConfiguredExternalUsage as M, readConfiguredExternalUsage as N, persistRolloutRateLimits as O, resolveUsageData as P, resolveProcessEndpoint as R, DEFAULT_CONFIG as S, findActiveSession as T, getConfigPath as U, HUD_VERSION as V, getHudStateDirectory as W, sliceAnsi as _, waitForNewRootSession as a, applyConfigMigrations as b, desiredPaneHeight as c, resizeCmuxPane as d, resizeHudPane as f, visibleWidth as g, truncateAnsi as h, snapshotRootSessions as i, trustedUsageData as j, readLatestLoggedRateLimits as k, hudRenderHeight as l, renderHud as m, createSessionBindingPath as n, writeSessionBinding as o, settleCmuxPaneHeight as p, readSessionBinding as r, buildHudState as s, acquireSessionDiscoveryLock as t, readCmuxPaneGeometry as u, loadConfig as v, hasTrustedOpenAiAuth as w, rawConfigVersion as x, reloadConfig as y, resolveProcessSession as z };
+//# sourceMappingURL=session-binding-C78ZzxyE.mjs.map

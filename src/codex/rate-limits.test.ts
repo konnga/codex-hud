@@ -1,6 +1,12 @@
 import type { UsageData } from '../types/state.js'
 import { describe, expect, it } from 'vitest'
-import { evaluateUsageTrust, mergeUsageData, normalizeRateLimits, trustedUsageDataForEndpoint } from './rate-limits.js'
+import {
+  evaluateUsageTrust,
+  mergeUsageData,
+  normalizeAccountRateLimits,
+  normalizeRateLimits,
+  trustedUsageDataForEndpoint,
+} from './rate-limits.js'
 
 describe('normalizeRateLimits', () => {
   it('does not assume a five-hour window when telemetry omits the duration', () => {
@@ -86,6 +92,28 @@ describe('normalizeRateLimits', () => {
       label: '1w',
       percent: 19,
     })
+  })
+
+  it('accepts account-wide and legacy limits but rejects named model limits', () => {
+    const weekly = { used_percent: 19, window_minutes: 10_080 }
+
+    expect(normalizeAccountRateLimits({ limit_id: 'codex', primary: weekly })?.primary?.percent).toBe(19)
+    expect(normalizeAccountRateLimits({ primary: weekly })?.primary?.percent).toBe(19)
+    expect(normalizeAccountRateLimits({
+      limit_id: 'codex_bengalfox',
+      limit_name: 'GPT-5.3-Codex-Spark',
+      primary: { used_percent: 0, window_minutes: 300 },
+      secondary: { used_percent: 0, window_minutes: 10_080 },
+    })).toBeNull()
+  })
+
+  it('ignores an empty account update', () => {
+    expect(normalizeAccountRateLimits({
+      limit_id: 'codex',
+      primary: null,
+      secondary: null,
+      plan_type: null,
+    })).toBeNull()
   })
 })
 

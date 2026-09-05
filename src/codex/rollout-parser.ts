@@ -26,7 +26,7 @@ import path from 'node:path'
 import process from 'node:process'
 import { calculateContextUsage } from './context-usage.js'
 import { JsonlTail } from './jsonl-tail.js'
-import { mergeUsageData, normalizeRateLimits } from './rate-limits.js'
+import { mergeUsageData, normalizeAccountRateLimits } from './rate-limits.js'
 
 const MAX_RECENT_TOOLS = 100
 const MAX_TARGET_LENGTH = 80
@@ -548,7 +548,7 @@ export class RolloutParser {
         this.latestTokenUsage?.model_context_window,
       )
       this.state.sessionTokens = toSessionTokens(this.latestTokenUsage?.total_token_usage)
-      const observedUsage = normalizeRateLimits(payload.rate_limits)
+      const observedUsage = normalizeAccountRateLimits(payload.rate_limits)
       // Codex rate-limit updates can be sparse: a later token_count may only
       // contain one window (or no window metadata at all). Merge it with the
       // last complete snapshot instead of clearing previously known limits.

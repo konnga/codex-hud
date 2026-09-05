@@ -4,7 +4,7 @@ import type { HudConfig, Language, LineLayout } from '../types/config.js'
 import process from 'node:process'
 import * as prompts from '@clack/prompts'
 import { readConfiguredExternalUsage } from '../codex/external-usage.js'
-import { readLatestLoggedRateLimits } from '../codex/log-rate-limits.js'
+import { persistRolloutRateLimits, readLatestLoggedRateLimits } from '../codex/log-rate-limits.js'
 import { evaluateUsageTrust } from '../codex/rate-limits.js'
 import { RolloutParser } from '../codex/rollout-parser.js'
 import { isOfficialOpenAIEndpoint, resolveSessionEndpoint } from '../codex/session-endpoint.js'
@@ -233,6 +233,13 @@ async function preview(config: HudConfig): Promise<string> {
     endpoint?.url ?? null,
     hasTrustedOpenAiAuth(rollout.session, process.env),
   )
+  if (usageTrust.trusted) {
+    persistRolloutRateLimits(
+      rollout.usage,
+      rollout.usageObservedAt,
+      usageTrust.effectiveEndpoint,
+    )
+  }
   const loggedUsage = usageTrust.trusted && isOfficialOpenAIEndpoint(usageTrust.effectiveEndpoint)
     ? readLatestLoggedRateLimits(process.env, now.getTime(), usageTrust.effectiveEndpoint)?.usage ?? null
     : null

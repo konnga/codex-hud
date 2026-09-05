@@ -301,6 +301,91 @@ describe('rollout parser', () => {
     })
   })
 
+  it('does not let a named model quota replace the account-wide quota', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-rollout-model-limit-'))
+    temporaryDirectories.push(directory)
+    const filePath = path.join(directory, 'rollout.jsonl')
+    fs.writeFileSync(filePath, [
+      JSON.stringify({
+        timestamp: '2026-09-05T02:50:00Z',
+        type: 'session_meta',
+        payload: { session_id: 'model-limit-session', cwd: directory },
+      }),
+      JSON.stringify({
+        timestamp: '2026-09-05T02:51:00Z',
+        type: 'event_msg',
+        payload: {
+          type: 'token_count',
+          rate_limits: {
+            limit_id: 'codex',
+            limit_name: 'Codex',
+            primary: { used_percent: 16, window_minutes: 10_080 },
+            secondary: null,
+            plan_type: 'prolite',
+          },
+        },
+      }),
+      JSON.stringify({
+        timestamp: '2026-09-05T02:52:00Z',
+        type: 'event_msg',
+        payload: {
+          type: 'token_count',
+          rate_limits: {
+            limit_id: 'codex_bengalfox',
+            limit_name: 'GPT-5.3-Codex-Spark',
+            primary: { used_percent: 0, window_minutes: 300 },
+            secondary: { used_percent: 0, window_minutes: 10_080 },
+            plan_type: 'prolite',
+          },
+        },
+      }),
+      '',
+    ].join('\n'), 'utf8')
+
+    const parser = new RolloutParser()
+    parser.setFile(filePath)
+    const state = parser.parse()
+    expect(state.usage).toMatchObject({
+      primary: { label: '1w', percent: 16 },
+      secondary: null,
+      planType: 'prolite',
+    })
+    expect(state.usageObservedAt).toEqual(new Date('2026-09-05T02:51:00Z'))
+  })
+
+  it('leaves usage empty when a rollout contains only a named model quota', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-rollout-model-only-'))
+    temporaryDirectories.push(directory)
+    const filePath = path.join(directory, 'rollout.jsonl')
+    fs.writeFileSync(filePath, [
+      JSON.stringify({
+        timestamp: '2026-09-05T02:50:00Z',
+        type: 'session_meta',
+        payload: { session_id: 'model-only-session', cwd: directory },
+      }),
+      JSON.stringify({
+        timestamp: '2026-09-05T02:51:00Z',
+        type: 'event_msg',
+        payload: {
+          type: 'token_count',
+          rate_limits: {
+            limit_id: 'codex_bengalfox',
+            limit_name: 'GPT-5.3-Codex-Spark',
+            primary: { used_percent: 0, window_minutes: 300 },
+            secondary: { used_percent: 0, window_minutes: 10_080 },
+          },
+        },
+      }),
+      '',
+    ].join('\n'), 'utf8')
+
+    const parser = new RolloutParser()
+    parser.setFile(filePath)
+    const state = parser.parse()
+    expect(state.usage).toBeNull()
+    expect(state.usageObservedAt).toBeNull()
+  })
+
   it('records MCP servers from the event Codex actually writes', () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-rollout-'))
     temporaryDirectories.push(directory)

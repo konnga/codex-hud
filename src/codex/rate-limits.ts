@@ -92,7 +92,7 @@ export function normalizeRateLimits(raw: RawRateLimits | null | undefined): Usag
     && !(credits.has_credits === false && rawBalance === '0')
     ? rawBalance
     : null
-  return {
+  const usage: UsageData = {
     primary: normalizeWindow(raw.primary, 'limit'),
     secondary: normalizeWindow(raw.secondary, 'limit'),
     individual: normalizeWindow(raw.individual_limit, 'spend', true),
@@ -102,6 +102,25 @@ export function normalizeRateLimits(raw: RawRateLimits | null | undefined): Usag
       ? raw.rate_limit_reached_type
       : raw.spend_control_reached === true ? 'spend_control_reached' : null,
   }
+  return usage.primary
+    || usage.secondary
+    || usage.individual
+    || usage.planType
+    || usage.balanceLabel
+    || usage.limitReachedType
+    ? usage
+    : null
+}
+
+/**
+ * Normalize only the account-wide Codex quota. Newer Codex builds also emit
+ * named, model-specific limits (for example `codex_bengalfox`) through the
+ * same field; those must not replace the ChatGPT account windows in the HUD.
+ * Older rollout contracts had no limit id, so an absent id remains valid.
+ */
+export function normalizeAccountRateLimits(raw: RawRateLimits | null | undefined): UsageData | null {
+  const limitId = typeof raw?.limit_id === 'string' ? raw.limit_id.trim().toLowerCase() : ''
+  return !limitId || limitId === 'codex' ? normalizeRateLimits(raw) : null
 }
 
 function sameWindow(left: UsageWindow, right: UsageWindow): boolean {

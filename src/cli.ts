@@ -5,7 +5,11 @@ import path from 'node:path'
 // @env node
 import process from 'node:process'
 import { resolveUsageData } from './codex/external-usage.js'
-import { inspectLoggedRateLimitTargets, readLatestLoggedRateLimits } from './codex/log-rate-limits.js'
+import {
+  inspectLoggedRateLimitTargets,
+  persistRolloutRateLimits,
+  readLatestLoggedRateLimits,
+} from './codex/log-rate-limits.js'
 import { evaluateUsageTrust, trustedUsageData } from './codex/rate-limits.js'
 import { RolloutParser } from './codex/rollout-parser.js'
 import { findCodexLogDatabase, inspectCodexLogSchema, resolveSessionEndpoint } from './codex/session-endpoint.js'
@@ -185,6 +189,13 @@ async function main(args = process.argv.slice(2)): Promise<void> {
       endpoint?.url ?? null,
       hasTrustedOpenAiAuth(parsed.session, process.env),
     )
+    if (usageTrust.trusted) {
+      persistRolloutRateLimits(
+        parsed.usage,
+        parsed.usageObservedAt,
+        usageTrust.effectiveEndpoint,
+      )
+    }
     const loggedSnapshot = usageTrust.trusted && usageTrust.effectiveEndpoint
       ? readLatestLoggedRateLimits(process.env, Date.now(), usageTrust.effectiveEndpoint)
       : null
@@ -193,8 +204,12 @@ async function main(args = process.argv.slice(2)): Promise<void> {
       ...config.config.display,
       externalUsageWritePath: '',
     }, new Date())
+    const nativeUsageSources = [
+      parsed.usage ? 'rollout' : null,
+      loggedSnapshot?.source ?? null,
+    ].filter((source): source is string => Boolean(source))
     const usageSource = nativeUsage
-      ? parsed.usage && loggedSnapshot ? 'rollout+log' : parsed.usage ? 'rollout' : 'log'
+      ? [...new Set(nativeUsageSources)].join('+')
       : resolvedUsage ? 'external-snapshot' : null
     const usageHiddenReason = !config.config.display.showUsage
       ? 'display-disabled'
