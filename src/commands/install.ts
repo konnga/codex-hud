@@ -43,7 +43,11 @@ function statePath(): string {
 function readInstallState(): InstallState | null {
   try {
     const state = JSON.parse(fs.readFileSync(statePath(), 'utf8')) as InstallState
-    return (state.version === 1 || state.version === 2) && Array.isArray(state.managedFiles) ? state : null
+    return (state.version === 1 || state.version === 2)
+      && Array.isArray(state.managedFiles)
+      && (state.runtimeDirectory === undefined || typeof state.runtimeDirectory === 'string')
+      ? state
+      : null
   }
   catch {
     return null

@@ -188,18 +188,21 @@ export function hasTrustedOpenAiAuth(
   catch {
     return false
   }
-  if (session.modelProvider?.toLowerCase() === 'openai') {
-    return true
-  }
   try {
     const configPath = path.join(getCodexHome(env), 'config.toml')
     if (fs.statSync(configPath).mtimeMs > session.startTime.getTime()) {
       return false
     }
     const config = record(parse(fs.readFileSync(configPath, 'utf8')))
+    const providers = record(config?.model_providers)
     const provider = session.modelProvider
-      ? record(record(config?.model_providers)?.[session.modelProvider])
+      ? record(providers?.[session.modelProvider])
       : null
+    // The built-in OpenAI provider has no model_providers entry. A user-defined
+    // provider with the same name must still pass the explicit auth/origin checks.
+    if (session.modelProvider?.toLowerCase() === 'openai' && !provider) {
+      return true
+    }
     const baseUrl = typeof provider?.base_url === 'string' ? provider.base_url : null
     return provider?.requires_openai_auth === true
       && (!baseUrl || isOfficialOpenAIEndpoint(baseUrl))

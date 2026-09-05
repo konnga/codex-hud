@@ -107,6 +107,20 @@ describe('managed installer', () => {
     })
   })
 
+  it('treats a malformed runtime directory in install state as unavailable', () => {
+    environment()
+    runInstall([])
+    const statePath = path.join(process.env.CODEX_HOME!, 'codex-hud', 'install.json')
+    const state = JSON.parse(fs.readFileSync(statePath, 'utf8')) as Record<string, unknown>
+    state.runtimeDirectory = 123
+    fs.writeFileSync(statePath, JSON.stringify(state))
+
+    expect(inspectManagedInstall()).toMatchObject({
+      present: false,
+      runtimeComplete: true,
+    })
+  })
+
   it('migrates legacy display defaults while upgrading the managed runtime', () => {
     environment()
     const configPath = path.join(process.env.CODEX_HOME!, 'codex-hud', 'config.json')

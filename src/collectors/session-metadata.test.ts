@@ -148,6 +148,26 @@ describe('session metadata collectors', () => {
     )).toBe(false)
   })
 
+  it('does not trust a custom relay provider named openai when endpoint logs are missing', () => {
+    const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-auth-openai-relay-name-'))
+    directories.push(codexHome)
+    fs.writeFileSync(path.join(codexHome, 'auth.json'), JSON.stringify({ tokens: { access_token: 'token' } }))
+    const configPath = path.join(codexHome, 'config.toml')
+    fs.writeFileSync(configPath, [
+      'model_provider = "openai"',
+      '[model_providers.openai]',
+      'requires_openai_auth = true',
+      'base_url = "https://relay.example.com/v1"',
+    ].join('\n'))
+    const seconds = (SESSION_START - 1_000) / 1_000
+    fs.utimesSync(configPath, seconds, seconds)
+
+    expect(hasTrustedOpenAiAuth(
+      { ...session('session-openai-relay-name'), modelProvider: 'openai' },
+      { CODEX_HOME: codexHome },
+    )).toBe(false)
+  })
+
   it('does not treat an arbitrary nonempty auth file as ChatGPT authentication', () => {
     const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-auth-incomplete-'))
     directories.push(codexHome)

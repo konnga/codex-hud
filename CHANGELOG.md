@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## 0.9.0 - 2026-09-05
+
 ### Added
 
 - Expanded `doctor --json` with usage provenance, trust decisions, freshness, hidden reasons, parsed windows, context and prompt-cache provenance, live Codex log schema targets, plugin/runtime version matching, and managed-install checksum validation. Added `codex-hud hud-version` for a direct runtime version check.
