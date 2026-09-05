@@ -1,5 +1,6 @@
 import type { HudElement } from '../types/config.js'
 import type { RenderContext } from '../types/render.js'
+import { HUD_VERSION } from '../version.js'
 import {
   renderAgentsLine,
   renderImagesLine,
@@ -8,6 +9,7 @@ import {
   renderTodosLine,
   renderToolsLine,
 } from './activity-lines.js'
+import { color } from './colors.js'
 import { renderContextLine } from './context-line.js'
 import { renderEnvironmentLine, renderMemoryLine } from './environment-line.js'
 import { truncateAnsi, visibleWidth } from './format.js'
@@ -16,6 +18,10 @@ import { renderPromptCacheLine } from './prompt-cache-line.js'
 import { renderSessionLine } from './session-line.js'
 import { renderTurnsLine } from './turns-line.js'
 import { renderUsageLine } from './usage-line.js'
+
+const HUD_VERSION_LABEL = `HUD v${HUD_VERSION}`
+const HUD_VERSION_MIN_GAP = 2
+const HUD_VERSION_RIGHT_MARGIN = 1
 
 function renderElement(ctx: RenderContext, element: HudElement): string | null {
   switch (element) {
@@ -136,5 +142,17 @@ export function renderHud(ctx: RenderContext): string[] {
     lines.splice(2, 0, '─'.repeat(Math.min(ctx.options.width, Math.max(20, visibleWidth(lines[0] ?? '')))))
   }
   const height = Math.max(1, ctx.options.height)
-  return lines.slice(0, height).map(line => truncateAnsi(line, ctx.options.width))
+  const visible = lines.slice(0, height).map(line => truncateAnsi(line, ctx.options.width))
+  const lastIndex = visible.length - 1
+  const lastLine = visible[lastIndex]
+  if (lastLine !== undefined) {
+    const padding = ctx.options.width
+      - HUD_VERSION_RIGHT_MARGIN
+      - visibleWidth(lastLine)
+      - visibleWidth(HUD_VERSION_LABEL)
+    if (padding >= HUD_VERSION_MIN_GAP) {
+      visible[lastIndex] = `${lastLine}${' '.repeat(padding)}${color(HUD_VERSION_LABEL, 'dim', ctx.options.color)}`
+    }
+  }
+  return visible
 }

@@ -227,6 +227,55 @@ describe('logged rate limits', () => {
     })
   })
 
+  it('keeps a newer shared rollout observation when the log event is older', () => {
+    const codexHome = codexHomeWithLogs([
+      rateLimit(nowSeconds - 60, 'pid:1:chatgpt', 31),
+      request(nowSeconds - 60, 'pid:1:chatgpt', 'https://chatgpt.com/backend-api/codex/responses'),
+    ])
+    const env = { CODEX_HOME: codexHome }
+    persistRolloutRateLimits({
+      primary: { label: '1w', percent: 32, resetAt: new Date((nowSeconds + 604_800) * 1_000), windowMinutes: 10_080 },
+      secondary: null,
+      individual: null,
+      planType: 'prolite',
+      balanceLabel: null,
+      limitReachedType: null,
+    }, new Date((nowSeconds - 10) * 1_000), 'https://chatgpt.com/backend-api/codex/responses', env)
+
+    expect(readLatestLoggedRateLimits(env, now, 'https://chatgpt.com')).toMatchObject({
+      usage: { primary: { percent: 32 } },
+      observedAt: new Date((nowSeconds - 10) * 1_000),
+      source: 'rollout-cache',
+    })
+  })
+
+  it('refreshes an expired in-memory value from a newer shared snapshot', () => {
+    const codexHome = codexHomeWithLogs([
+      rateLimit(nowSeconds - 60, 'pid:1:chatgpt', 31),
+      request(nowSeconds - 60, 'pid:1:chatgpt', 'https://chatgpt.com/backend-api/codex/responses'),
+    ])
+    const env = { CODEX_HOME: codexHome }
+    expect(readLatestLoggedRateLimits(env, now, 'https://chatgpt.com')).toMatchObject({
+      usage: { primary: { percent: 31 } },
+      source: 'log',
+    })
+
+    persistRolloutRateLimits({
+      primary: { label: '1w', percent: 32, resetAt: new Date((nowSeconds + 604_800) * 1_000), windowMinutes: 10_080 },
+      secondary: null,
+      individual: null,
+      planType: 'prolite',
+      balanceLabel: null,
+      limitReachedType: null,
+    }, new Date(now + 10_000), 'https://chatgpt.com/backend-api/codex/responses', env)
+
+    expect(readLatestLoggedRateLimits(env, now + 20_000, 'https://chatgpt.com')).toMatchObject({
+      usage: { primary: { percent: 32 } },
+      observedAt: new Date(now + 10_000),
+      source: 'rollout-cache',
+    })
+  })
+
   it('does not persist rollout usage for a third-party endpoint', () => {
     const codexHome = codexHomeWithLogs([])
     persistRolloutRateLimits({
