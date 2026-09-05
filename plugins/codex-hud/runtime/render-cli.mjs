@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { A as isOfficialOpenAIEndpoint, D as findActiveSession, E as readConfiguredExternalUsage, M as resolveProcessSession, N as resolveSessionEndpoint, O as RolloutParser, T as readCachedConfiguredExternalUsage, _ as sliceAnsi, c as desiredPaneHeight, d as resizeCmuxPane, f as resizeHudPane, g as visibleWidth, h as truncateAnsi, j as resolveProcessEndpoint, l as hudRenderHeight, m as renderHud, o as writeSessionBinding, p as settleCmuxPaneHeight, r as readSessionBinding, s as buildHudState, u as readCmuxPaneGeometry, v as loadConfig, w as readLatestLoggedRateLimits, y as reloadConfig } from "./session-binding-DKZrgQTi.mjs";
+import { A as evaluateUsageTrust, B as resolveSessionEndpoint, E as RolloutParser, L as isOfficialOpenAIEndpoint, M as readCachedConfiguredExternalUsage, N as readConfiguredExternalUsage, O as persistRolloutRateLimits, R as resolveProcessEndpoint, T as findActiveSession, V as HUD_VERSION, _ as sliceAnsi, c as desiredPaneHeight, d as resizeCmuxPane, f as resizeHudPane, g as visibleWidth, h as truncateAnsi, k as readLatestLoggedRateLimits, l as hudRenderHeight, m as renderHud, o as writeSessionBinding, p as settleCmuxPaneHeight, r as readSessionBinding, s as buildHudState, u as readCmuxPaneGeometry, v as loadConfig, w as hasTrustedOpenAiAuth, y as reloadConfig, z as resolveProcessSession } from "./session-binding-C78ZzxyE.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -31,7 +31,12 @@ const LABELS$1 = {
 		listHelp: "j/k move · Enter preview · o open · y copy path · q/Esc close",
 		previewHelp: "←/→ previous/next · j/k scroll · o open · y copy path · q/Esc back",
 		open: "Open",
-		copied: "Path copied"
+		copied: "Path copied",
+		unavailable: "unavailable",
+		path: "Path",
+		info: "Info",
+		inlineRequired: "Inline preview requires chafa.",
+		openHint: "Press o to open with the system image viewer."
 	},
 	"zh-Hans": {
 		title: "图片画廊",
@@ -41,7 +46,12 @@ const LABELS$1 = {
 		listHelp: "j/k 选择 · Enter 预览 · o 打开 · y 复制路径 · q/Esc 关闭",
 		previewHelp: "←/→ 上一张/下一张 · j/k 滚动 · o 打开 · y 复制路径 · q/Esc 返回",
 		open: "打开",
-		copied: "路径已复制"
+		copied: "路径已复制",
+		unavailable: "不可用",
+		path: "路径",
+		info: "信息",
+		inlineRequired: "内联预览需要安装 chafa。",
+		openHint: "按 o 使用系统图片查看器打开。"
 	}
 };
 function createImageViewerState() {
@@ -54,13 +64,13 @@ function createImageViewerState() {
 		previewLines: []
 	};
 }
-function imageInfo(image) {
+function imageInfo(image, unavailable = "unavailable") {
 	try {
 		const stat = fs.statSync(image.path);
 		const size = stat.size < 1024 * 1024 ? `${Math.max(1, Math.round(stat.size / 1024))} KB` : `${(stat.size / (1024 * 1024)).toFixed(1)} MB`;
 		return `${path.extname(image.path).slice(1).toUpperCase()} · ${size}`;
 	} catch {
-		return "unavailable";
+		return unavailable;
 	}
 }
 function timeLabel$1(image) {
@@ -108,13 +118,13 @@ function renderImageViewer(images, state, options) {
 	const lines = [truncateAnsi(header, width)];
 	for (let index = start; index < Math.min(images.length, start + rows); index += 1) {
 		const image = images[index];
-		const row = `${index === selectedIndex(state, images) ? "> " : "  "}#${String(index + 1).padStart(2, "0")} ${timeLabel$1(image)} ${path.basename(image.path)} · ${imageInfo(image)}`;
+		const row = `${index === selectedIndex(state, images) ? "> " : "  "}#${String(index + 1).padStart(2, "0")} ${timeLabel$1(image)} ${path.basename(image.path)} · ${imageInfo(image, labels.unavailable)}`;
 		lines.push(padLine$1(row, width));
 	}
 	lines.push(truncateAnsi(labels.listHelp, width));
 	return lines.slice(0, height);
 }
-function createImagePreview(image, width, height) {
+function createImagePreview(image, width, height, language = "en") {
 	const maxWidth = Math.max(20, width);
 	const maxHeight = Math.max(4, height - 3);
 	const result = spawnSync("chafa", [
@@ -137,12 +147,13 @@ function createImagePreview(image, width, height) {
 		timeout: 2e3
 	});
 	if (result.status === 0 && result.stdout.trim()) return result.stdout.replace(/\r/g, "").trimEnd().split("\n");
+	const labels = LABELS$1[language];
 	return [
-		`Path: ${image.path}`,
-		`Info: ${imageInfo(image)}`,
+		`${labels.path}: ${image.path}`,
+		`${labels.info}: ${imageInfo(image, labels.unavailable)}`,
 		"",
-		"Inline preview requires chafa.",
-		"Press o to open with the system image viewer."
+		labels.inlineRequired,
+		labels.openHint
 	];
 }
 function openImage(image) {
@@ -158,14 +169,6 @@ function openImage(image) {
 function copyImagePath(image) {
 	return copyText(image.path);
 }
-
-//#endregion
-//#region package.json
-var version = "0.8.0";
-
-//#endregion
-//#region src/version.ts
-const HUD_VERSION = version;
 
 //#endregion
 //#region src/navigator/index.ts
@@ -459,7 +462,7 @@ function parseOptions(args) {
 async function runRenderCli(args = process.argv.slice(2)) {
 	const options = parseOptions(args);
 	let loaded = loadConfig();
-	const parser = new RolloutParser();
+	const parser = new RolloutParser({ captureConversationBodies: false });
 	const navigator = createNavigatorState();
 	const imageViewer = createImageViewerState();
 	let currentSessionPath = options.sessionPath;
@@ -540,7 +543,9 @@ async function runRenderCli(args = process.argv.slice(2)) {
 		} : null;
 		const now = /* @__PURE__ */ new Date();
 		const endpoint = rollout.session ? resolveSessionEndpoint(rollout.session.id) : codexProcess ? resolveProcessEndpoint(codexProcess.pid, codexProcess.launchedAt) : null;
-		const loggedUsage = (loaded.config.display.showUsage || loaded.config.display.showAuth) && isOfficialOpenAIEndpoint(endpoint?.url) ? readLatestLoggedRateLimits(process.env, now.getTime(), endpoint?.url ?? null)?.usage ?? null : null;
+		const usageTrust = evaluateUsageTrust(endpoint?.url ?? null, hasTrustedOpenAiAuth(rollout.session, process.env));
+		if ((loaded.config.display.showUsage || loaded.config.display.showAuth) && usageTrust.trusted) persistRolloutRateLimits(rollout.usage, rollout.usageObservedAt, usageTrust.effectiveEndpoint);
+		const loggedUsage = (loaded.config.display.showUsage || loaded.config.display.showAuth) && usageTrust.trusted && isOfficialOpenAIEndpoint(usageTrust.effectiveEndpoint) ? readLatestLoggedRateLimits(process.env, now.getTime(), usageTrust.effectiveEndpoint)?.usage ?? null : null;
 		const queriedUsage = loaded.config.display.showAuth ? options.once ? await readConfiguredExternalUsage(loaded.config.display.externalUsageQueries, endpoint?.url ?? null, process.env, now.getTime()) : readCachedConfiguredExternalUsage(loaded.config.display.externalUsageQueries, endpoint?.url ?? null, process.env, () => void render(), now.getTime()) : null;
 		const state = buildHudState(options.cwd, rollout, startedAt, loaded.config, now, codexProcess, loggedUsage, queriedUsage, endpoint?.url ?? null);
 		latestTurns = state.conversationTurns;
@@ -664,6 +669,7 @@ async function runRenderCli(args = process.argv.slice(2)) {
 		navigator.searchMode = false;
 		navigator.detailScroll = 0;
 		navigator.copyStatus = "idle";
+		parser.setConversationCapture(false);
 		render();
 		focusCodexPane();
 	};
@@ -686,7 +692,7 @@ async function runRenderCli(args = process.argv.slice(2)) {
 		}
 		imageViewer.previewPath = image.path;
 		imageViewer.previewScroll = 0;
-		imageViewer.previewLines = createImagePreview(image, process.stdout.columns || 120, options.maxHeight);
+		imageViewer.previewLines = createImagePreview(image, process.stdout.columns || 120, options.maxHeight, loaded.config.language);
 	};
 	const moveImageSelection = (delta) => {
 		if (latestImages.length === 0) return;
@@ -719,7 +725,7 @@ async function runRenderCli(args = process.argv.slice(2)) {
 		}
 		if (!navigator.active && !imageViewer.active) {
 			if (key === "i" || key === "I") {
-				if (latestImages.length === 0) return;
+				if (!loaded.config.display.showImages || latestImages.length === 0) return;
 				imageViewer.active = true;
 				imageViewer.view = "list";
 				imageViewer.selectedIndex = latestImages.length - 1;
@@ -727,6 +733,8 @@ async function runRenderCli(args = process.argv.slice(2)) {
 				return;
 			}
 			if (loaded.config.display.showTurns && (key === "n" || key === "N" || key === "\r") && latestTurns.length > 0) {
+				parser.setConversationCapture(true);
+				latestTurns = parser.parse().conversationTurns;
 				navigator.active = true;
 				navigator.view = "list";
 				navigator.searchMode = false;

@@ -8,16 +8,18 @@ import path from 'node:path'
 import process from 'node:process'
 import { getCodexHome, getHudStateDirectory } from '../config/paths.js'
 import { setTimedCache } from '../runtime/timed-cache.js'
-import { normalizeRateLimits } from './rate-limits.js'
-import { endpointOrigin, findCodexLogDatabase } from './session-endpoint.js'
+import { normalizeAccountRateLimits } from './rate-limits.js'
+import { endpointOrigin, findCodexLogDatabase, isOfficialOpenAIEndpoint } from './session-endpoint.js'
 
 export interface LoggedUsageSnapshot {
   usage: UsageData
   observedAt: Date
   origin: string
+  source: 'log' | 'rollout-cache'
 }
 
 const EVENT_PREFIX = 'SSE event: '
+const EVENT_TYPE_MARKER = 'codex.rate_limits'
 const QUERY_TIMEOUT_MS = 750
 const CACHE_MS = 15_000
 const MAX_EVENT_AGE_SECONDS = 8 * 24 * 60 * 60
@@ -30,6 +32,11 @@ const CACHE_MAX_AGE_MS = 30 * 60_000
 const CACHE_MAX_ENTRIES = 64
 
 const cache = new Map<string, { at: number, value: LoggedUsageSnapshot | null }>()
+
+export interface LoggedRateLimitTarget {
+  target: string
+  count: number
+}
 
 function record(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -66,11 +73,39 @@ function parseEvent(body: string): UsageData | null {
       plan_type: typeof event.plan_type === 'string' ? event.plan_type : null,
       rate_limit_reached_type: limits.limit_reached === true ? 'rate_limit_reached' : null,
     }
-    return normalizeRateLimits(raw)
+    return normalizeAccountRateLimits(raw)
   }
   catch {
     return null
   }
+}
+
+function rawWindow(window: UsageWindow | null): Record<string, unknown> | null {
+  return window
+    ? {
+        used_percent: window.percent,
+        window_minutes: window.windowMinutes ?? null,
+        resets_at: window.resetAt?.toISOString() ?? null,
+      }
+    : null
+}
+
+function rolloutSnapshotBody(usage: UsageData): string {
+  return `${EVENT_PREFIX}${JSON.stringify({
+    type: EVENT_TYPE_MARKER,
+    plan_type: usage.planType,
+    rate_limits: {
+      limit_id: 'codex',
+      limit_name: 'Codex',
+      primary: rawWindow(usage.primary),
+      secondary: rawWindow(usage.secondary),
+      individual_limit: rawWindow(usage.individual),
+      limit_reached: Boolean(usage.limitReachedType),
+    },
+    credits: usage.balanceLabel
+      ? { has_credits: true, unlimited: false, balance: usage.balanceLabel }
+      : null,
+  })}`
 }
 
 function freshWindow(window: UsageWindow | null, observedAt: Date, now: number): UsageWindow | null {
@@ -127,7 +162,12 @@ function readStoredSnapshot(
       const usage = parseEvent(body)
       const fresh = usage ? freshUsage(usage, observedAt, now) : null
       if (fresh && (!newest || observedAt > newest.observedAt)) {
-        newest = { usage: fresh, observedAt, origin }
+        newest = {
+          usage: fresh,
+          observedAt,
+          origin,
+          source: entry?.source === 'rollout-cache' ? 'rollout-cache' : 'log',
+        }
       }
     }
     return newest
@@ -137,7 +177,13 @@ function readStoredSnapshot(
   }
 }
 
-function writeStoredSnapshot(env: NodeJS.ProcessEnv, body: string, observedAt: Date, origin: string): void {
+function writeStoredSnapshot(
+  env: NodeJS.ProcessEnv,
+  body: string,
+  observedAt: Date,
+  origin: string,
+  source: LoggedUsageSnapshot['source'],
+): void {
   if (body.length > MAX_STORED_BODY_LENGTH) {
     return
   }
@@ -155,10 +201,10 @@ function writeStoredSnapshot(env: NodeJS.ProcessEnv, body: string, observedAt: D
     const entries = currentEntries ? { ...currentEntries } : {}
     const current = record(entries[origin])
     const currentObservedAt = typeof current?.observed_at === 'string' ? new Date(current.observed_at) : null
-    if (currentObservedAt && !Number.isNaN(currentObservedAt.getTime()) && currentObservedAt > observedAt) {
+    if (currentObservedAt && !Number.isNaN(currentObservedAt.getTime()) && currentObservedAt >= observedAt) {
       return
     }
-    entries[origin] = { observed_at: observedAt.toISOString(), body }
+    entries[origin] = { observed_at: observedAt.toISOString(), source, body }
     fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 })
     fs.writeFileSync(temporaryPath, `${JSON.stringify({
       version: 2,
@@ -175,6 +221,27 @@ function writeStoredSnapshot(env: NodeJS.ProcessEnv, body: string, observedAt: D
       // The account snapshot is optional and must never break the HUD.
     }
   }
+}
+
+/**
+ * Share an account-wide rollout observation with sibling HUD sessions. Recent
+ * Codex builds can emit limits only into rollout JSONL, while a concurrent
+ * model-specific session has no account quota of its own to display.
+ */
+export function persistRolloutRateLimits(
+  usage: UsageData | null,
+  observedAt: Date | null,
+  endpoint: string | null,
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  if (!usage || !observedAt || Number.isNaN(observedAt.getTime()) || !endpoint || !isOfficialOpenAIEndpoint(endpoint)) {
+    return
+  }
+  const origin = endpointOrigin(endpoint)
+  if (!origin) {
+    return
+  }
+  writeStoredSnapshot(env, rolloutSnapshotBody(usage), observedAt, origin, 'rollout-cache')
 }
 
 function eventOrigin(database: string, processUuid: string, timestamp: number): string | null {
@@ -200,9 +267,9 @@ function eventOrigin(database: string, processUuid: string, timestamp: number): 
 
 /**
  * Codex currently logs `codex.rate_limits` SSE events but does not copy them
- * into rollout token-count events for every provider. The newest event per
- * provider origin is account-wide, so persist it for other open HUD processes
- * too. `expectedEndpoint` names the provider the caller is bound to; passing
+ * into rollout token-count events for every provider. Keep the newest
+ * account-wide event per provider origin and share it with other open HUD
+ * processes. `expectedEndpoint` names the provider the caller is bound to; passing
  * null means the endpoint is unknown, and showing no usage beats showing
  * another provider's account.
  */
@@ -229,7 +296,12 @@ export function readLatestLoggedRateLimits(
   if (cached?.value) {
     const fallback = freshUsage(cached.value.usage, cached.value.observedAt, now)
     if (fallback) {
-      previous = { usage: fallback, observedAt: cached.value.observedAt, origin: cached.value.origin }
+      previous = {
+        usage: fallback,
+        observedAt: cached.value.observedAt,
+        origin: cached.value.origin,
+        source: cached.value.source,
+      }
     }
   }
   const database = findCodexLogDatabase(codexHome)
@@ -238,12 +310,12 @@ export function readLatestLoggedRateLimits(
   }
   const since = Math.floor(now / 1_000) - MAX_EVENT_AGE_SECONDS
   const sql = [
-    `SELECT ts || '|' || hex(process_uuid) || '|' || hex(feedback_log_body)`,
+    `SELECT ts || '|' || hex(process_uuid) || '|' || hex(substr(feedback_log_body, 1, ${MAX_STORED_BODY_LENGTH}))`,
     '  FROM logs',
     ` WHERE id >= (SELECT max(id) - ${MAX_ROW_LOOKBACK} FROM logs)`,
     `   AND ts >= ${since}`,
-    `   AND target = 'codex_api::sse::responses'`,
-    `   AND instr(feedback_log_body, '"type":"codex.rate_limits"') > 0`,
+    `   AND instr(feedback_log_body, '${EVENT_PREFIX}') > 0`,
+    `   AND instr(feedback_log_body, '${EVENT_TYPE_MARKER}') > 0`,
     ' ORDER BY id DESC',
     ` LIMIT ${MAX_EVENT_CANDIDATES};`,
   ].join('\n')
@@ -279,8 +351,49 @@ export function readLatestLoggedRateLimits(
     if (!origin || (expectedOrigin !== undefined && origin !== expectedOrigin)) {
       continue
     }
-    writeStoredSnapshot(env, body, observedAt, origin)
-    return remember({ usage: fresh, observedAt, origin })
+    writeStoredSnapshot(env, body, observedAt, origin, 'log')
+    return remember({ usage: fresh, observedAt, origin, source: 'log' })
   }
   return remember(previous)
+}
+
+export function inspectLoggedRateLimitTargets(
+  env: NodeJS.ProcessEnv = process.env,
+  now = Date.now(),
+): LoggedRateLimitTarget[] {
+  const database = findCodexLogDatabase(getCodexHome(env))
+  if (!database) {
+    return []
+  }
+  const since = Math.floor(now / 1_000) - MAX_EVENT_AGE_SECONDS
+  const sql = [
+    `SELECT hex(target) || '|' || hex(substr(feedback_log_body, 1, ${MAX_STORED_BODY_LENGTH}))`,
+    '  FROM logs',
+    ` WHERE id >= (SELECT max(id) - ${MAX_ROW_LOOKBACK} FROM logs)`,
+    `   AND ts >= ${since}`,
+    `   AND instr(feedback_log_body, '${EVENT_PREFIX}') > 0`,
+    `   AND instr(feedback_log_body, '${EVENT_TYPE_MARKER}') > 0`,
+    ' ORDER BY id DESC',
+    ` LIMIT ${MAX_EVENT_CANDIDATES};`,
+  ].join('\n')
+  const result = spawnSync('sqlite3', ['-readonly', '-noheader', '-batch', database, sql], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+    timeout: QUERY_TIMEOUT_MS,
+  })
+  if (typeof result.stdout !== 'string') {
+    return []
+  }
+  const counts = new Map<string, number>()
+  for (const line of result.stdout.split('\n')) {
+    const [targetValue, bodyValue] = line.split('|')
+    const target = decodeHex(targetValue ?? '')
+    const body = decodeHex(bodyValue ?? '')
+    if (target && body && parseEvent(body)) {
+      counts.set(target, (counts.get(target) ?? 0) + 1)
+    }
+  }
+  return [...counts.entries()]
+    .map(([target, count]) => ({ target, count }))
+    .sort((left, right) => right.count - left.count || left.target.localeCompare(right.target))
 }

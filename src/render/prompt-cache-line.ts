@@ -21,5 +21,8 @@ export function renderPromptCacheLine(ctx: RenderContext): string | null {
   const selectedColor = remainingMs <= 0
     ? ctx.config.colors.label
     : remainingMs <= warningSeconds * 1000 ? ctx.config.colors.warning : ctx.config.colors.context
-  return `${message(ctx.config.language, 'promptCache')} ${color(`⏱️ ${formatPromptCacheCountdown(remainingMs)}`, selectedColor, ctx.options.color)}`
+  const countdown = remainingMs <= 0
+    ? message(ctx.config.language, 'expired')
+    : formatPromptCacheCountdown(remainingMs)
+  return `${message(ctx.config.language, 'promptCache')} ${color(`~⏱️ ${countdown}`, selectedColor, ctx.options.color)}`
 }

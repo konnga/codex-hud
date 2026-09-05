@@ -4,14 +4,22 @@ import fs from 'node:fs'
 import path from 'node:path'
 // @env node
 import process from 'node:process'
+import { resolveUsageData } from './codex/external-usage.js'
+import {
+  inspectLoggedRateLimitTargets,
+  persistRolloutRateLimits,
+  readLatestLoggedRateLimits,
+} from './codex/log-rate-limits.js'
+import { evaluateUsageTrust, trustedUsageData } from './codex/rate-limits.js'
 import { RolloutParser } from './codex/rollout-parser.js'
-import { findCodexLogDatabase, resolveSessionEndpoint } from './codex/session-endpoint.js'
+import { findCodexLogDatabase, inspectCodexLogSchema, resolveSessionEndpoint } from './codex/session-endpoint.js'
 import { findActiveSession } from './codex/session-finder.js'
+import { hasTrustedOpenAiAuth } from './collectors/session-metadata.js'
 import { runConfigure } from './commands/configure.js'
-import { runInstall, runUninstall } from './commands/install.js'
+import { inspectManagedInstall, runInstall, runUninstall } from './commands/install.js'
 import { runSetup } from './commands/setup.js'
 import { loadConfig } from './config/load.js'
-import { getCodexHome, getConfigPath, getHudStateDirectory } from './config/paths.js'
+import { getCodexHome, getConfigPath } from './config/paths.js'
 import { auditCmuxOwnership, cmuxAvailable, createCmuxRunner, isCmuxEnvironment } from './runtime/cmux.js'
 import { resolveHubCommand } from './runtime/command.js'
 import { readLatestHudLaunchFailure } from './runtime/diagnostics.js'
@@ -19,6 +27,7 @@ import { launchCodex, runCodexChild } from './runtime/launcher.js'
 import { DEFAULT_HUD_MAX_HEIGHT, INITIAL_HUD_PANE_HEIGHT } from './runtime/pane-size.js'
 import { shouldBypassHud } from './runtime/passthrough.js'
 import { findExecutable } from './runtime/process.js'
+import { HUD_VERSION } from './version.js'
 
 function printHelp(): void {
   console.log(`Codex HUD
@@ -27,12 +36,13 @@ Usage:
   codex-hud [start] [HUD options] [--] [codex arguments]
   codex-hud render [--once] [--cwd <path>] [--no-color]
   codex-hud doctor [--json]
-  codex-hud setup [--codex-shim] [--preset full|essential|minimal]
+  codex-hud setup [--codex-shim] [--preset full|essential|minimal|presentation]
                   [--relay-usage|--no-relay-usage]
                   [--language en|zh-Hans] [--layout compact|expanded] [--yes]
-  codex-hud configure [--preset full|essential|minimal] [--language en|zh-Hans]
+  codex-hud configure [--preset full|essential|minimal|presentation] [--language en|zh-Hans]
   codex-hud configure --status [--json]
   codex-hud configure [--enable <names>] [--disable <names>] --yes
+  codex-hud hud-version
   codex-hud install [--codex-shim] [--dry-run]
   codex-hud uninstall [--dry-run]
   codex-hud --help
@@ -45,23 +55,42 @@ HUD options:
   --no-hud           Run Codex directly without a HUD backend`)
 }
 
-function installedPluginManifest(): string | null {
+interface InstalledPluginManifest {
+  path: string
+  version: string | null
+  mtimeMs: number
+}
+
+function installedPluginManifest(): InstalledPluginManifest | null {
   const root = path.join(getCodexHome(), 'plugins', 'cache')
   try {
-    const matches: string[] = []
+    const matches: InstalledPluginManifest[] = []
     const visit = (directory: string, depth: number): void => {
       if (depth > 5)
         return
       for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
         const entryPath = path.join(directory, entry.name)
-        if (entry.isDirectory())
+        if (entry.isDirectory()) {
           visit(entryPath, depth + 1)
-        else if (entry.name === 'plugin.json' && entryPath.includes(`${path.sep}codex-hud${path.sep}`))
-          matches.push(entryPath)
+        }
+        else if (entry.name === 'plugin.json' && entryPath.includes(`${path.sep}codex-hud${path.sep}`)) {
+          let version: string | null = null
+          try {
+            const manifest = JSON.parse(fs.readFileSync(entryPath, 'utf8')) as { version?: unknown }
+            version = typeof manifest.version === 'string' ? manifest.version : null
+          }
+          catch {
+            // A malformed cached manifest is still useful diagnostic evidence.
+          }
+          matches.push({ path: entryPath, version, mtimeMs: fs.statSync(entryPath).mtimeMs })
+        }
       }
     }
     visit(root, 0)
-    return matches.sort().at(-1) ?? null
+    return matches.sort((left, right) => {
+      const byVersion = (left.version ?? '').localeCompare(right.version ?? '', 'en', { numeric: true })
+      return byVersion || left.mtimeMs - right.mtimeMs
+    }).at(-1) ?? null
   }
   catch {
     return null
@@ -143,17 +172,52 @@ async function main(args = process.argv.slice(2)): Promise<void> {
     await runRenderCli(args.slice(1))
     return
   }
+  if (command === 'hud-version') {
+    console.log(`codex-hud ${HUD_VERSION}`)
+    return
+  }
   if (command === 'doctor') {
     const cwdIndex = args.indexOf('--cwd')
     const cwd = cwdIndex >= 0 && args[cwdIndex + 1] ? args[cwdIndex + 1] : process.cwd()
     const session = findActiveSession({ cwd })
     const config = loadConfig()
-    const parser = new RolloutParser()
+    const parser = new RolloutParser({ captureConversationBodies: false })
     parser.setFile(session?.path ?? null)
     const parsed = parser.parse()
     const endpoint = parsed.session ? resolveSessionEndpoint(parsed.session.id) : null
+    const usageTrust = evaluateUsageTrust(
+      endpoint?.url ?? null,
+      hasTrustedOpenAiAuth(parsed.session, process.env),
+    )
+    if (usageTrust.trusted) {
+      persistRolloutRateLimits(
+        parsed.usage,
+        parsed.usageObservedAt,
+        usageTrust.effectiveEndpoint,
+      )
+    }
+    const loggedSnapshot = usageTrust.trusted && usageTrust.effectiveEndpoint
+      ? readLatestLoggedRateLimits(process.env, Date.now(), usageTrust.effectiveEndpoint)
+      : null
+    const nativeUsage = trustedUsageData(usageTrust, parsed.usage, loggedSnapshot?.usage ?? null)
+    const resolvedUsage = resolveUsageData(nativeUsage, {
+      ...config.config.display,
+      externalUsageWritePath: '',
+    }, new Date())
+    const nativeUsageSources = [
+      parsed.usage ? 'rollout' : null,
+      loggedSnapshot?.source ?? null,
+    ].filter((source): source is string => Boolean(source))
+    const usageSource = nativeUsage
+      ? [...new Set(nativeUsageSources)].join('+')
+      : resolvedUsage ? 'external-snapshot' : null
+    const usageHiddenReason = !config.config.display.showUsage
+      ? 'display-disabled'
+      : parsed.usage && !usageTrust.trusted
+        ? usageTrust.reason
+        : !resolvedUsage ? 'no-fresh-usage-observation' : null
     const pluginManifest = installedPluginManifest()
-    const installState = path.join(getHudStateDirectory(), 'install.json')
+    const managedInstall = inspectManagedInstall()
     const codex = findExecutable('codex')
     const cmux = findExecutable('cmux')
     const tmux = findExecutable('tmux')
@@ -167,6 +231,7 @@ async function main(args = process.argv.slice(2)): Promise<void> {
         : tmux ? 'tmux' : 'none'
     const cliPath = path.resolve(process.argv[1])
     const report = {
+      hudVersion: HUD_VERSION,
       node: process.version,
       codex,
       cmux,
@@ -184,11 +249,42 @@ async function main(args = process.argv.slice(2)): Promise<void> {
       sessionParsed: parsed.session?.id === session?.sessionId,
       model: parsed.session?.model ?? null,
       codexLogDatabase: findCodexLogDatabase(),
+      codexLogSchema: inspectCodexLogSchema(),
+      rateLimitLogTargets: inspectLoggedRateLimitTargets(),
       sessionEndpoint: endpoint?.url ?? null,
       sessionEndpointSource: endpoint?.source ?? null,
-      pluginManifest,
+      usage: {
+        visible: Boolean(config.config.display.showUsage && resolvedUsage),
+        source: usageSource,
+        trust: usageTrust.reason,
+        trusted: usageTrust.trusted,
+        effectiveEndpoint: usageTrust.effectiveEndpoint,
+        rolloutObservedAt: parsed.usageObservedAt?.toISOString() ?? null,
+        loggedObservedAt: loggedSnapshot?.observedAt.toISOString() ?? null,
+        hiddenReason: usageHiddenReason,
+        windows: [resolvedUsage?.primary, resolvedUsage?.secondary, resolvedUsage?.individual]
+          .flatMap(window => window
+            ? [{
+                label: window.label,
+                percent: window.percent,
+                windowMinutes: window.windowMinutes ?? null,
+                resetAt: window.resetAt?.toISOString() ?? null,
+              }]
+            : []),
+      },
+      contextCalculation: parsed.context
+        ? { source: 'rollout-estimate', baselineTokens: 12_000 }
+        : null,
+      promptCacheCalculation: {
+        source: 'configured-estimate',
+        ttlSeconds: config.config.display.promptCacheTtlSeconds,
+      },
+      pluginManifest: pluginManifest?.path ?? null,
+      pluginVersion: pluginManifest?.version ?? null,
+      pluginVersionMatchesHud: pluginManifest?.version?.split('+')[0] === HUD_VERSION,
       pluginInstalled: Boolean(pluginManifest),
-      managedInstall: fs.existsSync(installState),
+      managedInstall: managedInstall.present,
+      managedInstallDetails: managedInstall,
       terminal: {
         tty: Boolean(process.stdout.isTTY),
         color: !process.env.NO_COLOR,
@@ -203,6 +299,7 @@ async function main(args = process.argv.slice(2)): Promise<void> {
     }
     else {
       console.log(`Node: ${report.node}`)
+      console.log(`Codex HUD: ${report.hudVersion}`)
       console.log(`Codex: ${report.codex ?? 'not found'}`)
       console.log(`cmux: ${report.cmux ?? 'not found'}${report.cmuxContext ? report.cmuxHealthy ? ' (ready)' : ' (socket unavailable)' : ''}`)
       console.log(`tmux: ${report.tmux ?? 'not found'}`)
@@ -213,6 +310,8 @@ async function main(args = process.argv.slice(2)): Promise<void> {
       console.log(`Plugin: ${report.pluginManifest ?? 'not installed'}`)
       console.log(`Session parse: ${report.sessionParsed ? 'ok' : 'not ready'}`)
       console.log(`Session endpoint: ${report.sessionEndpoint ?? 'unknown'}${report.sessionEndpointSource ? ` (${report.sessionEndpointSource})` : ''}`)
+      console.log(`Usage: ${report.usage.visible ? report.usage.source ?? 'available' : `hidden (${report.usage.hiddenReason})`} · trust ${report.usage.trust}`)
+      console.log(`Managed runtime: ${report.managedInstallDetails.runtimeComplete ? 'complete' : 'incomplete'} · version ${report.managedInstallDetails.hudVersionMatches === null ? 'unavailable' : report.managedInstallDetails.hudVersionMatches ? 'ok' : 'mismatch'} · checksums ${report.managedInstallDetails.checksumsValid === null ? 'unavailable' : report.managedInstallDetails.checksumsValid ? 'ok' : 'mismatch'}`)
       if (report.shimRecursion)
         console.log('Warning: Codex executable resolves to the Codex HUD CLI itself.')
       if (report.latestLaunchFailure) {

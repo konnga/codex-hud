@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
-import { getCodexHome } from '../config/paths.js'
+import { getCodexHome, getHudStateDirectory } from '../config/paths.js'
 import { pruneTimedCache, setTimedCache } from '../runtime/timed-cache.js'
 
 /**
@@ -11,7 +11,7 @@ import { pruneTimedCache, setTimedCache } from '../runtime/timed-cache.js'
  * `log-init` is the provider Codex resolved when the session started, looked up
  * by session or, before a session exists, by the Codex process itself.
  */
-export type EndpointSource = 'log-request' | 'log-init'
+export type EndpointSource = 'log-request' | 'log-init' | 'persisted'
 
 export interface SessionEndpoint {
   url: string
@@ -26,6 +26,9 @@ const ENDPOINT_CACHE_MS = 30_000
 const PROCESS_SESSION_CACHE_MS = 1_000
 const CACHE_MAX_AGE_MS = 30 * 60_000
 const CACHE_MAX_ENTRIES = 256
+const STORED_ENDPOINT_MAX_AGE_MS = 30 * 24 * 60 * 60_000
+const STORED_ENDPOINT_MAX_ENTRIES = 256
+const STORED_ENDPOINT_MAX_BYTES = 4 * 1024
 // `ts` stores whole seconds, so several rows routinely share one value; the
 // rowid tiebreak keeps "newest" meaning insertion order rather than scan order.
 const NEWEST_FIRST = 'ORDER BY ts DESC, id DESC LIMIT 1'
@@ -33,9 +36,120 @@ const NEWEST_FIRST = 'ORDER BY ts DESC, id DESC LIMIT 1'
 const endpointCache = new Map<string, { at: number, value: SessionEndpoint | null }>()
 const processSessionCache = new Map<string, { at: number, value: ProcessSession | null }>()
 
+interface StoredEndpoint {
+  version: 1
+  origin: string
+  evidenceSource: Exclude<EndpointSource, 'persisted'>
+  observedAt: string
+}
+
 export interface ProcessSession {
   sessionId: string
   rolloutPath: string
+}
+
+export interface CodexLogSchemaInspection {
+  database: string | null
+  columns: string[]
+  endpointCompatible: boolean
+  rateLimitCompatible: boolean
+}
+
+function storedEndpointDirectory(env: NodeJS.ProcessEnv): string {
+  return path.join(getHudStateDirectory(env), 'session-endpoints')
+}
+
+function storedEndpointPath(sessionId: string, env: NodeJS.ProcessEnv): string {
+  return path.join(storedEndpointDirectory(env), `${sessionId}.json`)
+}
+
+function readStoredEndpoint(sessionId: string, env: NodeJS.ProcessEnv, now: number): SessionEndpoint | null {
+  const filePath = storedEndpointPath(sessionId, env)
+  try {
+    const stat = fs.statSync(filePath)
+    if (!stat.isFile() || stat.size > STORED_ENDPOINT_MAX_BYTES || now - stat.mtimeMs > STORED_ENDPOINT_MAX_AGE_MS) {
+      return null
+    }
+    const stored = JSON.parse(fs.readFileSync(filePath, 'utf8')) as Partial<StoredEndpoint>
+    const observedAt = typeof stored.observedAt === 'string' ? new Date(stored.observedAt) : null
+    if (stored.version !== 1
+      || typeof stored.origin !== 'string'
+      || (stored.evidenceSource !== 'log-request' && stored.evidenceSource !== 'log-init')
+      || !observedAt
+      || Number.isNaN(observedAt.getTime())
+      || now - observedAt.getTime() > STORED_ENDPOINT_MAX_AGE_MS) {
+      return null
+    }
+    const origin = endpointOrigin(stored.origin)
+    return origin ? { url: origin, source: 'persisted' } : null
+  }
+  catch {
+    return null
+  }
+}
+
+function pruneStoredEndpoints(directory: string, now: number): void {
+  try {
+    const entries = fs.readdirSync(directory, { withFileTypes: true })
+      .filter(entry => entry.isFile() && SESSION_ID_PATTERN.test(entry.name.replace(/\.json$/, '')))
+      .map((entry) => {
+        const filePath = path.join(directory, entry.name)
+        return { filePath, mtimeMs: fs.statSync(filePath).mtimeMs }
+      })
+      .sort((left, right) => right.mtimeMs - left.mtimeMs)
+    for (const [index, entry] of entries.entries()) {
+      if (index >= STORED_ENDPOINT_MAX_ENTRIES || now - entry.mtimeMs > STORED_ENDPOINT_MAX_AGE_MS) {
+        fs.rmSync(entry.filePath, { force: true })
+      }
+    }
+  }
+  catch {
+    // Endpoint evidence is an optional resilience cache.
+  }
+}
+
+function writeStoredEndpoint(
+  sessionId: string,
+  endpoint: SessionEndpoint,
+  env: NodeJS.ProcessEnv,
+  now: number,
+): void {
+  if (endpoint.source === 'persisted') {
+    return
+  }
+  const origin = endpointOrigin(endpoint.url)
+  if (!origin) {
+    return
+  }
+  const directory = storedEndpointDirectory(env)
+  const filePath = storedEndpointPath(sessionId, env)
+  const temporaryPath = `${filePath}.${process.pid}.tmp`
+  try {
+    fs.mkdirSync(directory, { recursive: true, mode: 0o700 })
+    const stored: StoredEndpoint = {
+      version: 1,
+      origin,
+      evidenceSource: endpoint.source,
+      observedAt: new Date(now).toISOString(),
+    }
+    fs.writeFileSync(temporaryPath, `${JSON.stringify(stored)}\n`, { encoding: 'utf8', mode: 0o600 })
+    fs.renameSync(temporaryPath, filePath)
+    fs.chmodSync(filePath, 0o600)
+    pruneStoredEndpoints(directory, now)
+  }
+  catch {
+    try {
+      fs.rmSync(temporaryPath, { force: true })
+    }
+    catch {
+      // Endpoint evidence must never break the HUD.
+    }
+  }
+}
+
+export function clearEndpointCaches(): void {
+  endpointCache.clear()
+  processSessionCache.clear()
 }
 
 /**
@@ -74,6 +188,27 @@ function query(database: string, sql: string, timeout = QUERY_TIMEOUT_MS): strin
   // ones already printed, so a broken fallback query must not discard a good
   // answer from the query before it.
   return typeof result.stdout === 'string' ? result.stdout.split('\n') : []
+}
+
+export function inspectCodexLogSchema(
+  codexHome: string = getCodexHome(),
+): CodexLogSchemaInspection {
+  const database = findCodexLogDatabase(codexHome)
+  if (!database) {
+    return { database: null, columns: [], endpointCompatible: false, rateLimitCompatible: false }
+  }
+  const columns = query(database, 'SELECT name FROM pragma_table_info(\'logs\') ORDER BY cid;')
+    .map(value => value.trim())
+    .filter(Boolean)
+  const available = new Set(columns)
+  return {
+    database,
+    columns,
+    endpointCompatible: ['id', 'ts', 'process_uuid', 'thread_id', 'target', 'feedback_log_body']
+      .every(column => available.has(column)),
+    rateLimitCompatible: ['id', 'ts', 'process_uuid', 'target', 'feedback_log_body']
+      .every(column => available.has(column)),
+  }
 }
 
 function firstUrl(value: string): string | null {
@@ -248,6 +383,10 @@ export function resolveProcessEndpoint(
       break
     }
   }
+  // Codex tracing logs are bounded and may evict the process init row while
+  // the process is still alive. A missing refresh is not evidence that the
+  // already-confirmed endpoint changed.
+  value ??= cached?.value ?? null
   sweep(now)
   setTimedCache(endpointCache, cacheKey, { at: now, value }, CACHE_MAX_AGE_MS, CACHE_MAX_ENTRIES)
   return value ? { ...value } : null
@@ -282,13 +421,16 @@ export function resolveSessionEndpoint(
     return cached.value ? { ...cached.value } : null
   }
   const remember = (value: SessionEndpoint | null): SessionEndpoint | null => {
+    if (value) {
+      writeStoredEndpoint(sessionId, value, env, now)
+    }
     sweep(now)
     setTimedCache(endpointCache, cacheKey, { at: now, value }, CACHE_MAX_AGE_MS, CACHE_MAX_ENTRIES)
     return value ? { ...value } : null
   }
   const database = findCodexLogDatabase(codexHome)
   if (!database) {
-    return remember(null)
+    return remember(cached?.value ?? readStoredEndpoint(sessionId, env, now))
   }
   const lines = query(database, [
     `SELECT 'request|' || substr(feedback_log_body, instr(feedback_log_body, 'url=') + 4, 200)`,
@@ -322,5 +464,8 @@ export function resolveSessionEndpoint(
       fallback = { url, source: 'log-init' }
     }
   }
-  return remember(fallback)
+  // The log database has bounded retention. Long-running sessions can outlive
+  // both their request and init rows, so keep the last confirmed endpoint when
+  // a refresh has no newer positive evidence.
+  return remember(fallback ?? cached?.value ?? readStoredEndpoint(sessionId, env, now))
 }

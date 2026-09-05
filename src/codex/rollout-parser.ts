@@ -26,7 +26,7 @@ import path from 'node:path'
 import process from 'node:process'
 import { calculateContextUsage } from './context-usage.js'
 import { JsonlTail } from './jsonl-tail.js'
-import { mergeUsageData, normalizeRateLimits } from './rate-limits.js'
+import { mergeUsageData, normalizeAccountRateLimits } from './rate-limits.js'
 
 const MAX_RECENT_TOOLS = 100
 const MAX_TARGET_LENGTH = 80
@@ -37,6 +37,7 @@ export interface ParsedRolloutState {
   session: SessionInfo | null
   context: ContextUsage | null
   usage: UsageData | null
+  usageObservedAt: Date | null
   sessionTokens: SessionTokenUsage | null
   tools: ToolEntry[]
   images: SessionImage[]
@@ -53,6 +54,7 @@ function initialState(): ParsedRolloutState {
     session: null,
     context: null,
     usage: null,
+    usageObservedAt: null,
     sessionTokens: null,
     tools: [],
     images: [],
@@ -103,8 +105,19 @@ function parseArguments(value: string | undefined): Record<string, unknown> | nu
   }
 }
 
+export function redactSensitiveText(value: string): string {
+  return value
+    .replace(/\bBearer\s+[^\s"',;]+/gi, 'Bearer [REDACTED]')
+    .replace(/\bsk-[\w-]{8,}/g, 'sk-[REDACTED]')
+    .replace(/((?:OPENAI_API_KEY|API[_-]?KEY|ACCESS[_-]?TOKEN|AUTH[_-]?TOKEN|BEARER[_-]?TOKEN|PASSWORD|PASSWD|SECRET)\s*=\s*)(?:"[^"]*"|'[^']*'|[^\s;]+)/gi, '$1[REDACTED]')
+    .replace(/(--(?:api[-_]?key|access[-_]?token|auth[-_]?token|bearer[-_]?token|password|passwd|secret)(?:\s+|=\s*))(?:"[^"]*"|'[^']*'|[^\s;]+)/gi, '$1[REDACTED]')
+    .replace(/(^|[\s,{])(["']?(?:api[_-]?key|access[_-]?token|auth[_-]?token|bearer[_-]?token|password|passwd|secret)["']?\s*:\s*)(?:"[^"]*"|'[^']*'|[^\s,}]+)/gim, '$1$2[REDACTED]')
+    .replace(/(https?:\/\/)[^/\s:@]+:[^@\s/]+@/gi, '$1[REDACTED]@')
+}
+
 function truncate(value: string): string {
-  const normalized = Array.from(value, (character) => {
+  const redacted = redactSensitiveText(value)
+  const normalized = Array.from(redacted, (character) => {
     const codePoint = character.codePointAt(0) ?? 0
     return codePoint <= 31 || codePoint === 127 ? ' ' : character
   }).join('').replace(/\s+/g, ' ').trim()
@@ -297,6 +310,19 @@ export class RolloutParser {
   private readonly runningTools = new Map<string, ToolEntry>()
   private readonly images = new Map<string, SessionImage>()
   private latestTokenUsage: TokenUsageInfo | null = null
+  private captureConversationBodies: boolean
+
+  constructor(options: { captureConversationBodies?: boolean } = {}) {
+    this.captureConversationBodies = options.captureConversationBodies ?? true
+  }
+
+  setConversationCapture(enabled: boolean): void {
+    if (enabled === this.captureConversationBodies) {
+      return
+    }
+    this.captureConversationBodies = enabled
+    this.reset()
+  }
 
   setFile(filePath: string | null): void {
     if (filePath === this.filePath) {
@@ -488,13 +514,16 @@ export class RolloutParser {
           id: turnId ?? `turn-${String(this.state.conversationTurns.length + 1)}`,
           turnId,
           startedAt: timestamp,
-          userMessage,
+          userMessage: this.captureConversationBodies ? userMessage : '',
           assistantMessage: '',
         })
       }
       return
     }
     if (payload.type === 'agent_message' && typeof payload.message === 'string') {
+      if (!this.captureConversationBodies) {
+        return
+      }
       const turn = this.state.conversationTurns.at(-1)
       const message = payload.message.trim()
       if (!turn || !message) {
@@ -519,11 +548,14 @@ export class RolloutParser {
         this.latestTokenUsage?.model_context_window,
       )
       this.state.sessionTokens = toSessionTokens(this.latestTokenUsage?.total_token_usage)
-      const observedUsage = normalizeRateLimits(payload.rate_limits)
+      const observedUsage = normalizeAccountRateLimits(payload.rate_limits)
       // Codex rate-limit updates can be sparse: a later token_count may only
       // contain one window (or no window metadata at all). Merge it with the
       // last complete snapshot instead of clearing previously known limits.
       this.state.usage = mergeUsageData(this.state.usage, observedUsage)
+      if (observedUsage) {
+        this.state.usageObservedAt = timestamp
+      }
       return
     }
     if (payload.type === 'plan_update') {

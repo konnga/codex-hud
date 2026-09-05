@@ -165,7 +165,7 @@ describe('external usage snapshots', () => {
     expect(fetchMock).toHaveBeenCalledWith('https://general.example.com/user/balance', expect.objectContaining({
       headers: expect.objectContaining({
         'Authorization': 'Bearer sk-query',
-        'User-Agent': 'codex-hud/0.5',
+        'User-Agent': expect.stringMatching(/^codex-hud\/\d+\.\d+\.\d+/),
       }),
     }))
   })
@@ -411,5 +411,46 @@ describe('external usage snapshots', () => {
       { OPENAI_API_KEY: 'sk-never-send' },
     )).resolves.toBeNull()
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('never sends relay credentials over cleartext HTTP outside loopback', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const query = [{
+      enabled: true,
+      origin: '*',
+      template: 'general' as const,
+      apiKeyEnv: '',
+      accessTokenEnv: '',
+      userIdEnv: '',
+      refreshMs: 300_000,
+      quotaPerCredit: 500_000,
+    }]
+
+    await expect(readConfiguredExternalUsage(
+      query,
+      'http://relay.example.com/v1/responses',
+      { OPENAI_API_KEY: 'sk-never-send' },
+    )).resolves.toBeNull()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('allows a cleartext general query for an explicit loopback development endpoint', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ balance: 2 })))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(readConfiguredExternalUsage([{
+      enabled: true,
+      origin: '*',
+      template: 'general',
+      apiKeyEnv: '',
+      accessTokenEnv: '',
+      userIdEnv: '',
+      refreshMs: 300_000,
+      quotaPerCredit: 500_000,
+    }], 'http://127.0.0.1:8787/v1/responses', { OPENAI_API_KEY: 'sk-local' })).resolves.toMatchObject({
+      balanceLabel: '$2',
+    })
+    expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:8787/user/balance', expect.any(Object))
   })
 })

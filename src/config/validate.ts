@@ -71,6 +71,17 @@ function nullablePositiveInteger(value: unknown, fallback: number | null): numbe
   return Math.round(value)
 }
 
+function isCredentialSafeOrigin(url: URL): boolean {
+  if (url.protocol === 'https:') {
+    return true
+  }
+  if (url.protocol !== 'http:') {
+    return false
+  }
+  const hostname = url.hostname.toLowerCase()
+  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]'
+}
+
 function externalUsageQueries(value: unknown, fallback: ExternalUsageQueryConfig[]): ExternalUsageQueryConfig[] {
   if (!Array.isArray(value)) {
     return structuredClone(fallback)
@@ -88,7 +99,7 @@ function externalUsageQueries(value: unknown, fallback: ExternalUsageQueryConfig
       catch {
         return []
       }
-      if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      if (!isCredentialSafeOrigin(url)) {
         return []
       }
       origin = url.origin.toLowerCase()
@@ -256,6 +267,7 @@ export function validateConfig(value: unknown): HudConfig {
       usageCompact: booleanValue(rawDisplay.usageCompact, fallback.display.usageCompact),
       showResetLabel: booleanValue(rawDisplay.showResetLabel, fallback.display.showResetLabel),
       showTools: booleanValue(rawDisplay.showTools, fallback.display.showTools),
+      showToolTargets: booleanValue(rawDisplay.showToolTargets, fallback.display.showToolTargets),
       showSkills: booleanValue(rawDisplay.showSkills, fallback.display.showSkills),
       showMcp: booleanValue(rawDisplay.showMcp, fallback.display.showMcp),
       toolNameMaxLength: numberValue(rawDisplay.toolNameMaxLength, fallback.display.toolNameMaxLength, 0, 256, true),
@@ -264,6 +276,7 @@ export function validateConfig(value: unknown): HudConfig {
       showTodos: booleanValue(rawDisplay.showTodos, fallback.display.showTodos),
       showGoal: booleanValue(rawDisplay.showGoal, fallback.display.showGoal),
       showTurns: booleanValue(rawDisplay.showTurns, fallback.display.showTurns),
+      showImages: booleanValue(rawDisplay.showImages, fallback.display.showImages),
       showSessionName: booleanValue(rawDisplay.showSessionName, fallback.display.showSessionName),
       showAuth: booleanValue(rawDisplay.showAuth, fallback.display.showAuth),
       showAuthUser: booleanValue(rawDisplay.showAuthUser, fallback.display.showAuthUser),

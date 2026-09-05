@@ -6,7 +6,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 import { parse } from 'smol-toml'
-import { resolveProcessEndpoint, resolveSessionEndpoint } from '../codex/session-endpoint.js'
+import { isOfficialOpenAIEndpoint, resolveProcessEndpoint, resolveSessionEndpoint } from '../codex/session-endpoint.js'
 import { getCodexHome } from '../config/paths.js'
 import { setTimedCache } from '../runtime/timed-cache.js'
 
@@ -153,6 +153,62 @@ function configuredBaseUrl(session: SessionInfo, env: NodeJS.ProcessEnv): string
   }
 }
 
+export function hasApiKeyCredential(env: NodeJS.ProcessEnv = process.env): boolean {
+  if (env.OPENAI_API_KEY) {
+    return true
+  }
+  try {
+    const auth = record(JSON.parse(fs.readFileSync(path.join(getCodexHome(env), 'auth.json'), 'utf8')))
+    return typeof auth?.OPENAI_API_KEY === 'string' && Boolean(auth.OPENAI_API_KEY)
+  }
+  catch {
+    return false
+  }
+}
+
+function hasChatGptCredential(auth: UnknownRecord): boolean {
+  const tokens = record(auth.tokens)
+  return ['access_token', 'refresh_token', 'id_token']
+    .some(key => typeof tokens?.[key] === 'string' && Boolean(tokens[key]))
+}
+
+export function hasTrustedOpenAiAuth(
+  session: SessionInfo | null,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (!session || hasApiKeyCredential(env)) {
+    return false
+  }
+  try {
+    const auth = record(JSON.parse(fs.readFileSync(path.join(getCodexHome(env), 'auth.json'), 'utf8')))
+    if (!auth || !hasChatGptCredential(auth)) {
+      return false
+    }
+  }
+  catch {
+    return false
+  }
+  if (session.modelProvider?.toLowerCase() === 'openai') {
+    return true
+  }
+  try {
+    const configPath = path.join(getCodexHome(env), 'config.toml')
+    if (fs.statSync(configPath).mtimeMs > session.startTime.getTime()) {
+      return false
+    }
+    const config = record(parse(fs.readFileSync(configPath, 'utf8')))
+    const provider = session.modelProvider
+      ? record(record(config?.model_providers)?.[session.modelProvider])
+      : null
+    const baseUrl = typeof provider?.base_url === 'string' ? provider.base_url : null
+    return provider?.requires_openai_auth === true
+      && (!baseUrl || isOfficialOpenAIEndpoint(baseUrl))
+  }
+  catch {
+    return false
+  }
+}
+
 export function collectAuthInfo(
   planType: string | null,
   session: SessionInfo | null = null,
@@ -172,7 +228,7 @@ export function collectAuthInfo(
   catch {
     // Environment-only authentication is still detectable below.
   }
-  const hasApiKey = typeof auth.OPENAI_API_KEY === 'string' || Boolean(env.OPENAI_API_KEY)
+  const hasApiKey = hasApiKeyCredential(env)
   const user = jwtUser(auth) ?? findString(auth, new Set(['email', 'preferred_username', 'username']))?.split('@')[0]
   const endpoint = session
     ? resolveSessionEndpoint(session.id, env)

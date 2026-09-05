@@ -15,8 +15,8 @@ Full 预设会根据当前会话的可用数据，展示模型与项目、Contex
 
 ```text
 [gpt-5.6-sol high] │ codex-hud git:(main*) M2 A1 ?1 │ ChatGPT pro
-上下文 ██████░░░░ 59% │ 5h: ███░░░░░░░ 25% (重置于 7月16日 18:30) │ 1w: ████████░░ 82% (重置于 7月20日 17:00)
-缓存有效期 ⏱️ 5m
+上下文 ██████░░░░ ~59% │ 5h: ███░░░░░░░ 25% (重置于 7月16日 18:30) │ 1w: ████████░░ 82% (重置于 7月20日 17:00)
+缓存估计 ~⏱️ 5m
 审批: on-request │ 权限: managed │ 沙箱: workspace-write
 🛠️ 工具: ◐ exec_command: pnpm test │ ✓ view_image ×1
 🧩 ✓ 技能 (2): openai-docs, pdf
@@ -24,7 +24,7 @@ Full 预设会根据当前会话的可用数据，展示模型与项目、Contex
 🤖 ◐ explorer: 检查协议 (2m)
 📋 ▸ 渲染 HUD (1/3)
 ↕ 轮次: 6 · 点击 HUD 或按 F12，再按 n 导航
-🖼 Images: 2 · hud-preview.png · i gallery
+🖼 图片: 2 · hud-preview.png · i 画廊
 ⏱️ 1h │ Token: 55k (输入 50k，缓存 30k · 60%；输出 5k) │ 压缩: 2
 ```
 
@@ -56,7 +56,7 @@ HUD 只展示当前有数据的行，没有遥测数据的内容会自动隐藏�
 | Context 与额度 | Context 使用率、输入/缓存/输出 Token、额度窗口、服务端提供的本地 reset 时间和中转余额 |
 | 实时活动       | 工具、Skills、MCP、子 Agent、计划、Goal、轮次导航和会话图片                           |
 | 运行环境       | 认证方式、approval、sandbox 和权限策略                                                |
-| 会话           | 会话时长、累计 Token、Prompt Cache 有效期和压缩次数                                   |
+| 会话           | 会话时长、累计 Token、Prompt Cache 估计和压缩次数                                     |
 
 完整遥测来源和支持边界见[功能与遥测支持矩阵](./docs/claude-hud-parity.md)。
 
@@ -86,7 +86,7 @@ brew install tmux
 sudo apt install tmux
 ```
 
-`sqlite3` 是可选依赖，用于读取会话标题和会话实际连接的 endpoint。
+`sqlite3` 是可选依赖。它用于读取会话标题、核实每个会话实际连接的 endpoint，并从 Codex 日志恢复账号级额度事件。使用 ChatGPT 认证时，即使暂时无法取得 endpoint，HUD 仍可安全显示 rollout 已提供的订阅额度；API Key 与自定义 provider 会保持保守，直到 endpoint 得到核实。
 
 `chafa` 是可选依赖，用于在终端内联预览图片。macOS 可执行 `brew install chafa` 安装。未安装时，图片画廊仍会显示图片路径，并可以调用系统默认图片查看器打开文件。
 
@@ -153,6 +153,7 @@ codex plugin add codex-hud@codex-hud
 | 普通终端 | `codex`                                           | 使用 HUD 启动交互式 Codex              |
 | 普通终端 | `codex --no-hud`                                  | 临时绕过 HUD，直接运行官方 Codex       |
 | 普通终端 | `codex-hud render --once --cwd "$PWD" --no-color` | 查看一次纯文本渲染结果                 |
+| 普通终端 | `codex-hud hud-version`                           | 输出当前运行的 HUD 版本                |
 
 `codex exec`、`plugin`、`login`、`mcp`、`completion`、`--help` 和 `--version` 等非交互命令会自动直通官方 Codex。
 
@@ -168,16 +169,18 @@ codex-hud configure
 
 也可以直接应用预设：
 
-| 预设        | 适合场景                            |
-| ----------- | ----------------------------------- |
-| `full`      | 第一次使用，展示日常可用的完整信息  |
-| `essential` | 只保留项目、Context、额度和主要活动 |
-| `minimal`   | 适合窄终端的最小信息集              |
+| 预设           | 适合场景                                         |
+| -------------- | ------------------------------------------------ |
+| `full`         | 第一次使用，展示日常可用的完整信息               |
+| `essential`    | 只保留项目、Context、额度和主要活动              |
+| `minimal`      | 适合窄终端的最小信息集                           |
+| `presentation` | 屏幕分享时隐藏对话、认证用户、图片与工具目标详情 |
 
 ```bash
 codex-hud configure --preset full --yes
 codex-hud configure --preset essential --yes
 codex-hud configure --preset minimal --yes
+codex-hud configure --preset presentation --yes
 ```
 
 精确打开或关闭字段：
@@ -197,7 +200,7 @@ codex-hud configure --language zh-Hans
 
 ### 中转站余额查询
 
-Codex HUD 支持 CC Switch 常见的余额与用量返回格式，以及 New API、Sub2API 专用模板。通用查询默认开启：新会话连接第三方中转站后，HUD 会使用当前 API Key 查询该中转站。ChatGPT 与 OpenAI 官方 origin 始终排除。查询仅在显示 `auth` 时运行；余额显示在 API Key 服务商名称右侧，例如 `xxxrouter · $12.50`，不会单独占用 usage 行。
+Codex HUD 支持 CC Switch 常见的余额与用量返回格式，以及 New API、Sub2API 专用模板。中转查询默认关闭；首次交互式 setup 会询问是否启用，非交互 setup 只有显式传入 `--relay-usage` 才会开启。启用后，新会话连接第三方中转站时，HUD 会使用当前 API Key 查询该中转站。ChatGPT 与 OpenAI 官方 origin 始终排除。查询仅在显示 `auth` 时运行；余额显示在 API Key 服务商名称右侧，例如 `xxxrouter · $12.50`，不会单独占用 usage 行。
 
 <img src="./.github/assets/relay-balance.png" alt="Codex HUD showing a relay wallet balance beside the provider name" width="820">
 
@@ -232,7 +235,7 @@ Codex HUD 支持 CC Switch 常见的余额与用量返回格式，以及 New API
 }
 ```
 
-默认的 `general` 模板兼容 CC Switch 的常见查询格式：先请求 `GET /user/balance` 并读取 `balance`；若未返回 JSON 用量数据，再请求当前 API Base URL 下的 `/usage`，读取 `remaining`（或 `balance`）、`unit` 和 `planName`。两次请求都使用 Bearer API Key，且严格限制在当前中转 origin。查询复用当前 `OPENAI_API_KEY`；显式配置 `apiKeyEnv` 后只使用该专用查询 Key，变量缺失时不会回退发送推理 Key。这些接口只是常见约定，并非所有中转站都支持；不支持时 HUD 静默不显示余额。
+默认的 `general` 模板兼容 CC Switch 的常见查询格式：先请求 `GET /user/balance` 并读取 `balance`；若未返回 JSON 用量数据，再请求当前 API Base URL 下的 `/usage`，读取 `remaining`（或 `balance`）、`unit` 和 `planName`。两次请求都使用 Bearer API Key，且严格限制在当前中转 origin。带凭据的查询必须使用 HTTPS，只有 `localhost`、`127.0.0.1` 或 `[::1]` 的 loopback 开发地址允许 HTTP。查询复用当前 `OPENAI_API_KEY`；显式配置 `apiKeyEnv` 后只使用该专用查询 Key，变量缺失时不会回退发送推理 Key。这些接口只是常见约定，并非所有中转站都支持；不支持时 HUD 静默不显示余额。
 
 第三方中转返回的 Codex 格式 `codex.rate_limits` 事件会被忽略，因为它可能描述共享上游账户池，而不是用户自己的 OpenAI 套餐。原生用量窗口仅信任 ChatGPT 和 OpenAI API 官方端点。如果 Codex 提供了 `reset_at` / `resets_at`，HUD 会将服务端时间转换为本地日期和时间显示；如果没有返回重置时间，HUD 不会自行估算。
 
@@ -247,11 +250,12 @@ New API 需要系统访问令牌和用户 ID，不是用于推理的 `sk-` Key�
 | ------------------------------- | ----------------------------------------------- |
 | `git`                           | Git 分支和工作区状态                            |
 | `usage`                         | 额度窗口、服务端提供的本地 reset 时间和 credits |
-| `promptCache`                   | Prompt Cache 倒计时                             |
+| `promptCache`                   | 配置的 Prompt Cache 复用窗口估计                |
 | `tools` / `skills` / `mcp`      | 工具、Skill 和 MCP 活动                         |
 | `agents`                        | 子 Agent 状态                                   |
 | `todos` / `goal`                | 计划、任务和持久 Goal                           |
 | `turns`                         | 会话轮次和导航提示                              |
+| `images`                        | 会话图片数量与画廊入口                          |
 | `configCounts`                  | 配置、规则、Skill 和 MCP 数量                   |
 | `auth`                          | ChatGPT 套餐或当前会话实际 endpoint 主机名      |
 | `memory`                        | 近似系统内存                                    |
@@ -347,7 +351,7 @@ brew install chafa
 | WSL2         | 支持           | Node.js、Codex、tmux 和 Codex HUD 必须安装在同一个 Linux distribution |
 | 原生 Windows | 不支持完整 HUD | PowerShell、CMD 和原生 Windows Terminal 无法创建受支持的 HUD pane     |
 
-所有受支持环境都需要 Node.js 20 或更高版本，以及可以正常运行的官方 Codex CLI。`sqlite3` 是可选依赖，用于读取会话标题和实际连接的 endpoint。
+所有受支持环境都需要 Node.js 20 或更高版本，以及可以正常运行的官方 Codex CLI。`sqlite3` 是可选依赖，可增加会话标题、实际 endpoint 检测和日志额度恢复能力。
 
 如果系统缺少可用的 cmux/tmux 环境，或 HUD 启动失败，Codex HUD 会直接运行官方 Codex，不会阻断命令，但不会显示 HUD。
 
@@ -358,6 +362,7 @@ brew install chafa
 ```bash
 codex-hud doctor
 codex-hud render --once --cwd "$PWD" --no-color
+codex-hud hud-version
 ```
 
 常见情况：
@@ -376,6 +381,7 @@ codex-hud render --once --cwd "$PWD" --no-color
 
 ```bash
 pnpm install
+pnpm test:coverage
 pnpm build
 node dist/cli.mjs setup --codex-shim --language zh-Hans
 hash -r
@@ -401,8 +407,10 @@ codex plugin marketplace remove codex-hud
 
 - 默认情况下，HUD 只读取本地 Codex rollout、配置元数据和 Git 状态；中转余额查询需要在 setup 或配置中明确开启。
 - 只有显式开启的中转站余额查询才会把配置的管理凭据发送到当前会话匹配的 origin；凭据从环境变量读取，Codex HUD 不会持久化保存。
-- 常驻 HUD 不显示用户 prompt、模型回复正文或工具输出正文。
+- 带凭据的中转查询必须使用 HTTPS，只有本机 loopback 开发地址允许 HTTP。
+- 常驻 HUD 不显示用户 prompt、模型回复正文或工具输出正文；工具目标中的常见凭据会在保留和渲染前脱敏。
 - 会话正文只会在用户主动打开导航器时显示，数据始终保留在本机。
+- `presentation` 预设会隐藏对话导航、认证用户、图片路径和工具详情，适合屏幕分享。
 - 所有渲染文本都会移除终端控制字符。
 - Codex HUD 不修改官方 Codex 二进制；`--no-hud` 可以随时绕过 HUD。
 

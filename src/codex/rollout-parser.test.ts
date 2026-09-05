@@ -4,9 +4,10 @@ import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { calculateContextUsage } from './context-usage.js'
 import { JsonlTail } from './jsonl-tail.js'
-import { RolloutParser } from './rollout-parser.js'
+import { redactSensitiveText, RolloutParser } from './rollout-parser.js'
 
 const fixturePath = path.resolve('tests/fixtures/session-active.jsonl')
+const currentFixturePath = path.resolve('tests/fixtures/session-active-0.153.jsonl')
 const temporaryDirectories: string[] = []
 
 afterEach(() => {
@@ -16,7 +17,7 @@ afterEach(() => {
 })
 
 describe('codex context usage', () => {
-  it('matches the official 12k baseline calculation', () => {
+  it('applies the versioned 12k baseline estimate', () => {
     expect(calculateContextUsage({
       input_tokens: 70_000,
       cached_input_tokens: 50_000,
@@ -34,6 +35,15 @@ describe('codex context usage', () => {
   })
 })
 
+describe('hud text privacy', () => {
+  it('redacts common credentials before tool targets are retained', () => {
+    expect(redactSensitiveText('curl -H "Authorization: Bearer secret-token" https://user:pass@example.com --api-key=sk-1234567890'))
+      .toBe('curl -H "Authorization: Bearer [REDACTED]" https://[REDACTED]@example.com --api-key=[REDACTED]')
+    expect(redactSensitiveText('OPENAI_API_KEY=sk-abcdefghijk PASSWORD="do-not-show"'))
+      .toBe('OPENAI_API_KEY=[REDACTED] PASSWORD=[REDACTED]')
+  })
+})
+
 describe('jSONL tailing', () => {
   it('retains partial lines until the newline arrives', () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-jsonl-'))
@@ -48,6 +58,27 @@ describe('jSONL tailing', () => {
 })
 
 describe('rollout parser', () => {
+  it('parses representative legacy and current Codex rollout contracts', () => {
+    const legacy = new RolloutParser()
+    legacy.setFile(fixturePath)
+    expect(legacy.parse().session?.cliVersion).toBe('0.144.1')
+
+    const current = new RolloutParser()
+    current.setFile(currentFixturePath)
+    const state = current.parse()
+    expect(state.session).toMatchObject({
+      id: 'session-0153',
+      cliVersion: '0.153.2',
+      model: 'gpt-5.6-sol',
+      permissionProfile: 'managed',
+    })
+    expect(state.usage).toMatchObject({
+      primary: { label: '5h', percent: 18 },
+      secondary: { label: '1w', percent: 21 },
+    })
+    expect(state.usageObservedAt).toEqual(new Date('2026-09-05T00:00:03.000Z'))
+  })
+
   it('normalizes session, activity, plan, goal, tokens, and limits', () => {
     const parser = new RolloutParser()
     parser.setFile(fixturePath)
@@ -121,6 +152,22 @@ describe('rollout parser', () => {
     expect(parser.parse().compactCount).toBe(1)
     fs.appendFileSync(filePath, '{"timestamp":"2026-07-16T08:01:00Z","type":"event_msg","payload":{"type":"context_compacted"}}\n')
     expect(parser.parse().compactCount).toBe(2)
+  })
+
+  it('loads conversation bodies only when the navigator asks for them', () => {
+    const parser = new RolloutParser({ captureConversationBodies: false })
+    parser.setFile(fixturePath)
+
+    const lightweight = parser.parse()
+    expect(lightweight.conversationTurns).toHaveLength(1)
+    expect(lightweight.conversationTurns[0]).toMatchObject({ userMessage: '', assistantMessage: '' })
+
+    parser.setConversationCapture(true)
+    const detailed = parser.parse()
+    expect(detailed.conversationTurns[0]).toMatchObject({
+      userMessage: 'Build a conversation navigator.',
+      assistantMessage: 'The conversation navigator is ready.',
+    })
   })
 
   it('preserves complete rate-limit windows across sparse token updates', () => {
@@ -252,6 +299,91 @@ describe('rollout parser', () => {
       secondary: null,
       planType: 'pro',
     })
+  })
+
+  it('does not let a named model quota replace the account-wide quota', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-rollout-model-limit-'))
+    temporaryDirectories.push(directory)
+    const filePath = path.join(directory, 'rollout.jsonl')
+    fs.writeFileSync(filePath, [
+      JSON.stringify({
+        timestamp: '2026-09-05T02:50:00Z',
+        type: 'session_meta',
+        payload: { session_id: 'model-limit-session', cwd: directory },
+      }),
+      JSON.stringify({
+        timestamp: '2026-09-05T02:51:00Z',
+        type: 'event_msg',
+        payload: {
+          type: 'token_count',
+          rate_limits: {
+            limit_id: 'codex',
+            limit_name: 'Codex',
+            primary: { used_percent: 16, window_minutes: 10_080 },
+            secondary: null,
+            plan_type: 'prolite',
+          },
+        },
+      }),
+      JSON.stringify({
+        timestamp: '2026-09-05T02:52:00Z',
+        type: 'event_msg',
+        payload: {
+          type: 'token_count',
+          rate_limits: {
+            limit_id: 'codex_bengalfox',
+            limit_name: 'GPT-5.3-Codex-Spark',
+            primary: { used_percent: 0, window_minutes: 300 },
+            secondary: { used_percent: 0, window_minutes: 10_080 },
+            plan_type: 'prolite',
+          },
+        },
+      }),
+      '',
+    ].join('\n'), 'utf8')
+
+    const parser = new RolloutParser()
+    parser.setFile(filePath)
+    const state = parser.parse()
+    expect(state.usage).toMatchObject({
+      primary: { label: '1w', percent: 16 },
+      secondary: null,
+      planType: 'prolite',
+    })
+    expect(state.usageObservedAt).toEqual(new Date('2026-09-05T02:51:00Z'))
+  })
+
+  it('leaves usage empty when a rollout contains only a named model quota', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-rollout-model-only-'))
+    temporaryDirectories.push(directory)
+    const filePath = path.join(directory, 'rollout.jsonl')
+    fs.writeFileSync(filePath, [
+      JSON.stringify({
+        timestamp: '2026-09-05T02:50:00Z',
+        type: 'session_meta',
+        payload: { session_id: 'model-only-session', cwd: directory },
+      }),
+      JSON.stringify({
+        timestamp: '2026-09-05T02:51:00Z',
+        type: 'event_msg',
+        payload: {
+          type: 'token_count',
+          rate_limits: {
+            limit_id: 'codex_bengalfox',
+            limit_name: 'GPT-5.3-Codex-Spark',
+            primary: { used_percent: 0, window_minutes: 300 },
+            secondary: { used_percent: 0, window_minutes: 10_080 },
+          },
+        },
+      }),
+      '',
+    ].join('\n'), 'utf8')
+
+    const parser = new RolloutParser()
+    parser.setFile(filePath)
+    const state = parser.parse()
+    expect(state.usage).toBeNull()
+    expect(state.usageObservedAt).toBeNull()
   })
 
   it('records MCP servers from the event Codex actually writes', () => {

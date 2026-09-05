@@ -1,7 +1,9 @@
+import type { Language } from '../types/config.js'
 // @env node
 import fs from 'node:fs'
 import process from 'node:process'
 import * as prompts from '@clack/prompts'
+import { loadConfig } from '../config/load.js'
 import { getConfigPath } from '../config/paths.js'
 import { runConfigure } from './configure.js'
 import { runInstall } from './install.js'
@@ -13,6 +15,12 @@ const OPTIONS_WITH_VALUES = new Set([
   '--layout',
   '--preset',
 ])
+
+function setupLanguage(args: string[]): Language {
+  const index = args.indexOf('--language')
+  const requested = index >= 0 ? args[index + 1] : null
+  return requested === 'zh-Hans' || requested === 'en' ? requested : loadConfig().config.language
+}
 
 function configureArgs(args: string[], hasConfig: boolean): string[] {
   const result: string[] = []
@@ -39,6 +47,7 @@ function configureArgs(args: string[], hasConfig: boolean): string[] {
 export async function runSetup(args: string[]): Promise<number> {
   const dryRun = args.includes('--dry-run')
   const hasConfig = fs.existsSync(getConfigPath())
+  const language = setupLanguage(args)
   const installArgs = [
     ...(args.includes('--codex-shim') ? ['--codex-shim'] : []),
     ...(dryRun ? ['--dry-run'] : []),
@@ -54,11 +63,13 @@ export async function runSetup(args: string[]): Promise<number> {
     }
     else {
       const enabled = await prompts.confirm({
-        message: 'Query third-party relay balances with the active API key?',
+        message: language === 'zh-Hans'
+          ? '是否使用当前 API Key 查询第三方 relay 余额？'
+          : 'Query third-party relay balances with the active API key?',
         initialValue: false,
       })
       if (prompts.isCancel(enabled)) {
-        prompts.cancel('Setup cancelled.')
+        prompts.cancel(language === 'zh-Hans' ? '已取消设置。' : 'Setup cancelled.')
         return 1
       }
       nextArgs.push(enabled ? '--relay-usage' : '--no-relay-usage')
@@ -67,8 +78,10 @@ export async function runSetup(args: string[]): Promise<number> {
   const configureExitCode = await runConfigure(nextArgs)
   if (configureExitCode === 0) {
     process.stdout.write(
-      'Setup complete. The current Codex session cannot gain a HUD pane. '
-      + 'Exit it, run `hash -r` if needed, then start a new `codex` session.\n',
+      language === 'zh-Hans'
+        ? '设置完成。当前 Codex 会话无法新增 HUD pane；请先退出，必要时运行 `hash -r`，再启动新的 `codex` 会话。\n'
+        : 'Setup complete. The current Codex session cannot gain a HUD pane. '
+          + 'Exit it, run `hash -r` if needed, then start a new `codex` session.\n',
     )
   }
   return configureExitCode

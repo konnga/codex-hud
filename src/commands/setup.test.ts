@@ -70,4 +70,12 @@ describe('codex HUD setup', () => {
       template: 'general',
     }])
   })
+
+  it('prints the restart guidance in Simplified Chinese when requested', async () => {
+    environment()
+    const output = vi.spyOn(process.stdout, 'write').mockImplementation(() => true)
+
+    expect(await runSetup(['--yes', '--language', 'zh-Hans'])).toBe(0)
+    expect(output).toHaveBeenCalledWith(expect.stringContaining('当前 Codex 会话无法新增 HUD pane'))
+  })
 })

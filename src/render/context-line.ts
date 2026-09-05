@@ -34,19 +34,19 @@ export function renderContextLine(ctx: RenderContext): string | null {
     parts.push(progressBar(context.percent, 10, ctx.config.colors.barFilled, ctx.config.colors.barEmpty))
   }
   if (config.contextValue === 'tokens') {
-    parts.push(`${formatTokens(context.used)}/${formatTokens(context.total)}`)
+    parts.push(`~${formatTokens(context.used)}/${formatTokens(context.total)}`)
   }
   else if (config.contextValue === 'remaining') {
-    parts.push(`${context.remainingPercent}% left`)
+    parts.push(`~${context.remainingPercent}% ${message(ctx.config.language, 'left')}`)
   }
   else if (config.contextValue === 'both') {
-    parts.push(`${context.percent}% (${formatTokens(context.used)}/${formatTokens(context.total)})`)
+    parts.push(`~${context.percent}% (${formatTokens(context.used)}/${formatTokens(context.total)})`)
   }
   else {
-    parts.push(`${context.percent}%`)
+    parts.push(`~${context.percent}%`)
   }
   if (config.showTokenBreakdown && context.percent >= config.contextCriticalThreshold) {
-    parts.push(`in ${formatTokens(context.inputTokens)} cache ${formatTokens(context.cachedTokens)} out ${formatTokens(context.outputTokens)}`)
+    parts.push(`${message(ctx.config.language, 'input')} ${formatTokens(context.inputTokens)} ${message(ctx.config.language, 'cache')} ${formatTokens(context.cachedTokens)} ${message(ctx.config.language, 'output')} ${formatTokens(context.outputTokens)}`)
   }
   return color(parts.join(' '), selectedColor, ctx.options.color)
 }

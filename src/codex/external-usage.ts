@@ -7,6 +7,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { getCodexHome } from '../config/paths.js'
 import { setTimedCache } from '../runtime/timed-cache.js'
+import { HUD_VERSION } from '../version.js'
 import { isOfficialOpenAIEndpoint } from './session-endpoint.js'
 
 interface SnapshotWindow {
@@ -219,6 +220,13 @@ function configuredQuery(
   let origin: string
   try {
     origin = new URL(endpoint).origin.toLowerCase()
+    const originUrl = new URL(origin)
+    const hostname = originUrl.hostname.toLowerCase()
+    const safeTransport = originUrl.protocol === 'https:'
+      || (originUrl.protocol === 'http:' && (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]'))
+    if (!safeTransport) {
+      return null
+    }
   }
   catch {
     return null
@@ -310,7 +318,7 @@ async function performConfiguredQuery(context: ConfiguredQueryContext, now: numb
         headers: {
           'Accept': 'application/json',
           'Authorization': `Bearer ${accessToken}`,
-          'User-Agent': 'codex-hud/0.5',
+          'User-Agent': `codex-hud/${HUD_VERSION}`,
           ...(query.template === 'newApi' ? { 'New-Api-User': userId! } : {}),
         },
         redirect: 'error',

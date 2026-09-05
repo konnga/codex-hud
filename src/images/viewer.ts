@@ -33,6 +33,11 @@ const LABELS = {
     previewHelp: '←/→ previous/next · j/k scroll · o open · y copy path · q/Esc back',
     open: 'Open',
     copied: 'Path copied',
+    unavailable: 'unavailable',
+    path: 'Path',
+    info: 'Info',
+    inlineRequired: 'Inline preview requires chafa.',
+    openHint: 'Press o to open with the system image viewer.',
   },
   'zh-Hans': {
     title: '图片画廊',
@@ -43,6 +48,11 @@ const LABELS = {
     previewHelp: '←/→ 上一张/下一张 · j/k 滚动 · o 打开 · y 复制路径 · q/Esc 返回',
     open: '打开',
     copied: '路径已复制',
+    unavailable: '不可用',
+    path: '路径',
+    info: '信息',
+    inlineRequired: '内联预览需要安装 chafa。',
+    openHint: '按 o 使用系统图片查看器打开。',
   },
 } as const
 
@@ -57,7 +67,7 @@ export function createImageViewerState(): ImageViewerState {
   }
 }
 
-function imageInfo(image: SessionImage): string {
+function imageInfo(image: SessionImage, unavailable = 'unavailable'): string {
   try {
     const stat = fs.statSync(image.path)
     const size = stat.size < 1024 * 1024
@@ -66,7 +76,7 @@ function imageInfo(image: SessionImage): string {
     return `${path.extname(image.path).slice(1).toUpperCase()} · ${size}`
   }
   catch {
-    return 'unavailable'
+    return unavailable
   }
 }
 
@@ -119,14 +129,14 @@ export function renderImageViewer(
   for (let index = start; index < Math.min(images.length, start + rows); index += 1) {
     const image = images[index]
     const marker = index === selectedIndex(state, images) ? '> ' : '  '
-    const row = `${marker}#${String(index + 1).padStart(2, '0')} ${timeLabel(image)} ${path.basename(image.path)} · ${imageInfo(image)}`
+    const row = `${marker}#${String(index + 1).padStart(2, '0')} ${timeLabel(image)} ${path.basename(image.path)} · ${imageInfo(image, labels.unavailable)}`
     lines.push(padLine(row, width))
   }
   lines.push(truncateAnsi(labels.listHelp, width))
   return lines.slice(0, height)
 }
 
-export function createImagePreview(image: SessionImage, width: number, height: number): string[] {
+export function createImagePreview(image: SessionImage, width: number, height: number, language: Language = 'en'): string[] {
   const maxWidth = Math.max(20, width)
   const maxHeight = Math.max(4, height - 3)
   const result = spawnSync('chafa', [
@@ -143,12 +153,13 @@ export function createImagePreview(image: SessionImage, width: number, height: n
   if (result.status === 0 && result.stdout.trim()) {
     return result.stdout.replace(/\r/g, '').trimEnd().split('\n')
   }
+  const labels = LABELS[language]
   return [
-    `Path: ${image.path}`,
-    `Info: ${imageInfo(image)}`,
+    `${labels.path}: ${image.path}`,
+    `${labels.info}: ${imageInfo(image, labels.unavailable)}`,
     '',
-    'Inline preview requires chafa.',
-    'Press o to open with the system image viewer.',
+    labels.inlineRequired,
+    labels.openHint,
   ]
 }
 

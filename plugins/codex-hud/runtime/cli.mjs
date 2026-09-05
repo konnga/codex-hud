@@ -1,13 +1,13 @@
 #!/usr/bin/env node
-import { A as isOfficialOpenAIEndpoint, C as DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY, D as findActiveSession, E as readConfiguredExternalUsage, F as getConfigPath, I as getHudStateDirectory, L as getLegacyStateDirectory, N as resolveSessionEndpoint, O as RolloutParser, P as getCodexHome, S as DEFAULT_CONFIG, a as waitForNewRootSession, b as applyConfigMigrations, i as snapshotRootSessions, k as findCodexLogDatabase, m as renderHud, n as createSessionBindingPath, o as writeSessionBinding, s as buildHudState, t as acquireSessionDiscoveryLock, v as loadConfig, w as readLatestLoggedRateLimits, x as rawConfigVersion } from "./session-binding-DKZrgQTi.mjs";
+import { A as evaluateUsageTrust, B as resolveSessionEndpoint, C as DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY, D as inspectLoggedRateLimitTargets, E as RolloutParser, F as findCodexLogDatabase, G as getLegacyStateDirectory, H as getCodexHome, I as inspectCodexLogSchema, L as isOfficialOpenAIEndpoint, N as readConfiguredExternalUsage, O as persistRolloutRateLimits, P as resolveUsageData, S as DEFAULT_CONFIG, T as findActiveSession, U as getConfigPath, V as HUD_VERSION, W as getHudStateDirectory, a as waitForNewRootSession, b as applyConfigMigrations, i as snapshotRootSessions, j as trustedUsageData, k as readLatestLoggedRateLimits, m as renderHud, n as createSessionBindingPath, o as writeSessionBinding, s as buildHudState, t as acquireSessionDiscoveryLock, v as loadConfig, w as hasTrustedOpenAiAuth, x as rawConfigVersion } from "./session-binding-C78ZzxyE.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import process$1, { stdin, stdout } from "node:process";
-import { spawn, spawnSync } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
 import os from "node:os";
+import { spawn, spawnSync } from "node:child_process";
 import { styleText } from "node:util";
 import l__default from "node:readline";
-import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 //#region \0rolldown/runtime.js
@@ -1122,6 +1122,13 @@ const GUIDED_ELEMENTS = [
 		set: (config, value) => config.display.showTurns = value
 	},
 	{
+		name: "images",
+		category: "Session",
+		label: "Session image gallery",
+		get: (config) => config.display.showImages,
+		set: (config, value) => config.display.showImages = value
+	},
+	{
 		name: "configCounts",
 		category: "Environment",
 		label: "Environment counts",
@@ -1219,12 +1226,14 @@ function createPreset(preset) {
 			showSpeed: false,
 			showTokenBreakdown: true,
 			showTools: true,
+			showToolTargets: true,
 			showSkills: true,
 			showMcp: true,
 			showAgents: true,
 			showTodos: true,
 			showGoal: true,
 			showTurns: true,
+			showImages: true,
 			showSessionName: false,
 			showAuth: true,
 			showAuthUser: true,
@@ -1256,7 +1265,28 @@ function createPreset(preset) {
 			showTurns: true,
 			showEffortLevel: true,
 			showPermissionProfile: true,
-			showUsage: false
+			showUsage: true
+		});
+		return config;
+	}
+	if (preset === "presentation") {
+		config.lineLayout = "compact";
+		Object.assign(config.display, {
+			showAddedDirs: false,
+			showAuth: true,
+			showAuthUser: false,
+			showDuration: true,
+			showTools: false,
+			showToolTargets: false,
+			showSkills: false,
+			showMcp: false,
+			showAgents: false,
+			showTodos: false,
+			showGoal: false,
+			showTurns: false,
+			showImages: false,
+			showSessionName: false,
+			showSessionId: false
 		});
 		return config;
 	}
@@ -1267,6 +1297,7 @@ function createPreset(preset) {
 	config.display.showAddedDirs = false;
 	config.display.showGoal = false;
 	config.display.showTurns = false;
+	config.display.showImages = false;
 	return config;
 }
 
@@ -1315,12 +1346,141 @@ function writeConfig(config, raw = {}, env = process$1.env) {
 
 //#endregion
 //#region src/commands/configure.ts
+const CONFIGURE_MESSAGES = {
+	"en": {
+		intro: "Codex HUD display configuration",
+		cancelled: "Configuration cancelled.",
+		chooseBase: "Choose a configuration base",
+		current: "Current settings",
+		currentHint: "Edit only what you choose below",
+		full: "Full",
+		fullHint: "All telemetry and activity",
+		essential: "Essential",
+		essentialHint: "Context, quota, tools, agents, tasks",
+		minimal: "Minimal",
+		minimalHint: "Model, project, context",
+		presentation: "Presentation",
+		presentationHint: "Hide transcript, auth user, image, and tool details",
+		chooseLanguage: "Choose label language",
+		chooseLayout: "Choose layout",
+		expanded: "Expanded",
+		expandedHint: "Multiple readable lines",
+		compact: "Compact",
+		compactHint: "Dense header plus activity",
+		chooseElements: "Choose visible HUD elements",
+		pathDepth: "Project path depth",
+		projectOnly: "Project only",
+		parentProject: "Parent / project",
+		parentsProject: "Two parents / project",
+		preview: "HUD preview",
+		noSession: "(No active Codex session data yet)",
+		config: "Config",
+		language: "Language",
+		layout: "Layout",
+		enabled: "Enabled",
+		disabled: "Disabled",
+		none: "(none)",
+		categories: {
+			Project: "Project",
+			Usage: "Usage",
+			Activity: "Activity",
+			Environment: "Environment",
+			Session: "Session"
+		},
+		elements: {
+			git: "Git status",
+			usage: "Rate limits and credits",
+			promptCache: "Prompt-cache estimate",
+			tools: "Tool activity",
+			skills: "Active skills",
+			mcp: "MCP activity",
+			agents: "Subagents",
+			todos: "Plan / todos",
+			goal: "Durable goal",
+			turns: "Conversation navigator",
+			images: "Session image gallery",
+			configCounts: "Environment counts",
+			auth: "Authentication method",
+			memory: "Approximate system memory",
+			duration: "Session duration",
+			speed: "Output speed",
+			sessionName: "Session title",
+			sessionTokens: "Session token totals",
+			compactions: "Compaction count"
+		}
+	},
+	"zh-Hans": {
+		intro: "Codex HUD 显示配置",
+		cancelled: "已取消配置。",
+		chooseBase: "选择配置基础",
+		current: "当前设置",
+		currentHint: "只修改下方明确选择的项目",
+		full: "完整",
+		fullHint: "显示全部遥测与活动信息",
+		essential: "常用",
+		essentialHint: "上下文、额度、工具、子代理与任务",
+		minimal: "最简",
+		minimalHint: "模型、项目与上下文",
+		presentation: "演示",
+		presentationHint: "隐藏对话、认证用户、图片与工具详情",
+		chooseLanguage: "选择标签语言",
+		chooseLayout: "选择布局",
+		expanded: "展开",
+		expandedHint: "多行显示，便于阅读",
+		compact: "紧凑",
+		compactHint: "密集标题与活动信息",
+		chooseElements: "选择要显示的 HUD 元素",
+		pathDepth: "项目路径层级",
+		projectOnly: "仅项目名",
+		parentProject: "父目录 / 项目",
+		parentsProject: "两级父目录 / 项目",
+		preview: "HUD 预览",
+		noSession: "（暂无活动 Codex 会话数据）",
+		config: "配置",
+		language: "语言",
+		layout: "布局",
+		enabled: "已启用",
+		disabled: "已禁用",
+		none: "（无）",
+		categories: {
+			Project: "项目",
+			Usage: "额度",
+			Activity: "活动",
+			Environment: "环境",
+			Session: "会话"
+		},
+		elements: {
+			git: "Git 状态",
+			usage: "限额与余额",
+			promptCache: "提示缓存估计",
+			tools: "工具活动",
+			skills: "活动技能",
+			mcp: "MCP 活动",
+			agents: "子代理",
+			todos: "计划 / 待办",
+			goal: "持久目标",
+			turns: "对话导航器",
+			images: "会话图片画廊",
+			configCounts: "环境配置计数",
+			auth: "认证方式",
+			memory: "系统内存估计",
+			duration: "会话时长",
+			speed: "输出速度",
+			sessionName: "会话标题",
+			sessionTokens: "会话 Token 汇总",
+			compactions: "压缩次数"
+		}
+	}
+};
+function ui(language) {
+	return CONFIGURE_MESSAGES[language];
+}
 function optionValue(args, name) {
 	const index = args.indexOf(name);
 	return index >= 0 ? args[index + 1] ?? null : null;
 }
 function isPreset(value) {
-	return value === "full" || value === "essential" || value === "minimal";
+	return value === "full" || value === "essential" || value === "minimal" || value === "presentation";
 }
 function isLanguage(value) {
 	return value === "en" || value === "zh-Hans";
@@ -1328,9 +1488,9 @@ function isLanguage(value) {
 function isLayout(value) {
 	return value === "compact" || value === "expanded";
 }
-function cancelled(value) {
+function cancelled(value, language) {
 	if (isCancel(value)) {
-		cancel("Configuration cancelled.");
+		cancel(ui(language).cancelled);
 		return true;
 	}
 	return false;
@@ -1373,13 +1533,15 @@ function preserveAdvancedSettings(target, source) {
 	]) target.display[key] = structuredClone(source.display[key]);
 }
 async function preview(config) {
-	const parser = new RolloutParser();
+	const parser = new RolloutParser({ captureConversationBodies: false });
 	const candidate = findActiveSession({ cwd: process$1.cwd() });
 	parser.setFile(candidate?.path ?? null);
 	const now = /* @__PURE__ */ new Date();
 	const rollout = parser.parse();
 	const endpoint = rollout.session ? resolveSessionEndpoint(rollout.session.id) : null;
-	const loggedUsage = isOfficialOpenAIEndpoint(endpoint?.url) ? readLatestLoggedRateLimits(process$1.env, now.getTime(), endpoint?.url ?? null)?.usage ?? null : null;
+	const usageTrust = evaluateUsageTrust(endpoint?.url ?? null, hasTrustedOpenAiAuth(rollout.session, process$1.env));
+	if (usageTrust.trusted) persistRolloutRateLimits(rollout.usage, rollout.usageObservedAt, usageTrust.effectiveEndpoint);
+	const loggedUsage = usageTrust.trusted && isOfficialOpenAIEndpoint(usageTrust.effectiveEndpoint) ? readLatestLoggedRateLimits(process$1.env, now.getTime(), usageTrust.effectiveEndpoint)?.usage ?? null : null;
 	const queriedUsage = config.display.showAuth ? await readConfiguredExternalUsage(config.display.externalUsageQueries, endpoint?.url ?? null, process$1.env, now.getTime()) : null;
 	return renderHud({
 		config,
@@ -1390,7 +1552,7 @@ async function preview(config) {
 			color: process$1.stdout.isTTY && !process$1.env.NO_COLOR
 		},
 		now
-	}).join("\n") || "(No active Codex session data yet)";
+	}).join("\n") || ui(config.language).noSession;
 }
 async function runConfigure(args) {
 	const loaded = loadConfig();
@@ -1401,6 +1563,7 @@ async function runConfigure(args) {
 	const statusOnly = args.includes("--status");
 	const json = args.includes("--json");
 	const hasSelectiveChanges = args.includes("--enable") || args.includes("--disable");
+	let uiLanguage = isLanguage(language) ? language : loaded.config.language;
 	if (statusOnly) {
 		const state = guidedElementState(loaded.config);
 		const report = {
@@ -1411,13 +1574,16 @@ async function runConfigure(args) {
 			disabled: state.disabled
 		};
 		if (json) process$1.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
-		else process$1.stdout.write(`${[
-			`Config: ${report.configPath}`,
-			`Language: ${report.language}`,
-			`Layout: ${report.layout}`,
-			`Enabled: ${report.enabled.join(", ") || "(none)"}`,
-			`Disabled: ${report.disabled.join(", ") || "(none)"}`
-		].join("\n")}\n`);
+		else {
+			const labels = ui(loaded.config.language);
+			process$1.stdout.write(`${[
+				`${labels.config}: ${report.configPath}`,
+				`${labels.language}: ${report.language}`,
+				`${labels.layout}: ${report.layout}`,
+				`${labels.enabled}: ${report.enabled.join(", ") || labels.none}`,
+				`${labels.disabled}: ${report.disabled.join(", ") || labels.none}`
+			].join("\n")}\n`);
+		}
 		return 0;
 	}
 	if (hasSelectiveChanges) {
@@ -1433,38 +1599,44 @@ async function runConfigure(args) {
 		process$1.stdout.write(`${configPath}\n`);
 		return 0;
 	}
-	if (!nonInteractive) intro("Codex HUD display configuration");
+	if (!nonInteractive) intro(ui(uiLanguage).intro);
 	let base;
 	if (isPreset(preset)) base = preset;
 	else if (nonInteractive) base = "current";
 	else {
+		const labels = ui(uiLanguage);
 		const selected = await select({
-			message: "Choose a configuration base",
+			message: labels.chooseBase,
 			initialValue: "current",
 			options: [
 				{
 					value: "current",
-					label: "Current settings",
-					hint: "Edit only what you choose below"
+					label: labels.current,
+					hint: labels.currentHint
 				},
 				{
 					value: "full",
-					label: "Full",
-					hint: "All telemetry and activity"
+					label: labels.full,
+					hint: labels.fullHint
 				},
 				{
 					value: "essential",
-					label: "Essential",
-					hint: "Context, quota, tools, agents, tasks"
+					label: labels.essential,
+					hint: labels.essentialHint
 				},
 				{
 					value: "minimal",
-					label: "Minimal",
-					hint: "Model, project, context"
+					label: labels.minimal,
+					hint: labels.minimalHint
+				},
+				{
+					value: "presentation",
+					label: labels.presentation,
+					hint: labels.presentationHint
 				}
 			]
 		});
-		if (cancelled(selected)) return 1;
+		if (cancelled(selected, uiLanguage)) return 1;
 		base = selected;
 	}
 	const config = base === "current" ? structuredClone(loaded.config) : createPreset(base);
@@ -1473,8 +1645,9 @@ async function runConfigure(args) {
 	else if (args.includes("--no-relay-usage")) config.display.externalUsageQueries = [];
 	if (!isLanguage(language)) if (nonInteractive) language = config.language;
 	else {
+		const labels = ui(uiLanguage);
 		const selected = await select({
-			message: "Choose label language",
+			message: labels.chooseLanguage,
 			initialValue: config.language,
 			options: [{
 				value: "en",
@@ -1484,74 +1657,77 @@ async function runConfigure(args) {
 				label: "简体中文"
 			}]
 		});
-		if (cancelled(selected)) return 1;
+		if (cancelled(selected, uiLanguage)) return 1;
 		language = selected;
 	}
 	const selectedLanguage = isLanguage(language) ? language : config.language;
 	config.language = selectedLanguage;
+	uiLanguage = selectedLanguage;
 	if (!isLayout(layout) && !nonInteractive) {
+		const labels = ui(uiLanguage);
 		const selected = await select({
-			message: "Choose layout",
+			message: labels.chooseLayout,
 			initialValue: config.lineLayout,
 			options: [{
 				value: "expanded",
-				label: "Expanded",
-				hint: "Multiple readable lines"
+				label: labels.expanded,
+				hint: labels.expandedHint
 			}, {
 				value: "compact",
-				label: "Compact",
-				hint: "Dense header plus activity"
+				label: labels.compact,
+				hint: labels.compactHint
 			}]
 		});
-		if (cancelled(selected)) return 1;
+		if (cancelled(selected, uiLanguage)) return 1;
 		layout = selected;
 	}
 	if (isLayout(layout)) config.lineLayout = layout;
 	if (!nonInteractive) {
+		const labels = ui(uiLanguage);
 		const toggles = await multiselect({
-			message: "Choose visible HUD elements",
+			message: labels.chooseElements,
 			initialValues: guidedElementState(config).enabled,
 			required: false,
 			options: GUIDED_ELEMENTS.map((element) => ({
 				value: element.name,
-				label: `${element.category} · ${element.label}`
+				label: `${labels.categories[element.category]} · ${labels.elements[element.name]}`
 			}))
 		});
-		if (cancelled(toggles)) return 1;
+		if (cancelled(toggles, uiLanguage)) return 1;
 		const enabled = toggles;
 		applyGuidedElementChanges(config, {
 			enable: enabled,
 			disable: GUIDED_ELEMENTS.map((element) => element.name).filter((element) => !enabled.includes(element))
 		});
 		const pathLevels = await select({
-			message: "Project path depth",
+			message: labels.pathDepth,
 			initialValue: config.pathLevels,
 			options: [
 				{
 					value: 1,
-					label: "Project only"
+					label: labels.projectOnly
 				},
 				{
 					value: 2,
-					label: "Parent / project"
+					label: labels.parentProject
 				},
 				{
 					value: 3,
-					label: "Two parents / project"
+					label: labels.parentsProject
 				}
 			]
 		});
-		if (cancelled(pathLevels)) return 1;
+		if (cancelled(pathLevels, uiLanguage)) return 1;
 		config.pathLevels = pathLevels;
-		note(await preview(config), "HUD preview");
+		note(await preview(config), labels.preview);
 		const confirmed = await confirm({
-			message: `Save ${base} / ${selectedLanguage} / ${config.lineLayout} configuration?`,
+			message: uiLanguage === "zh-Hans" ? `保存 ${base} / ${selectedLanguage} / ${config.lineLayout} 配置？` : `Save ${base} / ${selectedLanguage} / ${config.lineLayout} configuration?`,
 			initialValue: true
 		});
-		if (cancelled(confirmed) || !confirmed) return 1;
+		if (cancelled(confirmed, uiLanguage) || !confirmed) return 1;
 	}
 	const configPath = writeConfig(config, loaded.raw);
-	if (!nonInteractive) outro(`Saved ${configPath}`);
+	if (!nonInteractive) outro(uiLanguage === "zh-Hans" ? `已保存 ${configPath}` : `Saved ${configPath}`);
 	else process$1.stdout.write(`${configPath}\n`);
 	return 0;
 }
@@ -1562,10 +1738,10 @@ function migrateConfig(options = {}) {
 	const env = options.env ?? process$1.env;
 	const loaded = loadConfig(env);
 	const fromVersion = rawConfigVersion(loaded.raw);
-	if (loaded.error || !fs.existsSync(loaded.path) || fromVersion >= 2) return {
+	if (loaded.error || !fs.existsSync(loaded.path) || fromVersion >= 3) return {
 		path: loaded.path,
 		fromVersion,
-		toVersion: Math.max(fromVersion, 2),
+		toVersion: Math.max(fromVersion, 3),
 		migrated: false
 	};
 	const migration = applyConfigMigrations(loaded.config, loaded.raw);
@@ -1627,10 +1803,49 @@ function statePath() {
 function readInstallState() {
 	try {
 		const state = JSON.parse(fs.readFileSync(statePath(), "utf8"));
-		return state.version === 1 && Array.isArray(state.managedFiles) ? state : null;
+		return (state.version === 1 || state.version === 2) && Array.isArray(state.managedFiles) ? state : null;
 	} catch {
 		return null;
 	}
+}
+function fileChecksum(filePath) {
+	return createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+}
+function runtimeChecksums(directory) {
+	const paths = executablePaths(directory);
+	return {
+		cli: fileChecksum(paths.cli),
+		render: fileChecksum(paths.render)
+	};
+}
+function inspectManagedInstall() {
+	const state = readInstallState();
+	const runtimeDirectory = state ? installedRuntimeDirectory(state) : managedRuntimeDirectory();
+	let runtimeComplete = false;
+	try {
+		validateRuntime(runtimeDirectory);
+		runtimeComplete = true;
+	} catch {
+		runtimeComplete = false;
+	}
+	const checksumsPresent = Boolean(state?.runtimeChecksums);
+	let checksumsValid = null;
+	if (runtimeComplete && state?.runtimeChecksums) try {
+		const actual = runtimeChecksums(runtimeDirectory);
+		checksumsValid = actual.cli === state.runtimeChecksums.cli && actual.render === state.runtimeChecksums.render;
+	} catch {
+		checksumsValid = false;
+	}
+	return {
+		present: Boolean(state),
+		stateVersion: state?.version ?? null,
+		hudVersion: state?.hudVersion ?? null,
+		hudVersionMatches: state?.hudVersion ? state.hudVersion === HUD_VERSION : null,
+		runtimeDirectory,
+		runtimeComplete,
+		checksumsPresent,
+		checksumsValid
+	};
 }
 function isManagedLauncher(filePath) {
 	try {
@@ -1797,10 +2012,12 @@ function runInstall(args) {
 		for (const obsolete of previousState?.managedFiles ?? []) if (!managedFiles.includes(obsolete) && isManagedLauncher(obsolete)) fs.rmSync(obsolete, { force: true });
 		for (const obsolete of legacyManagedFiles) if (isManagedLauncher(obsolete)) fs.rmSync(obsolete, { force: true });
 		const state = {
-			version: 1,
+			version: 2,
 			realCodex,
 			managedFiles,
-			runtimeDirectory
+			runtimeDirectory,
+			hudVersion: HUD_VERSION,
+			runtimeChecksums: runtimeChecksums(runtimeDirectory)
 		};
 		fs.writeFileSync(statePath(), `${JSON.stringify(state, null, 2)}\n`, {
 			encoding: "utf8",
@@ -1846,6 +2063,11 @@ const OPTIONS_WITH_VALUES$1 = /* @__PURE__ */ new Set([
 	"--layout",
 	"--preset"
 ]);
+function setupLanguage(args) {
+	const index = args.indexOf("--language");
+	const requested = index >= 0 ? args[index + 1] : null;
+	return requested === "zh-Hans" || requested === "en" ? requested : loadConfig().config.language;
+}
 function configureArgs(args, hasConfig) {
 	const result = [];
 	let hasPreset = false;
@@ -1862,23 +2084,24 @@ function configureArgs(args, hasConfig) {
 async function runSetup(args) {
 	const dryRun = args.includes("--dry-run");
 	const hasConfig = fs.existsSync(getConfigPath());
+	const language = setupLanguage(args);
 	const installExitCode = runInstall([...args.includes("--codex-shim") ? ["--codex-shim"] : [], ...dryRun ? ["--dry-run"] : []]);
 	if (installExitCode !== 0 || dryRun) return installExitCode;
 	const nextArgs = configureArgs(args, hasConfig);
 	if (!hasConfig && !args.includes("--relay-usage") && !args.includes("--no-relay-usage")) if (args.includes("--yes") || !process$1.stdin.isTTY) nextArgs.push("--no-relay-usage");
 	else {
 		const enabled = await confirm({
-			message: "Query third-party relay balances with the active API key?",
+			message: language === "zh-Hans" ? "是否使用当前 API Key 查询第三方 relay 余额？" : "Query third-party relay balances with the active API key?",
 			initialValue: false
 		});
 		if (isCancel(enabled)) {
-			cancel("Setup cancelled.");
+			cancel(language === "zh-Hans" ? "已取消设置。" : "Setup cancelled.");
 			return 1;
 		}
 		nextArgs.push(enabled ? "--relay-usage" : "--no-relay-usage");
 	}
 	const configureExitCode = await runConfigure(nextArgs);
-	if (configureExitCode === 0) process$1.stdout.write("Setup complete. The current Codex session cannot gain a HUD pane. Exit it, run `hash -r` if needed, then start a new `codex` session.\n");
+	if (configureExitCode === 0) process$1.stdout.write(language === "zh-Hans" ? "设置完成。当前 Codex 会话无法新增 HUD pane；请先退出，必要时运行 `hash -r`，再启动新的 `codex` 会话。\n" : "Setup complete. The current Codex session cannot gain a HUD pane. Exit it, run `hash -r` if needed, then start a new `codex` session.\n");
 	return configureExitCode;
 }
 
@@ -2759,12 +2982,13 @@ Usage:
   codex-hud [start] [HUD options] [--] [codex arguments]
   codex-hud render [--once] [--cwd <path>] [--no-color]
   codex-hud doctor [--json]
-  codex-hud setup [--codex-shim] [--preset full|essential|minimal]
+  codex-hud setup [--codex-shim] [--preset full|essential|minimal|presentation]
                   [--relay-usage|--no-relay-usage]
                   [--language en|zh-Hans] [--layout compact|expanded] [--yes]
-  codex-hud configure [--preset full|essential|minimal] [--language en|zh-Hans]
+  codex-hud configure [--preset full|essential|minimal|presentation] [--language en|zh-Hans]
   codex-hud configure --status [--json]
   codex-hud configure [--enable <names>] [--disable <names>] --yes
+  codex-hud hud-version
   codex-hud install [--codex-shim] [--dry-run]
   codex-hud uninstall [--dry-run]
   codex-hud --help
@@ -2785,11 +3009,24 @@ function installedPluginManifest() {
 			for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
 				const entryPath = path.join(directory, entry.name);
 				if (entry.isDirectory()) visit(entryPath, depth + 1);
-				else if (entry.name === "plugin.json" && entryPath.includes(`${path.sep}codex-hud${path.sep}`)) matches.push(entryPath);
+				else if (entry.name === "plugin.json" && entryPath.includes(`${path.sep}codex-hud${path.sep}`)) {
+					let version = null;
+					try {
+						const manifest = JSON.parse(fs.readFileSync(entryPath, "utf8"));
+						version = typeof manifest.version === "string" ? manifest.version : null;
+					} catch {}
+					matches.push({
+						path: entryPath,
+						version,
+						mtimeMs: fs.statSync(entryPath).mtimeMs
+					});
+				}
 			}
 		};
 		visit(root, 0);
-		return matches.sort().at(-1) ?? null;
+		return matches.sort((left, right) => {
+			return (left.version ?? "").localeCompare(right.version ?? "", "en", { numeric: true }) || left.mtimeMs - right.mtimeMs;
+		}).at(-1) ?? null;
 	} catch {
 		return null;
 	}
@@ -2847,17 +3084,32 @@ async function main(args = process$1.argv.slice(2)) {
 		await runRenderCli(args.slice(1));
 		return;
 	}
+	if (command === "hud-version") {
+		console.log(`codex-hud ${HUD_VERSION}`);
+		return;
+	}
 	if (command === "doctor") {
 		const cwdIndex = args.indexOf("--cwd");
 		const cwd = cwdIndex >= 0 && args[cwdIndex + 1] ? args[cwdIndex + 1] : process$1.cwd();
 		const session = findActiveSession({ cwd });
 		const config = loadConfig();
-		const parser = new RolloutParser();
+		const parser = new RolloutParser({ captureConversationBodies: false });
 		parser.setFile(session?.path ?? null);
 		const parsed = parser.parse();
 		const endpoint = parsed.session ? resolveSessionEndpoint(parsed.session.id) : null;
+		const usageTrust = evaluateUsageTrust(endpoint?.url ?? null, hasTrustedOpenAiAuth(parsed.session, process$1.env));
+		if (usageTrust.trusted) persistRolloutRateLimits(parsed.usage, parsed.usageObservedAt, usageTrust.effectiveEndpoint);
+		const loggedSnapshot = usageTrust.trusted && usageTrust.effectiveEndpoint ? readLatestLoggedRateLimits(process$1.env, Date.now(), usageTrust.effectiveEndpoint) : null;
+		const nativeUsage = trustedUsageData(usageTrust, parsed.usage, loggedSnapshot?.usage ?? null);
+		const resolvedUsage = resolveUsageData(nativeUsage, {
+			...config.config.display,
+			externalUsageWritePath: ""
+		}, /* @__PURE__ */ new Date());
+		const nativeUsageSources = [parsed.usage ? "rollout" : null, loggedSnapshot?.source ?? null].filter((source) => Boolean(source));
+		const usageSource = nativeUsage ? [...new Set(nativeUsageSources)].join("+") : resolvedUsage ? "external-snapshot" : null;
+		const usageHiddenReason = !config.config.display.showUsage ? "display-disabled" : parsed.usage && !usageTrust.trusted ? usageTrust.reason : !resolvedUsage ? "no-fresh-usage-observation" : null;
 		const pluginManifest = installedPluginManifest();
-		const installState = path.join(getHudStateDirectory(), "install.json");
+		const managedInstall = inspectManagedInstall();
 		const codex = findExecutable("codex");
 		const cmux = findExecutable("cmux");
 		const tmux = findExecutable("tmux");
@@ -2867,6 +3119,7 @@ async function main(args = process$1.argv.slice(2)) {
 		const backend = process$1.env.TMUX ? "tmux" : cmuxContext ? cmuxHealthy ? "cmux" : "none" : tmux ? "tmux" : "none";
 		const cliPath = path.resolve(process$1.argv[1]);
 		const report = {
+			hudVersion: HUD_VERSION,
 			node: process$1.version,
 			codex,
 			cmux,
@@ -2884,11 +3137,44 @@ async function main(args = process$1.argv.slice(2)) {
 			sessionParsed: parsed.session?.id === session?.sessionId,
 			model: parsed.session?.model ?? null,
 			codexLogDatabase: findCodexLogDatabase(),
+			codexLogSchema: inspectCodexLogSchema(),
+			rateLimitLogTargets: inspectLoggedRateLimitTargets(),
 			sessionEndpoint: endpoint?.url ?? null,
 			sessionEndpointSource: endpoint?.source ?? null,
-			pluginManifest,
+			usage: {
+				visible: Boolean(config.config.display.showUsage && resolvedUsage),
+				source: usageSource,
+				trust: usageTrust.reason,
+				trusted: usageTrust.trusted,
+				effectiveEndpoint: usageTrust.effectiveEndpoint,
+				rolloutObservedAt: parsed.usageObservedAt?.toISOString() ?? null,
+				loggedObservedAt: loggedSnapshot?.observedAt.toISOString() ?? null,
+				hiddenReason: usageHiddenReason,
+				windows: [
+					resolvedUsage?.primary,
+					resolvedUsage?.secondary,
+					resolvedUsage?.individual
+				].flatMap((window) => window ? [{
+					label: window.label,
+					percent: window.percent,
+					windowMinutes: window.windowMinutes ?? null,
+					resetAt: window.resetAt?.toISOString() ?? null
+				}] : [])
+			},
+			contextCalculation: parsed.context ? {
+				source: "rollout-estimate",
+				baselineTokens: 12e3
+			} : null,
+			promptCacheCalculation: {
+				source: "configured-estimate",
+				ttlSeconds: config.config.display.promptCacheTtlSeconds
+			},
+			pluginManifest: pluginManifest?.path ?? null,
+			pluginVersion: pluginManifest?.version ?? null,
+			pluginVersionMatchesHud: pluginManifest?.version?.split("+")[0] === HUD_VERSION,
 			pluginInstalled: Boolean(pluginManifest),
-			managedInstall: fs.existsSync(installState),
+			managedInstall: managedInstall.present,
+			managedInstallDetails: managedInstall,
 			terminal: {
 				tty: Boolean(process$1.stdout.isTTY),
 				color: !process$1.env.NO_COLOR,
@@ -2901,6 +3187,7 @@ async function main(args = process$1.argv.slice(2)) {
 		if (args.includes("--json")) console.log(JSON.stringify(report, null, 2));
 		else {
 			console.log(`Node: ${report.node}`);
+			console.log(`Codex HUD: ${report.hudVersion}`);
 			console.log(`Codex: ${report.codex ?? "not found"}`);
 			console.log(`cmux: ${report.cmux ?? "not found"}${report.cmuxContext ? report.cmuxHealthy ? " (ready)" : " (socket unavailable)" : ""}`);
 			console.log(`tmux: ${report.tmux ?? "not found"}`);
@@ -2911,6 +3198,8 @@ async function main(args = process$1.argv.slice(2)) {
 			console.log(`Plugin: ${report.pluginManifest ?? "not installed"}`);
 			console.log(`Session parse: ${report.sessionParsed ? "ok" : "not ready"}`);
 			console.log(`Session endpoint: ${report.sessionEndpoint ?? "unknown"}${report.sessionEndpointSource ? ` (${report.sessionEndpointSource})` : ""}`);
+			console.log(`Usage: ${report.usage.visible ? report.usage.source ?? "available" : `hidden (${report.usage.hiddenReason})`} · trust ${report.usage.trust}`);
+			console.log(`Managed runtime: ${report.managedInstallDetails.runtimeComplete ? "complete" : "incomplete"} · version ${report.managedInstallDetails.hudVersionMatches === null ? "unavailable" : report.managedInstallDetails.hudVersionMatches ? "ok" : "mismatch"} · checksums ${report.managedInstallDetails.checksumsValid === null ? "unavailable" : report.managedInstallDetails.checksumsValid ? "ok" : "mismatch"}`);
 			if (report.shimRecursion) console.log("Warning: Codex executable resolves to the Codex HUD CLI itself.");
 			if (report.latestLaunchFailure) {
 				console.log(`Last HUD startup failure: ${report.latestLaunchFailure.backend} · ${report.latestLaunchFailure.error}`);

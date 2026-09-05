@@ -9,6 +9,7 @@ catalogs:
   dev:
     '@antfu/eslint-config': ^9.1.0
     '@types/node': ^26.1.1
+    '@vitest/coverage-v8': 4.1.10
     eslint: ^10.7.0
     eslint-plugin-format: ^2.0.1
     tsdown: ^0.22.8

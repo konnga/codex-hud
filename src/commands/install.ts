@@ -1,4 +1,5 @@
 // @env node
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -6,12 +7,26 @@ import process from 'node:process'
 import { migrateConfig } from '../config/migrate.js'
 import { getHudStateDirectory, getLegacyStateDirectory } from '../config/paths.js'
 import { findExecutable, shellQuote } from '../runtime/process.js'
+import { HUD_VERSION } from '../version.js'
 
 interface InstallState {
-  version: 1
+  version: 1 | 2
   realCodex: string
   managedFiles: string[]
   runtimeDirectory?: string
+  hudVersion?: string
+  runtimeChecksums?: Record<'cli' | 'render', string>
+}
+
+export interface ManagedInstallInspection {
+  present: boolean
+  stateVersion: number | null
+  hudVersion: string | null
+  hudVersionMatches: boolean | null
+  runtimeDirectory: string
+  runtimeComplete: boolean
+  checksumsPresent: boolean
+  checksumsValid: boolean | null
 }
 
 const MANAGED_MARKER = '# Managed by Codex HUD'
@@ -28,10 +43,57 @@ function statePath(): string {
 function readInstallState(): InstallState | null {
   try {
     const state = JSON.parse(fs.readFileSync(statePath(), 'utf8')) as InstallState
-    return state.version === 1 && Array.isArray(state.managedFiles) ? state : null
+    return (state.version === 1 || state.version === 2) && Array.isArray(state.managedFiles) ? state : null
   }
   catch {
     return null
+  }
+}
+
+function fileChecksum(filePath: string): string {
+  return createHash('sha256').update(fs.readFileSync(filePath)).digest('hex')
+}
+
+function runtimeChecksums(directory: string): Record<'cli' | 'render', string> {
+  const paths = executablePaths(directory)
+  return {
+    cli: fileChecksum(paths.cli),
+    render: fileChecksum(paths.render),
+  }
+}
+
+export function inspectManagedInstall(): ManagedInstallInspection {
+  const state = readInstallState()
+  const runtimeDirectory = state ? installedRuntimeDirectory(state) : managedRuntimeDirectory()
+  let runtimeComplete = false
+  try {
+    validateRuntime(runtimeDirectory)
+    runtimeComplete = true
+  }
+  catch {
+    runtimeComplete = false
+  }
+  const checksumsPresent = Boolean(state?.runtimeChecksums)
+  let checksumsValid: boolean | null = null
+  if (runtimeComplete && state?.runtimeChecksums) {
+    try {
+      const actual = runtimeChecksums(runtimeDirectory)
+      checksumsValid = actual.cli === state.runtimeChecksums.cli
+        && actual.render === state.runtimeChecksums.render
+    }
+    catch {
+      checksumsValid = false
+    }
+  }
+  return {
+    present: Boolean(state),
+    stateVersion: state?.version ?? null,
+    hudVersion: state?.hudVersion ?? null,
+    hudVersionMatches: state?.hudVersion ? state.hudVersion === HUD_VERSION : null,
+    runtimeDirectory,
+    runtimeComplete,
+    checksumsPresent,
+    checksumsValid,
   }
 }
 
@@ -230,7 +292,14 @@ export function runInstall(args: string[]): number {
         fs.rmSync(obsolete, { force: true })
       }
     }
-    const state: InstallState = { version: 1, realCodex, managedFiles, runtimeDirectory }
+    const state: InstallState = {
+      version: 2,
+      realCodex,
+      managedFiles,
+      runtimeDirectory,
+      hudVersion: HUD_VERSION,
+      runtimeChecksums: runtimeChecksums(runtimeDirectory),
+    }
     fs.writeFileSync(statePath(), `${JSON.stringify(state, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
     output(`Installed Codex HUD commands in ${directory}`)
   }

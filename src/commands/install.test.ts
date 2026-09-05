@@ -5,7 +5,7 @@ import path from 'node:path'
 import process from 'node:process'
 import { afterEach, describe, expect, it } from 'vitest'
 import { CURRENT_CONFIG_VERSION } from '../config/version.js'
-import { runInstall, runUninstall } from './install.js'
+import { inspectManagedInstall, runInstall, runUninstall } from './install.js'
 
 const directories: string[] = []
 const originalEnv = { ...process.env }
@@ -63,6 +63,14 @@ describe('managed installer', () => {
     const launched = spawnSync(path.join(bin, 'codex'), ['--no-hud', '--version'], { encoding: 'utf8' })
     expect(launched.status).toBe(0)
     expect(launched.stdout).toContain('runtime:v1 args:--no-hud,--version')
+    expect(inspectManagedInstall()).toMatchObject({
+      present: true,
+      stateVersion: 2,
+      hudVersionMatches: true,
+      runtimeComplete: true,
+      checksumsPresent: true,
+      checksumsValid: true,
+    })
     expect(runUninstall([])).toBe(0)
     expect(fs.existsSync(path.join(bin, 'codex-hud'))).toBe(false)
     expect(fs.existsSync(path.join(bin, 'codex'))).toBe(false)
@@ -83,6 +91,20 @@ describe('managed installer', () => {
     expect(fs.readFileSync(path.join(stableRuntime, 'shared.mjs'), 'utf8')).toContain('v2')
     expect(fs.existsSync(path.join(stableRuntime, 'new-chunk.mjs'))).toBe(true)
     expect(fs.existsSync(path.join(stableRuntime, 'obsolete.mjs'))).toBe(false)
+  })
+
+  it('detects a modified managed runtime', () => {
+    environment()
+    runInstall([])
+    const stableRuntime = path.join(process.env.CODEX_HOME!, 'codex-hud', 'runtime')
+    fs.appendFileSync(path.join(stableRuntime, 'cli.mjs'), '\n// modified\n')
+
+    expect(inspectManagedInstall()).toMatchObject({
+      present: true,
+      runtimeComplete: true,
+      checksumsPresent: true,
+      checksumsValid: false,
+    })
   })
 
   it('migrates legacy display defaults while upgrading the managed runtime', () => {

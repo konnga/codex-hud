@@ -1,7 +1,7 @@
 import type { HudConfig } from '../types/config.js'
 import { DEFAULT_CONFIG } from '../types/config.js'
 
-export type ConfigPreset = 'full' | 'essential' | 'minimal'
+export type ConfigPreset = 'full' | 'essential' | 'minimal' | 'presentation'
 
 function cloneDefault(): HudConfig {
   return structuredClone(DEFAULT_CONFIG)
@@ -19,12 +19,14 @@ export function createPreset(preset: ConfigPreset): HudConfig {
       showSpeed: false,
       showTokenBreakdown: true,
       showTools: true,
+      showToolTargets: true,
       showSkills: true,
       showMcp: true,
       showAgents: true,
       showTodos: true,
       showGoal: true,
       showTurns: true,
+      showImages: true,
       showSessionName: false,
       showAuth: true,
       showAuthUser: true,
@@ -57,7 +59,29 @@ export function createPreset(preset: ConfigPreset): HudConfig {
       showTurns: true,
       showEffortLevel: true,
       showPermissionProfile: true,
-      showUsage: false,
+      showUsage: true,
+    })
+    return config
+  }
+
+  if (preset === 'presentation') {
+    config.lineLayout = 'compact'
+    Object.assign(config.display, {
+      showAddedDirs: false,
+      showAuth: true,
+      showAuthUser: false,
+      showDuration: true,
+      showTools: false,
+      showToolTargets: false,
+      showSkills: false,
+      showMcp: false,
+      showAgents: false,
+      showTodos: false,
+      showGoal: false,
+      showTurns: false,
+      showImages: false,
+      showSessionName: false,
+      showSessionId: false,
     })
     return config
   }
@@ -69,5 +93,6 @@ export function createPreset(preset: ConfigPreset): HudConfig {
   config.display.showAddedDirs = false
   config.display.showGoal = false
   config.display.showTurns = false
+  config.display.showImages = false
   return config
 }

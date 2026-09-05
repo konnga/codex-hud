@@ -3,7 +3,11 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { readLatestLoggedRateLimits } from './log-rate-limits.js'
+import {
+  inspectLoggedRateLimitTargets,
+  persistRolloutRateLimits,
+  readLatestLoggedRateLimits,
+} from './log-rate-limits.js'
 
 const directories: string[] = []
 const now = Date.parse('2026-08-11T06:00:00Z')
@@ -43,15 +47,25 @@ function codexHomeWithLogs(rows: LogRow[]): string {
   return codexHome
 }
 
-function rateLimit(ts: number, processUuid: string, usedPercent: number, resetAt = nowSeconds + 604_800): LogRow {
+function rateLimit(
+  ts: number,
+  processUuid: string,
+  usedPercent: number,
+  resetAt = nowSeconds + 604_800,
+  target = 'codex_api::sse::responses',
+  limitId = 'codex',
+  limitName = 'Codex',
+): LogRow {
   return {
     ts,
     processUuid,
-    target: 'codex_api::sse::responses',
+    target,
     body: `SSE event: ${JSON.stringify({
       type: 'codex.rate_limits',
       plan_type: 'team',
       rate_limits: {
+        limit_id: limitId,
+        limit_name: limitName,
         allowed: true,
         limit_reached: false,
         primary: { used_percent: usedPercent, window_minutes: 10_080, reset_at: resetAt },
@@ -100,6 +114,26 @@ describe('logged rate limits', () => {
     }
   })
 
+  it('discovers rate-limit events after Codex changes the tracing target', () => {
+    const codexHome = codexHomeWithLogs([
+      rateLimit(nowSeconds - 30, 'pid:1:chatgpt', 44, nowSeconds + 604_800, 'codex_core::new_stream_target'),
+      request(nowSeconds - 30, 'pid:1:chatgpt', 'https://chatgpt.com/backend-api/codex/responses'),
+      {
+        ts: nowSeconds - 1,
+        processUuid: 'pid:2:diagnostic',
+        target: 'codex_tui::chatwidget::protocol_requests',
+        body: 'tool command mentions SSE event: and codex.rate_limits but is not an event',
+      },
+    ])
+
+    expect(readLatestLoggedRateLimits({ CODEX_HOME: codexHome }, now, 'https://chatgpt.com')).toMatchObject({
+      usage: { primary: { percent: 44 } },
+    })
+    expect(inspectLoggedRateLimitTargets({ CODEX_HOME: codexHome }, now)).toEqual([
+      { target: 'codex_core::new_stream_target', count: 1 },
+    ])
+  })
+
   it('rejects a logged window after its reset time', () => {
     const codexHome = codexHomeWithLogs([
       rateLimit(nowSeconds - 60, 'pid:1:mine', 99, nowSeconds - 1),
@@ -145,6 +179,66 @@ describe('logged rate limits', () => {
       usage: { primary: { percent: 42 }, planType: 'team' },
       origin: 'https://chatgpt.com',
     })
+  })
+
+  it('skips a newer model-specific event and keeps the account-wide quota', () => {
+    const processUuid = 'pid:1:chatgpt'
+    const codexHome = codexHomeWithLogs([
+      rateLimit(nowSeconds - 30, processUuid, 42),
+      request(nowSeconds - 30, processUuid, 'https://chatgpt.com/backend-api/codex/responses'),
+      rateLimit(
+        nowSeconds - 10,
+        processUuid,
+        0,
+        nowSeconds + 604_800,
+        'codex_api::sse::responses',
+        'codex_bengalfox',
+        'GPT-5.3-Codex-Spark',
+      ),
+    ])
+
+    expect(readLatestLoggedRateLimits({ CODEX_HOME: codexHome }, now, 'https://chatgpt.com')).toMatchObject({
+      usage: { primary: { percent: 42 } },
+      source: 'log',
+    })
+  })
+
+  it('shares an account-wide rollout observation when Codex logs no limit event', () => {
+    const codexHome = codexHomeWithLogs([])
+    const env = { CODEX_HOME: codexHome }
+    persistRolloutRateLimits({
+      primary: { label: '1w', percent: 17, resetAt: new Date((nowSeconds + 604_800) * 1_000), windowMinutes: 10_080 },
+      secondary: null,
+      individual: null,
+      planType: 'prolite',
+      balanceLabel: null,
+      limitReachedType: null,
+    }, new Date((nowSeconds - 30) * 1_000), 'https://chatgpt.com/backend-api/codex/responses', env)
+    fs.rmSync(path.join(codexHome, 'logs_2.sqlite'))
+
+    expect(readLatestLoggedRateLimits(env, now, 'https://chatgpt.com')).toMatchObject({
+      usage: {
+        primary: { label: '1w', percent: 17, windowMinutes: 10_080 },
+        planType: 'prolite',
+      },
+      observedAt: new Date((nowSeconds - 30) * 1_000),
+      origin: 'https://chatgpt.com',
+      source: 'rollout-cache',
+    })
+  })
+
+  it('does not persist rollout usage for a third-party endpoint', () => {
+    const codexHome = codexHomeWithLogs([])
+    persistRolloutRateLimits({
+      primary: { label: '1w', percent: 17, resetAt: new Date((nowSeconds + 604_800) * 1_000), windowMinutes: 10_080 },
+      secondary: null,
+      individual: null,
+      planType: 'prolite',
+      balanceLabel: null,
+      limitReachedType: null,
+    }, new Date((nowSeconds - 30) * 1_000), 'https://relay.example.com/v1/responses', { CODEX_HOME: codexHome })
+
+    expect(fs.existsSync(path.join(codexHome, 'codex-hud', 'account-usage.json'))).toBe(false)
   })
 
   it('hides usage while the session endpoint is unknown', () => {
