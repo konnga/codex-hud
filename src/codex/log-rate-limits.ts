@@ -296,11 +296,14 @@ export function readLatestLoggedRateLimits(
   if (cached?.value) {
     const fallback = freshUsage(cached.value.usage, cached.value.observedAt, now)
     if (fallback) {
-      previous = {
+      const cachedSnapshot: LoggedUsageSnapshot = {
         usage: fallback,
         observedAt: cached.value.observedAt,
         origin: cached.value.origin,
         source: cached.value.source,
+      }
+      if (!previous || cachedSnapshot.observedAt > previous.observedAt) {
+        previous = cachedSnapshot
       }
     }
   }
@@ -316,7 +319,7 @@ export function readLatestLoggedRateLimits(
     `   AND ts >= ${since}`,
     `   AND instr(feedback_log_body, '${EVENT_PREFIX}') > 0`,
     `   AND instr(feedback_log_body, '${EVENT_TYPE_MARKER}') > 0`,
-    ' ORDER BY id DESC',
+    ' ORDER BY ts DESC, id DESC',
     ` LIMIT ${MAX_EVENT_CANDIDATES};`,
   ].join('\n')
   const result = spawnSync('sqlite3', ['-readonly', '-noheader', '-batch', database, sql], {
@@ -350,6 +353,9 @@ export function readLatestLoggedRateLimits(
     origins.set(processUuid, origin)
     if (!origin || (expectedOrigin !== undefined && origin !== expectedOrigin)) {
       continue
+    }
+    if (previous && previous.observedAt >= observedAt) {
+      return remember(previous)
     }
     writeStoredSnapshot(env, body, observedAt, origin, 'log')
     return remember({ usage: fresh, observedAt, origin, source: 'log' })

@@ -1,6 +1,7 @@
 import type { HudState } from '../types/state.js'
 import { describe, expect, it } from 'vitest'
 import { createPreset } from '../config/presets.js'
+import { HUD_VERSION } from '../version.js'
 import { visibleWidth } from './format.js'
 import { renderHud } from './index.js'
 
@@ -132,7 +133,8 @@ describe('hud renderer', () => {
     const secondaryReset = state().usage?.secondary?.resetAt?.toLocaleString('en-US', resetDateTimeOptions)
     const stableLines = lines.map(line => line
       .replace(`at ${primaryReset}`, 'at <5h reset>')
-      .replace(`at ${secondaryReset}`, 'at <1w reset>'))
+      .replace(`at ${secondaryReset}`, 'at <1w reset>')
+      .replace(/\s+HUD v[\w.-]+$/, ' <HUD version>'))
 
     expect(stableLines).toMatchSnapshot()
     expect(lines.join('\n')).toContain(`5h: ███░░░░░░░ 25% (at ${primaryReset})`)
@@ -147,6 +149,8 @@ describe('hud renderer', () => {
     expect(lines.join('\n')).toContain('Context ██████░░░░ ~59% │ 5h:')
     expect(lines.join('\n')).not.toContain('Usage 5h:')
     expect(lines.join('\n')).toContain('Tokens: 55K (in 50K, cache 30K · 60%; out 5K)')
+    expect(lines.at(-1)?.endsWith(`HUD v${HUD_VERSION}`)).toBe(true)
+    expect(visibleWidth(lines.at(-1)!)).toBe(179)
   })
 
   it('keeps the usage label when only a balance is available', () => {
@@ -269,6 +273,7 @@ describe('hud renderer', () => {
     expect(lines).toHaveLength(3)
     expect(lines.every(line => visibleWidth(line) <= 24)).toBe(true)
     expect(lines.join('\n')).not.toContain('\u001B')
+    expect(lines.join('\n')).not.toContain('HUD v')
   })
 
   it('renders prompt cache, inline added directories, git file stats, auth, title, speed, and compact window overrides', () => {

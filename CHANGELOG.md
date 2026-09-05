@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+### Added
+
+- Right-aligned the current HUD version on the last visible line when the terminal has spare width, while keeping narrow layouts focused on existing telemetry.
+
+### Fixed
+
+- Kept every live HUD session on the newest account-wide quota observation, so an expired in-memory cache or an older tracing-log event can no longer freeze usage or move it backward after another session publishes an update.
+
+---
+
+### 新增
+
+- 终端宽度充足时，在最后一条可见行的右侧显示当前 HUD 版本；窄布局仍优先保留既有遥测内容。
+
+### 修复
+
+- 所有存活 HUD 会话现在都会采用最新的账户级额度观测；其他会话发布更新后，过期的进程内缓存或更旧的 tracing 日志事件不再导致用量停滞或倒退。
+
 ## 0.9.0 - 2026-09-05
 
 ### Added
