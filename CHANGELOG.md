@@ -16,6 +16,7 @@
 
 ### Fixed
 
+- Kept account-wide ChatGPT quota windows separate from named model-specific limits, and shared fresh rollout observations across official-endpoint HUD sessions when Codex writes no account limit event to its tracing log.
 - Persisted the last confirmed origin for each active session, with bounded atomic state and schema-aware fallback, so log rotation or compaction no longer makes valid 5-hour and weekly usage disappear.
 - Redacted sensitive command text from HUD output and restricted relay credentials to HTTPS endpoints, while retaining explicit localhost development support.
 - Recorded managed runtime versions and checksums during setup so stale or partially replaced installations can be identified reliably.
@@ -36,6 +37,7 @@
 
 ### 修复
 
+- 将 ChatGPT 账户级额度窗口与具名模型专属额度分开处理；当 Codex 未把账户额度事件写入 tracing 日志时，在同一官方端点的 HUD 会话之间共享 rollout 中的新鲜账户额度。
 - 按活动会话持久化最近一次已确认的 origin，并使用有界、原子和 schema 感知的状态回退；日志轮换或压缩后，有效的 5 小时与周额度不再消失。
 - HUD 输出会遮蔽敏感命令文本；中转凭据仅允许发送到 HTTPS 端点，同时保留显式的 localhost 本地开发支持。
 - setup 会记录托管 runtime 版本与 checksum，能够可靠识别陈旧或替换不完整的安装。
