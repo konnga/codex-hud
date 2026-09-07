@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { A as evaluateUsageTrust, B as resolveSessionEndpoint, E as RolloutParser, L as isOfficialOpenAIEndpoint, M as readCachedConfiguredExternalUsage, N as readConfiguredExternalUsage, O as persistRolloutRateLimits, R as resolveProcessEndpoint, T as findActiveSession, V as HUD_VERSION, _ as sliceAnsi, c as desiredPaneHeight, d as resizeCmuxPane, f as resizeHudPane, g as visibleWidth, h as truncateAnsi, k as readLatestLoggedRateLimits, l as hudRenderHeight, m as renderHud, o as writeSessionBinding, p as settleCmuxPaneHeight, r as readSessionBinding, s as buildHudState, u as readCmuxPaneGeometry, v as loadConfig, w as hasTrustedOpenAiAuth, y as reloadConfig, z as resolveProcessSession } from "./session-binding-C46L2ABs.mjs";
+import { A as readConfiguredExternalUsage, B as hasTrustedOpenAiAuth, D as persistRolloutRateLimits, F as evaluateUsageTrust, G as resolveProcessSession, I as HUD_VERSION, K as resolveSessionEndpoint, M as readCachedAccountUsage, N as refreshAccountUsage, O as readLatestLoggedRateLimits, T as RolloutParser, U as isOfficialOpenAIEndpoint, W as resolveProcessEndpoint, _ as sliceAnsi, c as desiredPaneHeight, d as resizeCmuxPane, f as resizeHudPane, g as visibleWidth, h as truncateAnsi, k as readCachedConfiguredExternalUsage, l as hudRenderHeight, m as renderHud, o as writeSessionBinding, p as settleCmuxPaneHeight, r as readSessionBinding, s as buildHudState, u as readCmuxPaneGeometry, v as loadConfig, w as findActiveSession, y as reloadConfig } from "./session-binding-By2fhasI.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -547,7 +547,8 @@ async function runRenderCli(args = process.argv.slice(2)) {
 		if ((loaded.config.display.showUsage || loaded.config.display.showAuth) && usageTrust.trusted) persistRolloutRateLimits(rollout.usage, rollout.usageObservedAt, usageTrust.effectiveEndpoint);
 		const loggedUsage = (loaded.config.display.showUsage || loaded.config.display.showAuth) && usageTrust.trusted && isOfficialOpenAIEndpoint(usageTrust.effectiveEndpoint) ? readLatestLoggedRateLimits(process.env, now.getTime(), usageTrust.effectiveEndpoint)?.usage ?? null : null;
 		const queriedUsage = loaded.config.display.showAuth ? options.once ? await readConfiguredExternalUsage(loaded.config.display.externalUsageQueries, endpoint?.url ?? null, process.env, now.getTime()) : readCachedConfiguredExternalUsage(loaded.config.display.externalUsageQueries, endpoint?.url ?? null, process.env, () => void render(), now.getTime()) : null;
-		const state = buildHudState(options.cwd, rollout, startedAt, loaded.config, now, codexProcess, loggedUsage, queriedUsage, endpoint?.url ?? null);
+		const accountUsage = loaded.config.display.showUsage && usageTrust.trusted ? options.once ? await refreshAccountUsage(usageTrust.effectiveEndpoint) : readCachedAccountUsage(usageTrust.effectiveEndpoint, process.env, () => void render()) : null;
+		const state = buildHudState(options.cwd, rollout, startedAt, loaded.config, now, codexProcess, loggedUsage, queriedUsage, endpoint?.url ?? null, accountUsage);
 		latestTurns = state.conversationTurns;
 		latestImages = state.images;
 		if (latestSessionId !== (state.session?.id ?? null)) {

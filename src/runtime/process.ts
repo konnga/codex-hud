@@ -51,6 +51,34 @@ export function findExecutable(
       // Continue searching PATH.
     }
   }
+  // GUI-launched cmux panes can have a minimal PATH with no Codex or HUD
+  // launcher at all. The managed install already records the real binary.
+  if (name === 'codex' && !explicit) {
+    const codexHome = path.resolve(env.CODEX_HOME || path.join(os.homedir(), '.codex'))
+    for (const directory of ['codex-hud', 'codex-hub']) {
+      try {
+        const state = JSON.parse(fs.readFileSync(path.join(codexHome, directory, 'install.json'), 'utf8')) as {
+          realCodex?: unknown
+          managedFiles?: unknown
+        }
+        if (typeof state.realCodex !== 'string' || !path.isAbsolute(state.realCodex)) {
+          continue
+        }
+        const resolved = path.resolve(state.realCodex)
+        if (excluded.has(resolved)
+          || (Array.isArray(state.managedFiles) && state.managedFiles.some(file => path.resolve(String(file)) === resolved))) {
+          continue
+        }
+        fs.accessSync(resolved, fs.constants.X_OK)
+        if (fs.statSync(resolved).isFile()) {
+          return resolved
+        }
+      }
+      catch {
+        // Missing, stale, or invalid installation metadata is not executable.
+      }
+    }
+  }
   return null
 }
 

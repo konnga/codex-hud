@@ -239,6 +239,10 @@ Codex HUD 支持 CC Switch 常见的余额与用量返回格式，以及 New API
 
 第三方中转返回的 Codex 格式 `codex.rate_limits` 事件会被忽略，因为它可能描述共享上游账户池，而不是用户自己的 OpenAI 套餐。原生用量窗口仅信任 ChatGPT 和 OpenAI API 官方端点。如果 Codex 提供了 `reset_at` / `resets_at`，HUD 会将服务端时间转换为本地日期和时间显示；如果没有返回重置时间，HUD 不会自行估算。
 
+开启额度显示时，具有本地 `auth.json` 凭据的 ChatGPT 会话还会通过官方 [app-server 账户接口](https://learn.chatgpt.com/docs/app-server#6-rate-limits-chatgpt) 定时读取账户的 `codex` 额度，即使没有新的会话日志也会刷新。同一 Codex home、同一账户的多个 HUD 共用每分钟一次的查询。后台读取十秒超时，不创建会话，认证由 Codex 处理。额度快照使用私有文件，按工作区和用户的哈希值隔离，不保存凭据。API Key 和中转会话不启用此查询；仅使用钥匙串或本地凭据不可用时，回退到已观测的日志数据。
+
+新观测值优先于旧缓存，额度重置后下降也正常接受。查询失败时保留最近成功记录和原观测时间；失败或超过 90 秒的记录会在百分比旁标注“缓存，更新于 …”。这里是 HUD 获取数据的时间，与额度重置时间不同。`doctor --json` 会报告最终数据来源、观测时间、账户查询是否可用，以及最近一次尝试和失败状态。
+
 New API 需要系统访问令牌和用户 ID，不是用于推理的 `sk-` Key；Sub2API 使用面板登录 JWT。New API 默认按 500,000 quota 单位显示为 1 美元，可通过 `quotaPerCredit` 适配不同部署。缓存按实际凭据和用户隔离；查询在后台刷新，不会阻塞 HUD 渲染。请求三秒超时，响应体上限为 64 KiB；短暂失败时继续显示上一次成功结果，但失败后的旧值最多保留 15 分钟。
 
 <details>

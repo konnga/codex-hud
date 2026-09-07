@@ -73,7 +73,9 @@ function normalizeWindow(
       )
     : numberValue(window.used_percent, window.used_percentage, window.utilization)
   const percent = rawPercent === null ? null : Math.min(100, Math.max(0, rawPercent))
+  const observedAt = resetDate(window.hud_observed_at)
   return {
+    ...(observedAt ? { observedAt } : {}),
     label: labelForWindow(window, fallbackLabel),
     percent,
     resetAt: resetDate(window.resets_at ?? window.reset_at),
@@ -147,7 +149,10 @@ function mergeWindows(current: UsageData, observed: UsageData): [UsageWindow | n
     }
     const index = windows.findIndex(candidate => sameWindow(candidate, window))
     if (index >= 0) {
-      windows[index] = window
+      const previous = windows[index]
+      if (!previous.observedAt || !window.observedAt || window.observedAt >= previous.observedAt) {
+        windows[index] = window
+      }
     }
     else {
       windows.push(window)
@@ -165,15 +170,36 @@ export function mergeUsageData(current: UsageData | null, observed: UsageData | 
   if (!observed) {
     return current
   }
+  if (current.observedAt && observed.observedAt && current.observedAt > observed.observedAt) {
+    return mergeUsageData(observed, current)
+  }
+  // A full account read can remove windows and clear spend/credit state.
+  if (observed.complete) {
+    return observed
+  }
   const [primary, secondary] = mergeWindows(current, observed)
   return {
+    ...(observed.observedAt ? { observedAt: observed.observedAt, source: observed.source } : {}),
     primary,
     secondary,
-    individual: observed.individual ?? current.individual,
+    individual: current.individual?.observedAt && observed.individual?.observedAt
+      && current.individual.observedAt > observed.individual.observedAt
+      ? current.individual
+      : observed.individual ?? current.individual,
     planType: observed.planType ?? current.planType,
     balanceLabel: observed.balanceLabel ?? current.balanceLabel,
     limitReachedType: observed.limitReachedType ?? current.limitReachedType,
   }
+}
+
+export function observeUsage(usage: UsageData | null, observedAt: Date | null, source: UsageData['source']): UsageData | null {
+  if (!usage || !observedAt) {
+    return usage
+  }
+  const stamp = (window: UsageWindow | null): UsageWindow | null => window
+    ? { ...window, observedAt: window.observedAt ?? observedAt }
+    : null
+  return { ...usage, observedAt, source, primary: stamp(usage.primary), secondary: stamp(usage.secondary), individual: stamp(usage.individual) }
 }
 
 export function evaluateUsageTrust(

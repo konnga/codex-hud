@@ -8,7 +8,7 @@ import path from 'node:path'
 import process from 'node:process'
 import { getCodexHome, getHudStateDirectory } from '../config/paths.js'
 import { setTimedCache } from '../runtime/timed-cache.js'
-import { normalizeAccountRateLimits } from './rate-limits.js'
+import { normalizeAccountRateLimits, observeUsage } from './rate-limits.js'
 import { endpointOrigin, findCodexLogDatabase, isOfficialOpenAIEndpoint } from './session-endpoint.js'
 
 export interface LoggedUsageSnapshot {
@@ -86,6 +86,7 @@ function rawWindow(window: UsageWindow | null): Record<string, unknown> | null {
         used_percent: window.percent,
         window_minutes: window.windowMinutes ?? null,
         resets_at: window.resetAt?.toISOString() ?? null,
+        hud_observed_at: window.observedAt?.toISOString() ?? null,
       }
     : null
 }
@@ -129,7 +130,7 @@ function freshUsage(usage: UsageData, observedAt: Date, now: number): UsageData 
 }
 
 function cloneSnapshot(value: LoggedUsageSnapshot | null): LoggedUsageSnapshot | null {
-  return value ? structuredClone(value) : null
+  return value ? structuredClone({ ...value, usage: observeUsage(value.usage, value.observedAt, value.source)! }) : null
 }
 
 function storedSnapshotPath(env: NodeJS.ProcessEnv): string {
@@ -242,6 +243,12 @@ export function persistRolloutRateLimits(
     return
   }
   writeStoredSnapshot(env, rolloutSnapshotBody(usage), observedAt, origin, 'rollout-cache')
+  // A local observation may be newer than the 15-second in-memory read cache.
+  const cacheKey = `${getCodexHome(env)}:${origin}`
+  const cached = cache.get(cacheKey)
+  if (!cached?.value || observedAt > cached.value.observedAt) {
+    cache.delete(cacheKey)
+  }
 }
 
 function eventOrigin(database: string, processUuid: string, timestamp: number): string | null {

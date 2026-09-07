@@ -2,1788 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { Buffer } from "node:buffer";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import os from "node:os";
-import { spawnSync } from "node:child_process";
 
-//#region src/config/constants.ts
-const CONFIG_DIRECTORY_NAME = "codex-hud";
-const LEGACY_CONFIG_DIRECTORY_NAME = "codex-hub";
-const CONFIG_FILE_NAME = "config.json";
-const KNOWN_ELEMENTS = /* @__PURE__ */ new Set([
-	"project",
-	"addedDirs",
-	"context",
-	"usage",
-	"promptCache",
-	"memory",
-	"environment",
-	"tools",
-	"skills",
-	"mcp",
-	"agents",
-	"todos",
-	"turns",
-	"sessionTime"
-]);
-const MAX_REFRESH_INTERVAL_MS = 6e4;
-const MAX_PROMPT_CACHE_TTL_SECONDS = 86400;
-
-//#endregion
-//#region src/config/paths.ts
-function getCodexHome(env = process.env) {
-	return path.resolve(env.CODEX_HOME || path.join(os.homedir(), ".codex"));
-}
-function getConfigPath(env = process.env) {
-	const explicit = env.CODEX_HUD_CONFIG || env.CODEX_HUB_CONFIG;
-	if (explicit) return path.resolve(explicit);
-	const canonical = path.join(getCodexHome(env), CONFIG_DIRECTORY_NAME, CONFIG_FILE_NAME);
-	const legacy = path.join(getCodexHome(env), LEGACY_CONFIG_DIRECTORY_NAME, CONFIG_FILE_NAME);
-	return !fs.existsSync(canonical) && fs.existsSync(legacy) ? legacy : canonical;
-}
-function getHudStateDirectory(env = process.env) {
-	return path.join(getCodexHome(env), CONFIG_DIRECTORY_NAME);
-}
-function getLegacyStateDirectory(env = process.env) {
-	return path.join(getCodexHome(env), LEGACY_CONFIG_DIRECTORY_NAME);
-}
-
-//#endregion
-//#region src/runtime/timed-cache.ts
-function pruneTimedCache(cache, now, maxAgeMs, maxEntries) {
-	for (const [key, entry] of cache) if (now - entry.at > maxAgeMs) cache.delete(key);
-	if (cache.size <= maxEntries) return;
-	const oldest = [...cache.entries()].sort((left, right) => left[1].at - right[1].at).slice(0, cache.size - maxEntries);
-	for (const [key] of oldest) cache.delete(key);
-}
-function setTimedCache(cache, key, entry, maxAgeMs, maxEntries) {
-	cache.set(key, entry);
-	pruneTimedCache(cache, entry.at, maxAgeMs, maxEntries);
-}
-
-//#endregion
-//#region package.json
-var version = "0.9.1";
-
-//#endregion
-//#region src/version.ts
-const HUD_VERSION = version;
-
-//#endregion
-//#region src/codex/session-endpoint.ts
-const SESSION_ID_PATTERN = /^[\w-]{1,128}$/;
-const LOG_DATABASE_PATTERN = /^logs(?:_(\d+))?\.sqlite$/;
-const QUERY_TIMEOUT_MS$1 = 750;
-const PROCESS_SESSION_QUERY_TIMEOUT_MS = 3e3;
-const ENDPOINT_CACHE_MS = 3e4;
-const PROCESS_SESSION_CACHE_MS = 1e3;
-const CACHE_MAX_AGE_MS$2 = 30 * 6e4;
-const CACHE_MAX_ENTRIES$2 = 256;
-const STORED_ENDPOINT_MAX_AGE_MS = 720 * 60 * 6e4;
-const STORED_ENDPOINT_MAX_ENTRIES = 256;
-const STORED_ENDPOINT_MAX_BYTES = 4 * 1024;
-const NEWEST_FIRST = "ORDER BY ts DESC, id DESC LIMIT 1";
-const endpointCache = /* @__PURE__ */ new Map();
-const processSessionCache = /* @__PURE__ */ new Map();
-function storedEndpointDirectory(env) {
-	return path.join(getHudStateDirectory(env), "session-endpoints");
-}
-function storedEndpointPath(sessionId, env) {
-	return path.join(storedEndpointDirectory(env), `${sessionId}.json`);
-}
-function readStoredEndpoint(sessionId, env, now) {
-	const filePath = storedEndpointPath(sessionId, env);
-	try {
-		const stat = fs.statSync(filePath);
-		if (!stat.isFile() || stat.size > STORED_ENDPOINT_MAX_BYTES || now - stat.mtimeMs > STORED_ENDPOINT_MAX_AGE_MS) return null;
-		const stored = JSON.parse(fs.readFileSync(filePath, "utf8"));
-		const observedAt = typeof stored.observedAt === "string" ? new Date(stored.observedAt) : null;
-		if (stored.version !== 1 || typeof stored.origin !== "string" || stored.evidenceSource !== "log-request" && stored.evidenceSource !== "log-init" || !observedAt || Number.isNaN(observedAt.getTime()) || now - observedAt.getTime() > STORED_ENDPOINT_MAX_AGE_MS) return null;
-		const origin = endpointOrigin(stored.origin);
-		return origin ? {
-			url: origin,
-			source: "persisted"
-		} : null;
-	} catch {
-		return null;
-	}
-}
-function pruneStoredEndpoints(directory, now) {
-	try {
-		const entries = fs.readdirSync(directory, { withFileTypes: true }).filter((entry) => entry.isFile() && SESSION_ID_PATTERN.test(entry.name.replace(/\.json$/, ""))).map((entry) => {
-			const filePath = path.join(directory, entry.name);
-			return {
-				filePath,
-				mtimeMs: fs.statSync(filePath).mtimeMs
-			};
-		}).sort((left, right) => right.mtimeMs - left.mtimeMs);
-		for (const [index, entry] of entries.entries()) if (index >= STORED_ENDPOINT_MAX_ENTRIES || now - entry.mtimeMs > STORED_ENDPOINT_MAX_AGE_MS) fs.rmSync(entry.filePath, { force: true });
-	} catch {}
-}
-function writeStoredEndpoint(sessionId, endpoint, env, now) {
-	if (endpoint.source === "persisted") return;
-	const origin = endpointOrigin(endpoint.url);
-	if (!origin) return;
-	const directory = storedEndpointDirectory(env);
-	const filePath = storedEndpointPath(sessionId, env);
-	const temporaryPath = `${filePath}.${process.pid}.tmp`;
-	try {
-		fs.mkdirSync(directory, {
-			recursive: true,
-			mode: 448
-		});
-		const stored = {
-			version: 1,
-			origin,
-			evidenceSource: endpoint.source,
-			observedAt: new Date(now).toISOString()
-		};
-		fs.writeFileSync(temporaryPath, `${JSON.stringify(stored)}\n`, {
-			encoding: "utf8",
-			mode: 384
-		});
-		fs.renameSync(temporaryPath, filePath);
-		fs.chmodSync(filePath, 384);
-		pruneStoredEndpoints(directory, now);
-	} catch {
-		try {
-			fs.rmSync(temporaryPath, { force: true });
-		} catch {}
-	}
-}
-/**
-* Codex writes its tracing log to `logs_<schema>.sqlite`; pick the newest
-* schema so a Codex upgrade that bumps the suffix keeps working.
-*/
-function findCodexLogDatabase(codexHome = getCodexHome()) {
-	let best = null;
-	let entries;
-	try {
-		entries = fs.readdirSync(codexHome, { withFileTypes: true });
-	} catch {
-		return null;
-	}
-	for (const entry of entries) {
-		const match = LOG_DATABASE_PATTERN.exec(entry.name);
-		if (!match || !entry.isFile()) continue;
-		const version = Number(match[1] ?? 0);
-		if (!best || version > best.version) best = {
-			file: path.join(codexHome, entry.name),
-			version
-		};
-	}
-	return best?.file ?? null;
-}
-function query(database, sql, timeout = QUERY_TIMEOUT_MS$1) {
-	const result = spawnSync("sqlite3", [
-		"-readonly",
-		"-noheader",
-		"-batch",
-		database,
-		sql
-	], {
-		encoding: "utf8",
-		stdio: [
-			"ignore",
-			"pipe",
-			"ignore"
-		],
-		timeout
-	});
-	return typeof result.stdout === "string" ? result.stdout.split("\n") : [];
-}
-function inspectCodexLogSchema(codexHome = getCodexHome()) {
-	const database = findCodexLogDatabase(codexHome);
-	if (!database) return {
-		database: null,
-		columns: [],
-		endpointCompatible: false,
-		rateLimitCompatible: false
-	};
-	const columns = query(database, "SELECT name FROM pragma_table_info('logs') ORDER BY cid;").map((value) => value.trim()).filter(Boolean);
-	const available = new Set(columns);
-	return {
-		database,
-		columns,
-		endpointCompatible: [
-			"id",
-			"ts",
-			"process_uuid",
-			"thread_id",
-			"target",
-			"feedback_log_body"
-		].every((column) => available.has(column)),
-		rateLimitCompatible: [
-			"id",
-			"ts",
-			"process_uuid",
-			"target",
-			"feedback_log_body"
-		].every((column) => available.has(column))
-	};
-}
-function firstUrl(value) {
-	const url = value.trim().split(/[\s"]/)[0];
-	return url.startsWith("http") ? url : null;
-}
-function endpointOrigin(value) {
-	try {
-		return new URL(value).origin.toLowerCase();
-	} catch {
-		return null;
-	}
-}
-/** Only official OpenAI origins are authoritative for Codex subscription limits. */
-function isOfficialOpenAIEndpoint(value) {
-	if (!value) return false;
-	try {
-		const hostname = new URL(value).hostname.toLowerCase();
-		return hostname === "api.openai.com" || hostname === "chatgpt.com" || hostname.endsWith(".chatgpt.com");
-	} catch {
-		return false;
-	}
-}
-const INIT_ROW = [
-	`SELECT 'init|' || substr(feedback_log_body, instr(feedback_log_body, 'base_url: Some("') + 16, 200)`,
-	`  FROM logs`,
-	` WHERE thread_id IS NULL`,
-	`   AND target = 'codex_core::session::session'`,
-	`   AND instr(feedback_log_body, 'base_url: Some("') > 0`
-].join("\n");
-/** `process_uuid` is `pid:<PID>:<uuid>`, so a PID is a prefix range on it. */
-function processRange(pid) {
-	return `(process_uuid >= 'pid:${pid}:' AND process_uuid < 'pid:${pid};')`;
-}
-/**
-* Codex runs behind an npm wrapper script, so the process that logs is a child
-* of the one the launcher spawned.
-*/
-function processFamily(pid) {
-	const result = spawnSync("pgrep", ["-P", String(pid)], {
-		encoding: "utf8",
-		stdio: [
-			"ignore",
-			"pipe",
-			"ignore"
-		],
-		timeout: QUERY_TIMEOUT_MS$1
-	});
-	return [pid, ...typeof result.stdout === "string" ? result.stdout.split("\n").map((line) => Number.parseInt(line.trim(), 10)).filter(Number.isInteger) : []];
-}
-function shellSql(value) {
-	return value.replaceAll("'", "''");
-}
-/**
-* Resolve a session from the Codex process that owns it. This is needed before
-* a HUD binding has a rollout path: selecting by cwd at that point can borrow a
-* different concurrent session in the same project.
-*/
-function resolveProcessSession(codexPid, cwd, since, env = process.env, now = Date.now()) {
-	if (!Number.isInteger(codexPid) || codexPid <= 0) return null;
-	const cacheKey = `${getCodexHome(env)}:${codexPid}:${cwd}`;
-	const cached = processSessionCache.get(cacheKey);
-	if (cached && now - cached.at < PROCESS_SESSION_CACHE_MS) return cached.value ? { ...cached.value } : null;
-	const remember = (value) => {
-		setTimedCache(processSessionCache, cacheKey, {
-			at: now,
-			value
-		}, CACHE_MAX_AGE_MS$2, CACHE_MAX_ENTRIES$2);
-		return value ? { ...value } : null;
-	};
-	const database = findCodexLogDatabase(getCodexHome(env));
-	if (!database) return remember(null);
-	const ranges = processFamily(codexPid).map(processRange).join(" OR ");
-	if (!ranges) return remember(null);
-	const ids = query(database, [
-		"SELECT DISTINCT thread_id",
-		"  FROM logs",
-		" WHERE thread_id IS NOT NULL",
-		`   AND ts >= ${Math.floor(since.getTime() / 1e3) - 60}`,
-		`   AND (${ranges})`,
-		" ORDER BY ts ASC, id ASC;"
-	].join("\n"), PROCESS_SESSION_QUERY_TIMEOUT_MS).filter((id) => SESSION_ID_PATTERN.test(id.trim()));
-	if (ids.length === 0) return remember(null);
-	const candidates = ids.map((id) => `'${shellSql(id.trim())}'`).join(",");
-	const rows = query(path.join(getCodexHome(env), "state_5.sqlite"), [
-		"SELECT id || '|' || rollout_path",
-		"  FROM threads",
-		` WHERE id IN (${candidates})`,
-		`   AND cwd = '${shellSql(path.resolve(cwd))}'`,
-		"   AND (thread_source = 'user' OR thread_source IS NULL)",
-		"   AND (agent_path IS NULL OR agent_path = '')",
-		" ORDER BY created_at_ms ASC, id ASC",
-		" LIMIT 1;"
-	].join("\n"), PROCESS_SESSION_QUERY_TIMEOUT_MS);
-	for (const row of rows) {
-		const separator = row.indexOf("|");
-		if (separator < 0) continue;
-		const sessionId = row.slice(0, separator);
-		const rolloutPath = row.slice(separator + 1);
-		if (SESSION_ID_PATTERN.test(sessionId) && fs.existsSync(rolloutPath)) return remember({
-			sessionId,
-			rolloutPath
-		});
-	}
-	return remember(null);
-}
-/**
-* The endpoint of a Codex process that has not created a session yet. Codex
-* writes no rollout until the first message, so between launch and that message
-* the process is the only thing the HUD can key on.
-*
-* `since` bounds the scan to this launch: the timestamp column is the indexed
-* one, and without a bound the lookup walks every threadless row ever logged.
-*/
-function resolveProcessEndpoint(codexPid, since, env = process.env, now = Date.now()) {
-	if (!Number.isInteger(codexPid) || codexPid <= 0) return null;
-	const codexHome = getCodexHome(env);
-	const cacheKey = `${codexHome}:pid:${codexPid}`;
-	const cached = endpointCache.get(cacheKey);
-	if (cached && now - cached.at < ENDPOINT_CACHE_MS) return cached.value ? { ...cached.value } : null;
-	const database = findCodexLogDatabase(codexHome);
-	const ranges = database ? processFamily(codexPid).map(processRange).join(" OR ") : "";
-	const lines = ranges ? query(database, [
-		INIT_ROW,
-		`   AND ts >= ${Math.floor(since.getTime() / 1e3) - 60}`,
-		`   AND (${ranges})`,
-		` ${NEWEST_FIRST};`
-	].join("\n")) : [];
-	let value = null;
-	for (const line of lines) {
-		const url = line.startsWith("init|") ? firstUrl(line.slice(5)) : null;
-		if (url) {
-			value = {
-				url,
-				source: "log-init"
-			};
-			break;
-		}
-	}
-	value ??= cached?.value ?? null;
-	sweep(now);
-	setTimedCache(endpointCache, cacheKey, {
-		at: now,
-		value
-	}, CACHE_MAX_AGE_MS$2, CACHE_MAX_ENTRIES$2);
-	return value ? { ...value } : null;
-}
-function sweep(now) {
-	pruneTimedCache(endpointCache, now, CACHE_MAX_AGE_MS$2, CACHE_MAX_ENTRIES$2);
-	pruneTimedCache(processSessionCache, now, CACHE_MAX_AGE_MS$2, CACHE_MAX_ENTRIES$2);
-}
-/**
-* The session id doubles as the tracing `thread_id`, so Codex's own log is the
-* only record of which endpoint a session really used: `config.toml` may have
-* been rewritten since, and the rollout stores just the provider id.
-*
-* Both queries are index-backed. `AND thread_id IS NULL` on the second one is
-* load-bearing for speed, not only correctness: without it the lookup degrades
-* to a full scan of a multi-hundred-megabyte table on the render path.
-*/
-function resolveSessionEndpoint(sessionId, env = process.env, now = Date.now()) {
-	if (!SESSION_ID_PATTERN.test(sessionId)) return null;
-	const codexHome = getCodexHome(env);
-	const cacheKey = `${codexHome}:${sessionId}`;
-	const cached = endpointCache.get(cacheKey);
-	if (cached && now - cached.at < ENDPOINT_CACHE_MS) return cached.value ? { ...cached.value } : null;
-	const remember = (value) => {
-		if (value) writeStoredEndpoint(sessionId, value, env, now);
-		sweep(now);
-		setTimedCache(endpointCache, cacheKey, {
-			at: now,
-			value
-		}, CACHE_MAX_AGE_MS$2, CACHE_MAX_ENTRIES$2);
-		return value ? { ...value } : null;
-	};
-	const database = findCodexLogDatabase(codexHome);
-	if (!database) return remember(cached?.value ?? readStoredEndpoint(sessionId, env, now));
-	const lines = query(database, [
-		`SELECT 'request|' || substr(feedback_log_body, instr(feedback_log_body, 'url=') + 4, 200)`,
-		`  FROM logs`,
-		` WHERE thread_id = '${sessionId}'`,
-		`   AND target IN ('codex_http_client::default_client', 'codex_http_client::client')`,
-		`   AND instr(feedback_log_body, 'url=') > 0`,
-		` ${NEWEST_FIRST};`,
-		INIT_ROW,
-		`   AND process_uuid = (SELECT process_uuid FROM logs WHERE thread_id = '${sessionId}' ${NEWEST_FIRST})`,
-		`   AND ts <= (SELECT min(ts) FROM logs WHERE thread_id = '${sessionId}')`,
-		` ${NEWEST_FIRST};`
-	].join("\n"));
-	let fallback = null;
-	for (const line of lines) {
-		const separator = line.indexOf("|");
-		if (separator < 0) continue;
-		const tag = line.slice(0, separator);
-		const url = firstUrl(line.slice(separator + 1));
-		if (!url) continue;
-		if (tag === "request") return remember({
-			url,
-			source: "log-request"
-		});
-		if (tag === "init" && !fallback) fallback = {
-			url,
-			source: "log-init"
-		};
-	}
-	return remember(fallback ?? cached?.value ?? readStoredEndpoint(sessionId, env, now));
-}
-
-//#endregion
-//#region src/codex/external-usage.ts
-const MAX_BALANCE_LABEL = 80;
-const MAX_RESPONSE_BYTES = 64 * 1024;
-const WRITE_HEARTBEAT_MS = 6e4;
-const WRITE_CACHE_MAX_AGE_MS = 30 * 6e4;
-const WRITE_CACHE_MAX_ENTRIES = 64;
-const QUERY_FAILURE_RETRY_MS = 15e3;
-const QUERY_STALE_MAX_MS = 15 * 6e4;
-const QUERY_CACHE_MAX_AGE_MS = 1440 * 6e4;
-const QUERY_CACHE_MAX_ENTRIES = 64;
-const lastWrites = /* @__PURE__ */ new Map();
-const queryCache = /* @__PURE__ */ new Map();
-const inFlightQueries = /* @__PURE__ */ new Map();
-function safePercent(value) {
-	return typeof value === "number" && Number.isFinite(value) ? Math.min(100, Math.max(0, Math.round(value))) : null;
-}
-function safeReset(value) {
-	if (typeof value !== "string" && typeof value !== "number") return null;
-	const date = new Date(typeof value === "number" && value < 1e10 ? value * 1e3 : value);
-	return Number.isNaN(date.getTime()) ? null : date;
-}
-function sanitizeLabel(value) {
-	if (typeof value !== "string") return null;
-	const label = value.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, " ").replace(/\s+/g, " ").trim();
-	return label ? label.slice(0, MAX_BALANCE_LABEL) : null;
-}
-function formatCredits(value) {
-	return Number.isInteger(value) ? value.toString() : value.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
-}
-function usageData(balanceLabel) {
-	return {
-		primary: null,
-		secondary: null,
-		individual: null,
-		planType: null,
-		balanceLabel,
-		limitReachedType: null
-	};
-}
-function credentialFingerprint(value) {
-	return createHash("sha256").update(value).digest("hex").slice(0, 16);
-}
-async function responseJson(response) {
-	const contentLength = response.headers.get("content-length");
-	if (contentLength) {
-		const declaredLength = Number(contentLength);
-		if (Number.isFinite(declaredLength) && declaredLength > MAX_RESPONSE_BYTES) return null;
-	}
-	try {
-		if (!response.body) {
-			const text = await response.text();
-			if (Buffer.byteLength(text, "utf8") > MAX_RESPONSE_BYTES) return null;
-			return JSON.parse(text);
-		}
-		const reader = response.body.getReader();
-		const chunks = [];
-		let size = 0;
-		try {
-			while (true) {
-				const result = await reader.read();
-				if (result.done) break;
-				size += result.value.byteLength;
-				if (size > MAX_RESPONSE_BYTES) {
-					await reader.cancel();
-					return null;
-				}
-				chunks.push(result.value);
-			}
-		} finally {
-			reader.releaseLock();
-		}
-		const bytes = new Uint8Array(size);
-		let offset = 0;
-		for (const chunk of chunks) {
-			bytes.set(chunk, offset);
-			offset += chunk.byteLength;
-		}
-		return JSON.parse(new TextDecoder().decode(bytes));
-	} catch {
-		return null;
-	}
-}
-function newApiUsage(body, quotaPerCredit) {
-	const response = body;
-	const quota = response?.success === true && typeof response.data?.quota === "number" && Number.isFinite(response.data.quota) ? response.data.quota : null;
-	if (quota === null) return null;
-	const group = sanitizeLabel(response.data?.group);
-	return usageData(`${group ? `${group}: ` : ""}$${formatCredits(Math.max(0, quota) / quotaPerCredit)}`);
-}
-function sub2ApiUsage(body) {
-	const response = body;
-	const balance = response?.code === 0 && typeof response.data?.balance === "number" && Number.isFinite(response.data.balance) ? response.data.balance : null;
-	if (balance === null) return null;
-	return usageData(`$${formatCredits(Math.max(0, balance))}`);
-}
-function generalUsage(body) {
-	const response = body;
-	if (response?.isValid === false) return null;
-	const rawBalance = response?.remaining ?? response?.balance;
-	const balance = typeof rawBalance === "number" && Number.isFinite(rawBalance) ? rawBalance : null;
-	if (balance === null) return null;
-	const unit = sanitizeLabel(response.unit) ?? "USD";
-	const planName = sanitizeLabel(response.planName);
-	const amount = formatCredits(Math.max(0, balance));
-	const formatted = unit === "USD" ? `$${amount}` : `${amount} ${unit}`;
-	return usageData(planName ? `${planName}: ${formatted}` : formatted);
-}
-function generalQueryUrls(endpoint, origin) {
-	const urls = [`${origin}/user/balance`];
-	try {
-		const usageUrl = `${origin}${new URL(endpoint).pathname.replace(/\/(?:responses|chat\/completions)\/?$/, "")}/usage`.replace(/([^:]\/)\/+/, "$1");
-		if (!urls.includes(usageUrl)) urls.push(usageUrl);
-	} catch {}
-	return urls;
-}
-function configuredQuery(queries, endpoint) {
-	if (!endpoint) return null;
-	let origin;
-	try {
-		origin = new URL(endpoint).origin.toLowerCase();
-		const originUrl = new URL(origin);
-		const hostname = originUrl.hostname.toLowerCase();
-		if (!(originUrl.protocol === "https:" || originUrl.protocol === "http:" && (hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]"))) return null;
-	} catch {
-		return null;
-	}
-	if (isOfficialOpenAIEndpoint(origin)) return null;
-	const query = queries.find((query) => query.enabled && query.origin === origin) ?? queries.find((query) => query.enabled && query.origin === "*" && query.template === "general");
-	return query ? {
-		...query,
-		origin
-	} : null;
-}
-function inferenceApiKey(env) {
-	if (env.OPENAI_API_KEY) return env.OPENAI_API_KEY;
-	try {
-		const auth = JSON.parse(fs.readFileSync(path.join(getCodexHome(env), "auth.json"), "utf8"));
-		return typeof auth.OPENAI_API_KEY === "string" && auth.OPENAI_API_KEY ? auth.OPENAI_API_KEY : null;
-	} catch {
-		return null;
-	}
-}
-function configuredQueryContext(queries, endpoint, env) {
-	const query = configuredQuery(queries, endpoint);
-	if (!query || !endpoint) return null;
-	const credentialEnv = query.template === "general" ? query.apiKeyEnv : query.accessTokenEnv;
-	const accessToken = query.template === "general" ? credentialEnv ? env[credentialEnv] : inferenceApiKey(env) : env[credentialEnv];
-	const userId = env[query.userIdEnv];
-	if (!accessToken || query.template === "newApi" && !userId) return null;
-	return {
-		query,
-		endpoint,
-		accessToken,
-		userId,
-		cacheKey: [
-			query.origin,
-			query.template,
-			credentialEnv,
-			query.userIdEnv,
-			query.quotaPerCredit,
-			credentialFingerprint(accessToken),
-			query.template === "newApi" ? credentialFingerprint(userId) : ""
-		].join(":")
-	};
-}
-function cachedQueryValue(cached, now) {
-	return cached?.value && now - cached.valueAt <= QUERY_STALE_MAX_MS ? structuredClone(cached.value) : null;
-}
-async function performConfiguredQuery(context, now) {
-	const { query, endpoint, accessToken, userId, cacheKey } = context;
-	const cached = queryCache.get(cacheKey);
-	const controller = new AbortController();
-	const timeout = setTimeout(() => controller.abort(), 3e3);
-	let value = null;
-	try {
-		const urls = query.template === "general" ? generalQueryUrls(endpoint, query.origin) : [`${query.origin}${query.template === "newApi" ? "/api/user/self" : "/api/v1/auth/me"}`];
-		for (const url of urls) {
-			const response = await fetch(url, {
-				headers: {
-					"Accept": "application/json",
-					"Authorization": `Bearer ${accessToken}`,
-					"User-Agent": `codex-hud/${HUD_VERSION}`,
-					...query.template === "newApi" ? { "New-Api-User": userId } : {}
-				},
-				redirect: "error",
-				signal: controller.signal
-			});
-			if (!response.ok) continue;
-			const body = await responseJson(response);
-			if (body === null) continue;
-			value = query.template === "general" ? generalUsage(body) : query.template === "newApi" ? newApiUsage(body, query.quotaPerCredit) : sub2ApiUsage(body);
-			if (value) break;
-		}
-	} catch {} finally {
-		clearTimeout(timeout);
-	}
-	if (value) {
-		setTimedCache(queryCache, cacheKey, {
-			at: now,
-			valueAt: now,
-			value: structuredClone(value)
-		}, QUERY_CACHE_MAX_AGE_MS, QUERY_CACHE_MAX_ENTRIES);
-		return structuredClone(value);
-	}
-	setTimedCache(queryCache, cacheKey, {
-		at: now,
-		valueAt: cached?.valueAt ?? 0,
-		failedAt: now,
-		value: cached?.value ? structuredClone(cached.value) : null
-	}, QUERY_CACHE_MAX_AGE_MS, QUERY_CACHE_MAX_ENTRIES);
-	return cachedQueryValue(cached, now);
-}
-function startConfiguredQuery(context, now) {
-	const existing = inFlightQueries.get(context.cacheKey);
-	if (existing) return existing;
-	const promise = performConfiguredQuery(context, now).finally(() => {
-		inFlightQueries.delete(context.cacheKey);
-	});
-	inFlightQueries.set(context.cacheKey, promise);
-	return promise;
-}
-/**
-* Query a matching relay balance endpoint. Dedicated credentials are read
-* only from named environment variables and never persisted.
-*/
-async function readConfiguredExternalUsage(queries, endpoint, env, now = Date.now()) {
-	const context = configuredQueryContext(queries, endpoint, env);
-	if (!context) return null;
-	const cached = queryCache.get(context.cacheKey);
-	if (cached?.valueAt && now - cached.valueAt < context.query.refreshMs) return cached.value ? structuredClone(cached.value) : null;
-	if (cached?.failedAt && now - cached.failedAt < QUERY_FAILURE_RETRY_MS) return cachedQueryValue(cached, now);
-	return startConfiguredQuery(context, now);
-}
-function readCachedConfiguredExternalUsage(queries, endpoint, env, onUpdate, now = Date.now()) {
-	const context = configuredQueryContext(queries, endpoint, env);
-	if (!context) return null;
-	const cached = queryCache.get(context.cacheKey);
-	if (cached?.valueAt && now - cached.valueAt < context.query.refreshMs) return cached.value ? structuredClone(cached.value) : null;
-	if (!cached?.failedAt || now - cached.failedAt >= QUERY_FAILURE_RETRY_MS) {
-		if (!inFlightQueries.has(context.cacheKey)) startConfiguredQuery(context, now).finally(onUpdate);
-	}
-	return cachedQueryValue(cached, now);
-}
-function snapshotWindow(value, label, fallbackMinutes) {
-	if (!value || typeof value !== "object") return null;
-	const percent = safePercent(value.used_percentage ?? value.used_percent);
-	if (percent === null) return null;
-	return {
-		label,
-		percent,
-		resetAt: safeReset(value.resets_at),
-		windowMinutes: typeof value.window_minutes === "number" && value.window_minutes > 0 ? value.window_minutes : fallbackMinutes
-	};
-}
-function validSnapshotPath(filePath, write = false) {
-	if (!filePath || !path.isAbsolute(filePath) || !filePath.toLowerCase().endsWith(".json")) return false;
-	if (!write) return true;
-	try {
-		return fs.statSync(path.dirname(filePath)).isDirectory();
-	} catch {
-		return false;
-	}
-}
-function readExternalUsage(filePath, freshnessMs, now = /* @__PURE__ */ new Date()) {
-	if (!validSnapshotPath(filePath)) return null;
-	try {
-		const snapshot = JSON.parse(fs.readFileSync(filePath, "utf8"));
-		const updatedAt = safeReset(snapshot.updated_at);
-		if (!updatedAt || Math.abs(now.getTime() - updatedAt.getTime()) > freshnessMs) return null;
-		const primary = snapshotWindow(snapshot.five_hour, "5h", 300);
-		const secondary = snapshotWindow(snapshot.seven_day, "1w", 10080);
-		const individual = snapshotWindow(snapshot.individual, "spend", 43200);
-		const balanceLabel = sanitizeLabel(snapshot.balance_label);
-		if (!primary && !secondary && !individual && !balanceLabel) return null;
-		return {
-			primary,
-			secondary,
-			individual,
-			planType: null,
-			balanceLabel,
-			limitReachedType: null
-		};
-	} catch {
-		return null;
-	}
-}
-function serializableWindow(window) {
-	if (!window || window.percent === null) return null;
-	return {
-		used_percentage: window.percent,
-		resets_at: window.resetAt?.toISOString() ?? null,
-		window_minutes: window.windowMinutes ?? null
-	};
-}
-function writeExternalUsage(filePath, usage, now = /* @__PURE__ */ new Date()) {
-	if (!validSnapshotPath(filePath, true)) return;
-	const content = {
-		five_hour: serializableWindow(usage.primary),
-		seven_day: serializableWindow(usage.secondary),
-		individual: serializableWindow(usage.individual),
-		balance_label: usage.balanceLabel
-	};
-	const fingerprint = JSON.stringify(content);
-	const previous = lastWrites.get(filePath);
-	if (previous?.fingerprint === fingerprint && now.getTime() - previous.at < WRITE_HEARTBEAT_MS) return;
-	const snapshot = {
-		updated_at: now.toISOString(),
-		...content
-	};
-	try {
-		fs.writeFileSync(filePath, `${JSON.stringify(snapshot, null, 2)}\n`, {
-			encoding: "utf8",
-			mode: 384
-		});
-		fs.chmodSync(filePath, 384);
-		setTimedCache(lastWrites, filePath, {
-			fingerprint,
-			at: now.getTime()
-		}, WRITE_CACHE_MAX_AGE_MS, WRITE_CACHE_MAX_ENTRIES);
-	} catch {}
-}
-function resolveUsageData(nativeUsage, display, now = /* @__PURE__ */ new Date()) {
-	const external = readExternalUsage(display.externalUsagePath, display.externalUsageFreshnessMs, now);
-	if (nativeUsage) {
-		if (display.externalUsageWritePath) writeExternalUsage(display.externalUsageWritePath, nativeUsage, now);
-		return external?.balanceLabel && !nativeUsage.balanceLabel ? {
-			...nativeUsage,
-			balanceLabel: external.balanceLabel
-		} : nativeUsage;
-	}
-	return external;
-}
-
-//#endregion
-//#region src/codex/rate-limits.ts
-function numberValue$1(...values) {
-	for (const value of values) if (typeof value === "number" && Number.isFinite(value)) return value;
-	return null;
-}
-function resetDate(value) {
-	if (typeof value === "number" && Number.isFinite(value)) {
-		const milliseconds = value > 1e10 ? value : value * 1e3;
-		const date = new Date(milliseconds);
-		return Number.isNaN(date.getTime()) ? null : date;
-	}
-	if (typeof value === "string" && value) {
-		const date = new Date(value);
-		return Number.isNaN(date.getTime()) ? null : date;
-	}
-	return null;
-}
-function labelForWindow(window, fallback) {
-	const minutes = numberValue$1(window.window_minutes);
-	if (minutes === null) return fallback;
-	if (minutes % 10080 === 0) return `${minutes / 10080}w`;
-	if (minutes % 1440 === 0) return `${minutes / 1440}d`;
-	if (minutes % 60 === 0) return `${minutes / 60}h`;
-	return `${minutes}m`;
-}
-function normalizeWindow(value, fallbackLabel, individual = false) {
-	if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-	const window = value;
-	const rawPercent = individual ? numberValue$1(typeof window.remaining_percent === "number" ? 100 - window.remaining_percent : null, window.used_percent, window.used_percentage, window.utilization) : numberValue$1(window.used_percent, window.used_percentage, window.utilization);
-	const percent = rawPercent === null ? null : Math.min(100, Math.max(0, rawPercent));
-	return {
-		label: labelForWindow(window, fallbackLabel),
-		percent,
-		resetAt: resetDate(window.resets_at ?? window.reset_at),
-		windowMinutes: numberValue$1(window.window_minutes)
-	};
-}
-function normalizeRateLimits(raw) {
-	if (!raw) return null;
-	const credits = raw.credits && typeof raw.credits === "object" ? raw.credits : null;
-	const rawBalance = credits && typeof credits.balance === "string" ? credits.balance.trim() : "";
-	const balance = credits && rawBalance && !(credits.has_credits === false && rawBalance === "0") ? rawBalance : null;
-	const usage = {
-		primary: normalizeWindow(raw.primary, "limit"),
-		secondary: normalizeWindow(raw.secondary, "limit"),
-		individual: normalizeWindow(raw.individual_limit, "spend", true),
-		planType: typeof raw.plan_type === "string" ? raw.plan_type : null,
-		balanceLabel: balance,
-		limitReachedType: typeof raw.rate_limit_reached_type === "string" ? raw.rate_limit_reached_type : raw.spend_control_reached === true ? "spend_control_reached" : null
-	};
-	return usage.primary || usage.secondary || usage.individual || usage.planType || usage.balanceLabel || usage.limitReachedType ? usage : null;
-}
-/**
-* Normalize only the account-wide Codex quota. Newer Codex builds also emit
-* named, model-specific limits (for example `codex_bengalfox`) through the
-* same field; those must not replace the ChatGPT account windows in the HUD.
-* Older rollout contracts had no limit id, so an absent id remains valid.
-*/
-function normalizeAccountRateLimits(raw) {
-	const limitId = typeof raw?.limit_id === "string" ? raw.limit_id.trim().toLowerCase() : "";
-	return !limitId || limitId === "codex" ? normalizeRateLimits(raw) : null;
-}
-function sameWindow(left, right) {
-	if (left.windowMinutes !== null && left.windowMinutes !== void 0 && right.windowMinutes !== null && right.windowMinutes !== void 0) return left.windowMinutes === right.windowMinutes;
-	if (left.label !== "limit" && right.label !== "limit" && left.label === right.label) return true;
-	return Boolean(left.resetAt && right.resetAt && Math.abs(left.resetAt.getTime() - right.resetAt.getTime()) <= 6e4);
-}
-function mergeWindows(current, observed) {
-	const windows = [current.primary, current.secondary].filter((window) => Boolean(window));
-	for (const window of [observed.primary, observed.secondary]) {
-		if (!window) continue;
-		const index = windows.findIndex((candidate) => sameWindow(candidate, window));
-		if (index >= 0) windows[index] = window;
-		else windows.push(window);
-	}
-	windows.sort((left, right) => (left.windowMinutes ?? Number.MAX_SAFE_INTEGER) - (right.windowMinutes ?? Number.MAX_SAFE_INTEGER));
-	return [windows[0] ?? null, windows[1] ?? null];
-}
-/** Merge a newer account-wide observation without confusing its window slots. */
-function mergeUsageData(current, observed) {
-	if (!current) return observed;
-	if (!observed) return current;
-	const [primary, secondary] = mergeWindows(current, observed);
-	return {
-		primary,
-		secondary,
-		individual: observed.individual ?? current.individual,
-		planType: observed.planType ?? current.planType,
-		balanceLabel: observed.balanceLabel ?? current.balanceLabel,
-		limitReachedType: observed.limitReachedType ?? current.limitReachedType
-	};
-}
-function evaluateUsageTrust(endpoint, trustedOpenAiAuth) {
-	if (isOfficialOpenAIEndpoint(endpoint)) return {
-		trusted: true,
-		reason: "official-endpoint",
-		effectiveEndpoint: endpoint
-	};
-	if (endpoint) return {
-		trusted: false,
-		reason: "untrusted-endpoint",
-		effectiveEndpoint: endpoint
-	};
-	if (trustedOpenAiAuth) return {
-		trusted: true,
-		reason: "chatgpt-auth",
-		effectiveEndpoint: "https://chatgpt.com"
-	};
-	return {
-		trusted: false,
-		reason: "endpoint-unknown",
-		effectiveEndpoint: null
-	};
-}
-function trustedUsageData(trust, current, observed) {
-	return trust.trusted ? mergeUsageData(current, observed) : null;
-}
-
-//#endregion
-//#region src/codex/log-rate-limits.ts
-const EVENT_PREFIX = "SSE event: ";
-const EVENT_TYPE_MARKER = "codex.rate_limits";
-const QUERY_TIMEOUT_MS = 750;
-const CACHE_MS$1 = 15e3;
-const MAX_EVENT_AGE_SECONDS = 11520 * 60;
-const RESETLESS_FRESHNESS_MS = 360 * 60 * 1e3;
-const MAX_ROW_LOOKBACK = 2e5;
-const MAX_EVENT_CANDIDATES = 1e3;
-const SNAPSHOT_FILE_NAME = "account-usage.json";
-const MAX_STORED_BODY_LENGTH = 16384;
-const CACHE_MAX_AGE_MS$1 = 30 * 6e4;
-const CACHE_MAX_ENTRIES$1 = 64;
-const cache$2 = /* @__PURE__ */ new Map();
-function record$1(value) {
-	return value && typeof value === "object" && !Array.isArray(value) ? value : null;
-}
-function decodeHex(value) {
-	if (!value || value.length % 2 !== 0 || !/^[\dA-F]+$/i.test(value)) return null;
-	try {
-		return Buffer.from(value, "hex").toString("utf8");
-	} catch {
-		return null;
-	}
-}
-function parseEvent(body) {
-	const marker = body.indexOf(EVENT_PREFIX);
-	if (marker < 0) return null;
-	try {
-		const event = record$1(JSON.parse(body.slice(marker + 11)));
-		const limits = record$1(event?.rate_limits);
-		if (event?.type !== "codex.rate_limits" || !limits) return null;
-		return normalizeAccountRateLimits({
-			...limits,
-			credits: record$1(event.credits),
-			plan_type: typeof event.plan_type === "string" ? event.plan_type : null,
-			rate_limit_reached_type: limits.limit_reached === true ? "rate_limit_reached" : null
-		});
-	} catch {
-		return null;
-	}
-}
-function rawWindow(window) {
-	return window ? {
-		used_percent: window.percent,
-		window_minutes: window.windowMinutes ?? null,
-		resets_at: window.resetAt?.toISOString() ?? null
-	} : null;
-}
-function rolloutSnapshotBody(usage) {
-	return `${EVENT_PREFIX}${JSON.stringify({
-		type: EVENT_TYPE_MARKER,
-		plan_type: usage.planType,
-		rate_limits: {
-			limit_id: "codex",
-			limit_name: "Codex",
-			primary: rawWindow(usage.primary),
-			secondary: rawWindow(usage.secondary),
-			individual_limit: rawWindow(usage.individual),
-			limit_reached: Boolean(usage.limitReachedType)
-		},
-		credits: usage.balanceLabel ? {
-			has_credits: true,
-			unlimited: false,
-			balance: usage.balanceLabel
-		} : null
-	})}`;
-}
-function freshWindow(window, observedAt, now) {
-	if (!window) return null;
-	if (window.resetAt) return window.resetAt.getTime() > now ? window : null;
-	return now - observedAt.getTime() <= RESETLESS_FRESHNESS_MS ? window : null;
-}
-function freshUsage(usage, observedAt, now) {
-	const primary = freshWindow(usage.primary, observedAt, now);
-	const secondary = freshWindow(usage.secondary, observedAt, now);
-	const individual = freshWindow(usage.individual, observedAt, now);
-	if (!primary && !secondary && !individual && !usage.balanceLabel) return null;
-	return {
-		...usage,
-		primary,
-		secondary,
-		individual
-	};
-}
-function cloneSnapshot(value) {
-	return value ? structuredClone(value) : null;
-}
-function storedSnapshotPath(env) {
-	return path.join(getHudStateDirectory(env), SNAPSHOT_FILE_NAME);
-}
-function readStoredSnapshot(env, now, expectedOrigin) {
-	try {
-		const stored = record$1(JSON.parse(fs.readFileSync(storedSnapshotPath(env), "utf8")));
-		const entries = record$1(stored?.entries);
-		if (stored?.version !== 2 || !entries) return null;
-		const candidates = expectedOrigin === void 0 ? Object.entries(entries) : [[expectedOrigin, entries[expectedOrigin]]];
-		let newest = null;
-		for (const [origin, rawEntry] of candidates) {
-			const entry = record$1(rawEntry);
-			const observedAt = typeof entry?.observed_at === "string" ? new Date(entry.observed_at) : null;
-			const body = typeof entry?.body === "string" ? entry.body : null;
-			if (!observedAt || Number.isNaN(observedAt.getTime()) || !body || body.length > MAX_STORED_BODY_LENGTH || now - observedAt.getTime() > MAX_EVENT_AGE_SECONDS * 1e3) continue;
-			const usage = parseEvent(body);
-			const fresh = usage ? freshUsage(usage, observedAt, now) : null;
-			if (fresh && (!newest || observedAt > newest.observedAt)) newest = {
-				usage: fresh,
-				observedAt,
-				origin,
-				source: entry?.source === "rollout-cache" ? "rollout-cache" : "log"
-			};
-		}
-		return newest;
-	} catch {
-		return null;
-	}
-}
-function writeStoredSnapshot(env, body, observedAt, origin, source) {
-	if (body.length > MAX_STORED_BODY_LENGTH) return;
-	const filePath = storedSnapshotPath(env);
-	const temporaryPath = `${filePath}.${process.pid}.tmp`;
-	try {
-		let stored = null;
-		try {
-			stored = record$1(JSON.parse(fs.readFileSync(filePath, "utf8")));
-		} catch {}
-		const currentEntries = stored?.version === 2 ? record$1(stored.entries) : null;
-		const entries = currentEntries ? { ...currentEntries } : {};
-		const current = record$1(entries[origin]);
-		const currentObservedAt = typeof current?.observed_at === "string" ? new Date(current.observed_at) : null;
-		if (currentObservedAt && !Number.isNaN(currentObservedAt.getTime()) && currentObservedAt >= observedAt) return;
-		entries[origin] = {
-			observed_at: observedAt.toISOString(),
-			source,
-			body
-		};
-		fs.mkdirSync(path.dirname(filePath), {
-			recursive: true,
-			mode: 448
-		});
-		fs.writeFileSync(temporaryPath, `${JSON.stringify({
-			version: 2,
-			entries
-		}, null, 2)}\n`, {
-			encoding: "utf8",
-			mode: 384
-		});
-		fs.renameSync(temporaryPath, filePath);
-		fs.chmodSync(filePath, 384);
-	} catch {
-		try {
-			fs.rmSync(temporaryPath, { force: true });
-		} catch {}
-	}
-}
-/**
-* Share an account-wide rollout observation with sibling HUD sessions. Recent
-* Codex builds can emit limits only into rollout JSONL, while a concurrent
-* model-specific session has no account quota of its own to display.
-*/
-function persistRolloutRateLimits(usage, observedAt, endpoint, env = process.env) {
-	if (!usage || !observedAt || Number.isNaN(observedAt.getTime()) || !endpoint || !isOfficialOpenAIEndpoint(endpoint)) return;
-	const origin = endpointOrigin(endpoint);
-	if (!origin) return;
-	writeStoredSnapshot(env, rolloutSnapshotBody(usage), observedAt, origin, "rollout-cache");
-}
-function eventOrigin(database, processUuid, timestamp) {
-	const result = spawnSync("sqlite3", [
-		"-readonly",
-		"-noheader",
-		"-batch",
-		database,
-		[
-			"SELECT feedback_log_body",
-			"  FROM logs",
-			` WHERE process_uuid = '${processUuid.replaceAll("'", "''")}'`,
-			`   AND ts BETWEEN ${timestamp - MAX_EVENT_AGE_SECONDS} AND ${timestamp + 60}`,
-			`   AND target IN ('codex_http_client::default_client', 'codex_http_client::client')`,
-			`   AND instr(feedback_log_body, 'url=') > 0`,
-			` ORDER BY abs(ts - ${timestamp}) ASC, id DESC`,
-			" LIMIT 1;"
-		].join("\n")
-	], {
-		encoding: "utf8",
-		stdio: [
-			"ignore",
-			"pipe",
-			"ignore"
-		],
-		timeout: QUERY_TIMEOUT_MS
-	});
-	const match = typeof result.stdout === "string" ? /\burl=(https?:\/\/[^\s"]+)/.exec(result.stdout) : null;
-	return match ? endpointOrigin(match[1]) : null;
-}
-/**
-* Codex currently logs `codex.rate_limits` SSE events but does not copy them
-* into rollout token-count events for every provider. Keep the newest
-* account-wide event per provider origin and share it with other open HUD
-* processes. `expectedEndpoint` names the provider the caller is bound to; passing
-* null means the endpoint is unknown, and showing no usage beats showing
-* another provider's account.
-*/
-function readLatestLoggedRateLimits(env = process.env, now = Date.now(), expectedEndpoint) {
-	const expectedOrigin = expectedEndpoint === void 0 ? void 0 : expectedEndpoint ? endpointOrigin(expectedEndpoint) : null;
-	if (expectedOrigin === null) return null;
-	const codexHome = getCodexHome(env);
-	const cacheKey = `${codexHome}:${expectedOrigin ?? "*"}`;
-	const cached = cache$2.get(cacheKey);
-	if (cached && now - cached.at < CACHE_MS$1) return cloneSnapshot(cached.value);
-	const remember = (value) => {
-		setTimedCache(cache$2, cacheKey, {
-			at: now,
-			value: cloneSnapshot(value)
-		}, CACHE_MAX_AGE_MS$1, CACHE_MAX_ENTRIES$1);
-		return cloneSnapshot(value);
-	};
-	let previous = readStoredSnapshot(env, now, expectedOrigin);
-	if (cached?.value) {
-		const fallback = freshUsage(cached.value.usage, cached.value.observedAt, now);
-		if (fallback) {
-			const cachedSnapshot = {
-				usage: fallback,
-				observedAt: cached.value.observedAt,
-				origin: cached.value.origin,
-				source: cached.value.source
-			};
-			if (!previous || cachedSnapshot.observedAt > previous.observedAt) previous = cachedSnapshot;
-		}
-	}
-	const database = findCodexLogDatabase(codexHome);
-	if (!database) return remember(previous);
-	const since = Math.floor(now / 1e3) - MAX_EVENT_AGE_SECONDS;
-	const result = spawnSync("sqlite3", [
-		"-readonly",
-		"-noheader",
-		"-batch",
-		database,
-		[
-			`SELECT ts || '|' || hex(process_uuid) || '|' || hex(substr(feedback_log_body, 1, ${MAX_STORED_BODY_LENGTH}))`,
-			"  FROM logs",
-			` WHERE id >= (SELECT max(id) - ${MAX_ROW_LOOKBACK} FROM logs)`,
-			`   AND ts >= ${since}`,
-			`   AND instr(feedback_log_body, '${EVENT_PREFIX}') > 0`,
-			`   AND instr(feedback_log_body, '${EVENT_TYPE_MARKER}') > 0`,
-			" ORDER BY ts DESC, id DESC",
-			` LIMIT ${MAX_EVENT_CANDIDATES};`
-		].join("\n")
-	], {
-		encoding: "utf8",
-		stdio: [
-			"ignore",
-			"pipe",
-			"ignore"
-		],
-		timeout: QUERY_TIMEOUT_MS
-	});
-	if (typeof result.stdout !== "string") return remember(previous);
-	const origins = /* @__PURE__ */ new Map();
-	for (const line of result.stdout.split("\n")) {
-		const [timestampValue, processValue, bodyValue] = line.split("|");
-		const timestamp = Number(timestampValue);
-		const processUuid = decodeHex(processValue ?? "");
-		const body = decodeHex(bodyValue ?? "");
-		if (!Number.isFinite(timestamp) || !processUuid || !body) continue;
-		const observedAt = /* @__PURE__ */ new Date(timestamp * 1e3);
-		const usage = parseEvent(body);
-		const fresh = usage ? freshUsage(usage, observedAt, now) : null;
-		if (!fresh) continue;
-		const origin = origins.has(processUuid) ? origins.get(processUuid) ?? null : eventOrigin(database, processUuid, timestamp);
-		origins.set(processUuid, origin);
-		if (!origin || expectedOrigin !== void 0 && origin !== expectedOrigin) continue;
-		if (previous && previous.observedAt >= observedAt) return remember(previous);
-		writeStoredSnapshot(env, body, observedAt, origin, "log");
-		return remember({
-			usage: fresh,
-			observedAt,
-			origin,
-			source: "log"
-		});
-	}
-	return remember(previous);
-}
-function inspectLoggedRateLimitTargets(env = process.env, now = Date.now()) {
-	const database = findCodexLogDatabase(getCodexHome(env));
-	if (!database) return [];
-	const since = Math.floor(now / 1e3) - MAX_EVENT_AGE_SECONDS;
-	const result = spawnSync("sqlite3", [
-		"-readonly",
-		"-noheader",
-		"-batch",
-		database,
-		[
-			`SELECT hex(target) || '|' || hex(substr(feedback_log_body, 1, ${MAX_STORED_BODY_LENGTH}))`,
-			"  FROM logs",
-			` WHERE id >= (SELECT max(id) - ${MAX_ROW_LOOKBACK} FROM logs)`,
-			`   AND ts >= ${since}`,
-			`   AND instr(feedback_log_body, '${EVENT_PREFIX}') > 0`,
-			`   AND instr(feedback_log_body, '${EVENT_TYPE_MARKER}') > 0`,
-			" ORDER BY id DESC",
-			` LIMIT ${MAX_EVENT_CANDIDATES};`
-		].join("\n")
-	], {
-		encoding: "utf8",
-		stdio: [
-			"ignore",
-			"pipe",
-			"ignore"
-		],
-		timeout: QUERY_TIMEOUT_MS
-	});
-	if (typeof result.stdout !== "string") return [];
-	const counts = /* @__PURE__ */ new Map();
-	for (const line of result.stdout.split("\n")) {
-		const [targetValue, bodyValue] = line.split("|");
-		const target = decodeHex(targetValue ?? "");
-		const body = decodeHex(bodyValue ?? "");
-		if (target && body && parseEvent(body)) counts.set(target, (counts.get(target) ?? 0) + 1);
-	}
-	return [...counts.entries()].map(([target, count]) => ({
-		target,
-		count
-	})).sort((left, right) => right.count - left.count || left.target.localeCompare(right.target));
-}
-
-//#endregion
-//#region src/codex/context-usage.ts
-const BASELINE_TOKENS = 12e3;
-function clamp(value, minimum, maximum) {
-	return Math.min(maximum, Math.max(minimum, value));
-}
-function calculateContextUsage(usage, contextWindow) {
-	if (!usage || !contextWindow || contextWindow <= 0) return null;
-	const rawUsed = Math.max(0, usage.total_tokens ?? 0);
-	let used;
-	let total;
-	if (contextWindow <= 12e3) {
-		total = contextWindow;
-		used = clamp(rawUsed, 0, total);
-	} else {
-		total = contextWindow - BASELINE_TOKENS;
-		used = clamp(rawUsed - BASELINE_TOKENS, 0, total);
-	}
-	const percent = total > 0 ? Math.round(used / total * 100) : 0;
-	return {
-		used,
-		total,
-		percent: clamp(percent, 0, 100),
-		remainingPercent: clamp(100 - percent, 0, 100),
-		inputTokens: Math.max(0, (usage.input_tokens ?? 0) - (usage.cached_input_tokens ?? 0)),
-		outputTokens: Math.max(0, usage.output_tokens ?? 0),
-		cachedTokens: Math.max(0, usage.cached_input_tokens ?? 0)
-	};
-}
-
-//#endregion
-//#region src/codex/jsonl-tail.ts
-var JsonlTail = class {
-	offset = 0;
-	remainder = "";
-	inode = null;
-	reset() {
-		this.offset = 0;
-		this.remainder = "";
-		this.inode = null;
-	}
-	read(filePath) {
-		const stat = fs.statSync(filePath);
-		const replaced = this.inode !== null && stat.ino !== this.inode;
-		const truncated = stat.size < this.offset;
-		const reset = replaced || truncated;
-		if (reset) {
-			this.offset = 0;
-			this.remainder = "";
-		}
-		this.inode = stat.ino;
-		if (stat.size === this.offset) return {
-			lines: [],
-			reset
-		};
-		const length = stat.size - this.offset;
-		const descriptor = fs.openSync(filePath, "r");
-		try {
-			const buffer = Buffer.allocUnsafe(length);
-			fs.readSync(descriptor, buffer, 0, length, this.offset);
-			this.offset = stat.size;
-			const parts = (this.remainder + buffer.toString("utf8")).split(/\r?\n/);
-			this.remainder = parts.pop() ?? "";
-			return {
-				lines: parts.filter(Boolean),
-				reset
-			};
-		} finally {
-			fs.closeSync(descriptor);
-		}
-	}
-};
-
-//#endregion
-//#region src/codex/rollout-parser.ts
-const MAX_TARGET_LENGTH = 80;
-const IMAGE_EXTENSIONS = /* @__PURE__ */ new Set([
-	".png",
-	".jpg",
-	".jpeg",
-	".webp",
-	".gif",
-	".bmp",
-	".tif",
-	".tiff"
-]);
-const IMAGE_PATH_PATTERN = /(?:^|[\s"'`(])(\/[^\s"'`),;]+\.(?:png|jpe?g|webp|gif|bmp|tiff?)|[a-z]:[\\/][^\s"'`),;]+\.(?:png|jpe?g|webp|gif|bmp|tiff?))(?:$|[\s"'`),;.])/gi;
-function initialState() {
-	return {
-		session: null,
-		context: null,
-		usage: null,
-		usageObservedAt: null,
-		sessionTokens: null,
-		tools: [],
-		images: [],
-		skills: [],
-		mcpServers: [],
-		todos: [],
-		goal: null,
-		conversationTurns: [],
-		compactCount: 0
-	};
-}
-function safeDate$1(value, fallback) {
-	if (typeof value !== "string" && typeof value !== "number") return fallback;
-	const date = new Date(value);
-	return Number.isNaN(date.getTime()) ? fallback : date;
-}
-function policyLabel(value) {
-	if (typeof value === "string") return value;
-	if (value && typeof value === "object" && !Array.isArray(value)) {
-		if ("type" in value && typeof value.type === "string") return value.type;
-		if ("granular" in value) return "granular";
-	}
-}
-function parseArguments(value) {
-	if (!value) return null;
-	try {
-		const parsed = JSON.parse(value);
-		return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
-	} catch {
-		return null;
-	}
-}
-function redactSensitiveText(value) {
-	return value.replace(/\bBearer\s+[^\s"',;]+/gi, "Bearer [REDACTED]").replace(/\bsk-[\w-]{8,}/g, "sk-[REDACTED]").replace(/((?:OPENAI_API_KEY|API[_-]?KEY|ACCESS[_-]?TOKEN|AUTH[_-]?TOKEN|BEARER[_-]?TOKEN|PASSWORD|PASSWD|SECRET)\s*=\s*)(?:"[^"]*"|'[^']*'|[^\s;]+)/gi, "$1[REDACTED]").replace(/(--(?:api[-_]?key|access[-_]?token|auth[-_]?token|bearer[-_]?token|password|passwd|secret)(?:\s+|=\s*))(?:"[^"]*"|'[^']*'|[^\s;]+)/gi, "$1[REDACTED]").replace(/(^|[\s,{])(["']?(?:api[_-]?key|access[_-]?token|auth[_-]?token|bearer[_-]?token|password|passwd|secret)["']?\s*:\s*)(?:"[^"]*"|'[^']*'|[^\s,}]+)/gim, "$1$2[REDACTED]").replace(/(https?:\/\/)[^/\s:@]+:[^@\s/]+@/gi, "$1[REDACTED]@");
-}
-function truncate(value) {
-	const redacted = redactSensitiveText(value);
-	const normalized = Array.from(redacted, (character) => {
-		const codePoint = character.codePointAt(0) ?? 0;
-		return codePoint <= 31 || codePoint === 127 ? " " : character;
-	}).join("").replace(/\s+/g, " ").trim();
-	return normalized.length <= MAX_TARGET_LENGTH ? normalized : `${normalized.slice(0, MAX_TARGET_LENGTH - 1)}…`;
-}
-function nestedToolName(input) {
-	if (!input) return null;
-	return /\btools\.(\w+)/.exec(input)?.[1] ?? null;
-}
-function displayToolName(payload) {
-	if (payload.name === "exec") return nestedToolName(payload.input) ?? payload.name;
-	return payload.name || "tool";
-}
-function toolTarget(payload) {
-	const args = parseArguments(payload.arguments);
-	if (args) {
-		const target = [
-			args.file_path,
-			args.path,
-			args.file,
-			args.pattern,
-			args.command,
-			args.cmd,
-			args.description,
-			args.question,
-			args.target
-		].find((value) => typeof value === "string");
-		if (typeof target === "string") return truncate(target);
-	}
-	if (payload.name === "exec") return nestedToolName(payload.input) ? void 0 : payload.input ? truncate(payload.input) : void 0;
-}
-function isErrorOutput(output) {
-	if (output && typeof output === "object" && !Array.isArray(output)) {
-		const record = output;
-		return record.success === false || record.status === "error" || record.is_error === true;
-	}
-	return false;
-}
-function imageIsAvailable(value) {
-	try {
-		return fs.statSync(value).isFile() && IMAGE_EXTENSIONS.has(path.extname(value).toLowerCase());
-	} catch {
-		return false;
-	}
-}
-function normalizeImagePath(value) {
-	const candidate = value.trim().replace(/[.,;)]+$/, "");
-	if (!path.isAbsolute(candidate) || !IMAGE_EXTENSIONS.has(path.extname(candidate).toLowerCase())) return null;
-	return path.normalize(candidate);
-}
-function imagePathsFromValue(value) {
-	const result = /* @__PURE__ */ new Set();
-	const visit = (current, depth) => {
-		if (depth > 3 || result.size >= 20) return;
-		if (typeof current === "string") {
-			try {
-				const parsed = JSON.parse(current);
-				if (parsed !== current) visit(parsed, depth + 1);
-			} catch {}
-			for (const match of current.matchAll(IMAGE_PATH_PATTERN)) {
-				const normalized = normalizeImagePath(match[1]);
-				if (normalized) result.add(normalized);
-			}
-			const direct = normalizeImagePath(current);
-			if (direct) result.add(direct);
-			return;
-		}
-		if (Array.isArray(current)) {
-			current.forEach((item) => visit(item, depth + 1));
-			return;
-		}
-		if (current && typeof current === "object") Object.values(current).forEach((item) => visit(item, depth + 1));
-	};
-	visit(value, 0);
-	return [...result];
-}
-function imageSourceForTool(name) {
-	if (name === "view_image") return "view_image";
-	return /image|img|picture|photo/i.test(name) && /imagegen|generate|create|edit|save|output/i.test(name) ? "generated_image" : null;
-}
-function registerImagePaths(images, paths, source, createdAt, callId) {
-	for (const imagePath of paths) if (!images.has(imagePath)) images.set(imagePath, {
-		path: imagePath,
-		source,
-		createdAt,
-		callId
-	});
-}
-function toSessionTokens(usage) {
-	if (!usage) return null;
-	return {
-		inputTokens: Math.max(0, usage.input_tokens ?? 0),
-		outputTokens: Math.max(0, usage.output_tokens ?? 0),
-		reasoningOutputTokens: Math.max(0, usage.reasoning_output_tokens ?? 0),
-		cachedInputTokens: Math.max(0, usage.cached_input_tokens ?? 0),
-		cacheWriteInputTokens: Math.max(0, usage.cache_write_input_tokens ?? 0),
-		totalTokens: Math.max(0, usage.total_tokens ?? 0)
-	};
-}
-function normalizePlan(plan) {
-	if (!Array.isArray(plan)) return [];
-	return plan.flatMap((item) => {
-		if (typeof item.step !== "string" || !item.step.trim()) return [];
-		const status = item.status === "in_progress" ? "in_progress" : item.status === "completed" ? "completed" : "pending";
-		return [{
-			content: truncate(item.step),
-			status
-		}];
-	});
-}
-function normalizeGoal(value) {
-	if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-	const goal = value;
-	return {
-		objective: typeof goal.objective === "string" ? truncate(goal.objective) : void 0,
-		status: typeof goal.status === "string" ? goal.status : void 0,
-		tokenBudget: typeof (goal.tokenBudget ?? goal.token_budget) === "number" ? goal.tokenBudget ?? goal.token_budget : null,
-		tokensUsed: typeof (goal.tokensUsed ?? goal.tokens_used) === "number" ? goal.tokensUsed ?? goal.tokens_used : void 0,
-		timeUsedSeconds: typeof (goal.timeUsedSeconds ?? goal.time_used_seconds) === "number" ? goal.timeUsedSeconds ?? goal.time_used_seconds : void 0
-	};
-}
-var RolloutParser = class {
-	tail = new JsonlTail();
-	state = initialState();
-	filePath = null;
-	runningTools = /* @__PURE__ */ new Map();
-	images = /* @__PURE__ */ new Map();
-	latestTokenUsage = null;
-	captureConversationBodies;
-	constructor(options = {}) {
-		this.captureConversationBodies = options.captureConversationBodies ?? true;
-	}
-	setConversationCapture(enabled) {
-		if (enabled === this.captureConversationBodies) return;
-		this.captureConversationBodies = enabled;
-		this.reset();
-	}
-	setFile(filePath) {
-		if (filePath === this.filePath) return;
-		this.filePath = filePath;
-		this.reset();
-	}
-	reset() {
-		this.tail.reset();
-		this.state = initialState();
-		this.runningTools.clear();
-		this.images.clear();
-		this.latestTokenUsage = null;
-	}
-	getState() {
-		this.state.images = Array.from(this.images.values()).filter((image) => imageIsAvailable(image.path));
-		return structuredClone(this.state);
-	}
-	parse() {
-		if (!this.filePath) return this.getState();
-		const result = this.tail.read(this.filePath);
-		if (result.reset) {
-			this.state = initialState();
-			this.runningTools.clear();
-			this.images.clear();
-			this.latestTokenUsage = null;
-		}
-		for (const line of result.lines) this.parseLine(line);
-		return this.getState();
-	}
-	parseLine(line) {
-		let entry;
-		try {
-			entry = JSON.parse(line);
-		} catch {
-			return;
-		}
-		const timestamp = safeDate$1(entry.timestamp, /* @__PURE__ */ new Date());
-		if (entry.type === "session_meta") {
-			this.onSessionMeta(entry.payload, timestamp);
-			return;
-		}
-		if (entry.type === "turn_context") {
-			this.onTurnContext(entry.payload);
-			return;
-		}
-		if (entry.type === "response_item") {
-			this.onResponseItem(entry.payload, timestamp);
-			return;
-		}
-		if (entry.type === "event_msg") this.onEvent(entry.payload, timestamp);
-	}
-	onSessionMeta(payload, timestamp) {
-		const id = payload.session_id ?? payload.id;
-		if (!id || !this.filePath) return;
-		this.state.session = {
-			id,
-			rolloutPath: this.filePath,
-			startTime: safeDate$1(payload.timestamp, timestamp),
-			cwd: payload.cwd ?? process.cwd(),
-			originator: payload.originator,
-			cliVersion: payload.cli_version,
-			modelProvider: payload.model_provider,
-			source: payload.thread_source ?? payload.source
-		};
-	}
-	onTurnContext(payload) {
-		if (!this.state.session) return;
-		this.state.session.turnId = payload.turn_id;
-		this.state.session.cwd = payload.cwd ?? this.state.session.cwd;
-		this.state.session.workspaceRoots = payload.workspace_roots ?? this.state.session.workspaceRoots;
-		this.state.session.model = payload.model ?? payload.collaboration_mode?.settings?.model ?? this.state.session.model;
-		this.state.session.reasoningEffort = payload.effort ?? payload.reasoning_effort ?? payload.collaboration_mode?.settings?.reasoning_effort ?? this.state.session.reasoningEffort;
-		this.state.session.collaborationMode = payload.collaboration_mode?.mode;
-		this.state.session.approvalPolicy = policyLabel(payload.approval_policy);
-		this.state.session.sandboxMode = policyLabel(payload.sandbox_policy);
-		this.state.session.permissionProfile = policyLabel(payload.permission_profile);
-	}
-	onResponseItem(payload, timestamp) {
-		if ((payload.type === "function_call" || payload.type === "custom_tool_call") && payload.name) {
-			const id = payload.call_id ?? payload.id ?? `${payload.name}-${timestamp.getTime()}`;
-			const tool = {
-				id,
-				name: displayToolName(payload),
-				target: toolTarget(payload),
-				status: "running",
-				startTime: timestamp
-			};
-			this.runningTools.set(id, tool);
-			this.state.tools.push(tool);
-			this.state.tools = this.state.tools.slice(-100);
-			const imageSource = imageSourceForTool(payload.name);
-			if (imageSource) registerImagePaths(this.images, imagePathsFromValue(payload.arguments), imageSource, timestamp, id);
-			if (tool.name === "Skill" && tool.target) this.state.skills = Array.from(/* @__PURE__ */ new Set([...this.state.skills, tool.target]));
-			const mcp = /^mcp__(.+?)__/.exec(tool.name)?.[1];
-			if (mcp) this.state.mcpServers = Array.from(/* @__PURE__ */ new Set([...this.state.mcpServers, mcp]));
-			return;
-		}
-		if ((payload.type === "function_call_output" || payload.type === "custom_tool_call_output") && payload.call_id) {
-			const running = this.runningTools.get(payload.call_id);
-			if (!running) return;
-			running.status = isErrorOutput(payload.output) ? "error" : "completed";
-			running.endTime = timestamp;
-			running.durationMs = Math.max(0, timestamp.getTime() - running.startTime.getTime());
-			const imageSource = imageSourceForTool(running.name);
-			if (imageSource) registerImagePaths(this.images, imagePathsFromValue(payload.output), imageSource, timestamp, payload.call_id);
-			this.runningTools.delete(payload.call_id);
-			return;
-		}
-		if (payload.type === "message" && payload.role === "assistant" && this.state.session) {
-			registerImagePaths(this.images, imagePathsFromValue(payload.content), "generated_image", timestamp, payload.id);
-			this.state.session.lastResponseAt = timestamp;
-		}
-	}
-	onEvent(payload, timestamp) {
-		if (payload.type === "mcp_tool_call_end" || payload.type === "mcp_tool_call_begin") {
-			const invocation = payload.invocation;
-			const server = invocation && typeof invocation === "object" && !Array.isArray(invocation) ? invocation.server : null;
-			if (typeof server === "string" && server.trim()) this.state.mcpServers = Array.from(/* @__PURE__ */ new Set([...this.state.mcpServers, server.trim()]));
-			return;
-		}
-		if (payload.type === "user_message" && typeof payload.message === "string") {
-			const userMessage = payload.message.trim();
-			if (userMessage) {
-				const turnId = payload.turn_id ?? this.state.session?.turnId;
-				this.state.conversationTurns.push({
-					id: turnId ?? `turn-${String(this.state.conversationTurns.length + 1)}`,
-					turnId,
-					startedAt: timestamp,
-					userMessage: this.captureConversationBodies ? userMessage : "",
-					assistantMessage: ""
-				});
-			}
-			return;
-		}
-		if (payload.type === "agent_message" && typeof payload.message === "string") {
-			if (!this.captureConversationBodies) return;
-			const turn = this.state.conversationTurns.at(-1);
-			const message = payload.message.trim();
-			if (!turn || !message) return;
-			if (payload.phase === "final_answer") {
-				turn.assistantMessage = message;
-				turn.assistantPhase = payload.phase;
-			} else if (turn.assistantPhase !== "final_answer") {
-				turn.assistantMessage = turn.assistantMessage ? `${turn.assistantMessage}\n\n${message}` : message;
-				turn.assistantPhase = payload.phase;
-			}
-			return;
-		}
-		if (payload.type === "token_count") {
-			this.latestTokenUsage = payload.info ?? this.latestTokenUsage;
-			this.state.context = calculateContextUsage(this.latestTokenUsage?.last_token_usage, this.latestTokenUsage?.model_context_window);
-			this.state.sessionTokens = toSessionTokens(this.latestTokenUsage?.total_token_usage);
-			const observedUsage = normalizeAccountRateLimits(payload.rate_limits);
-			this.state.usage = mergeUsageData(this.state.usage, observedUsage);
-			if (observedUsage) this.state.usageObservedAt = timestamp;
-			return;
-		}
-		if (payload.type === "plan_update") {
-			this.state.todos = normalizePlan(payload.plan);
-			return;
-		}
-		if (payload.type === "thread_goal_updated") {
-			this.state.goal = normalizeGoal(payload.goal);
-			return;
-		}
-		if (payload.type === "context_compacted") {
-			this.state.compactCount += 1;
-			return;
-		}
-		if (!this.state.session) return;
-		if (payload.type === "task_started") {
-			this.state.session.lastTurnStartedAt = safeDate$1(payload.started_at, timestamp);
-			if (typeof payload.model_context_window === "number") this.latestTokenUsage = {
-				total_token_usage: this.latestTokenUsage?.total_token_usage ?? {},
-				last_token_usage: this.latestTokenUsage?.last_token_usage ?? {},
-				model_context_window: payload.model_context_window
-			};
-			return;
-		}
-		if (payload.type === "task_complete" || payload.type === "turn_aborted") {
-			this.state.session.lastTurnCompletedAt = safeDate$1(payload.completed_at, timestamp);
-			this.state.session.lastTurnDurationMs = typeof payload.duration_ms === "number" ? payload.duration_ms : void 0;
-			this.state.session.timeToFirstTokenMs = typeof payload.time_to_first_token_ms === "number" ? payload.time_to_first_token_ms : void 0;
-			const outputTokens = this.latestTokenUsage?.last_token_usage?.output_tokens;
-			const generationMs = (this.state.session.lastTurnDurationMs ?? 0) - (this.state.session.timeToFirstTokenMs ?? 0);
-			const outputSpeed = typeof outputTokens === "number" && outputTokens >= 0 && generationMs > 0 ? outputTokens / (generationMs / 1e3) : void 0;
-			this.state.session.outputTokensPerSecond = outputSpeed !== void 0 && outputSpeed <= 2e3 ? outputSpeed : void 0;
-		}
-	}
-};
-
-//#endregion
-//#region src/codex/session-finder.ts
-const MAX_SESSION_META_BYTES = 4 * 1024 * 1024;
-const DEFAULT_MAX_AGE_MS = 336 * 60 * 60 * 1e3;
-function realPath(value) {
-	try {
-		return fs.realpathSync.native(value);
-	} catch {
-		return path.resolve(value);
-	}
-}
-function normalizedPath$1(value) {
-	const resolved = realPath(value);
-	return process.platform === "win32" ? resolved.toLowerCase() : resolved;
-}
-function isWithinProject(candidateCwd, targetCwd) {
-	const candidate = normalizedPath$1(candidateCwd);
-	const target = normalizedPath$1(targetCwd);
-	return candidate === target || candidate.startsWith(`${target}${path.sep}`);
-}
-function readFirstLine(filePath) {
-	const descriptor = fs.openSync(filePath, "r");
-	try {
-		const chunks = [];
-		let total = 0;
-		let position = 0;
-		while (total < MAX_SESSION_META_BYTES) {
-			const buffer = Buffer.allocUnsafe(Math.min(64 * 1024, MAX_SESSION_META_BYTES - total));
-			const bytesRead = fs.readSync(descriptor, buffer, 0, buffer.length, position);
-			if (bytesRead === 0) break;
-			const chunk = buffer.subarray(0, bytesRead);
-			const newline = chunk.indexOf(10);
-			if (newline >= 0) {
-				chunks.push(chunk.subarray(0, newline));
-				return Buffer.concat(chunks).toString("utf8").replace(/\r$/, "");
-			}
-			chunks.push(chunk);
-			total += bytesRead;
-			position += bytesRead;
-		}
-		return chunks.length > 0 ? Buffer.concat(chunks).toString("utf8") : null;
-	} finally {
-		fs.closeSync(descriptor);
-	}
-}
-function collectRolloutPaths(directory, output) {
-	let entries;
-	try {
-		entries = fs.readdirSync(directory, { withFileTypes: true });
-	} catch {
-		return;
-	}
-	for (const entry of entries) {
-		const entryPath = path.join(directory, entry.name);
-		if (entry.isDirectory()) collectRolloutPaths(entryPath, output);
-		else if (entry.isFile() && /^rollout-.*\.jsonl$/.test(entry.name)) output.push(entryPath);
-	}
-}
-function isSubagentSource(source) {
-	if (!source || typeof source === "string") return typeof source === "string" && source.toLowerCase().includes("subagent");
-	return "subagent" in source || "thread_spawn" in source;
-}
-function threadSpawnMetadata(source) {
-	if (!source || typeof source !== "object" || Array.isArray(source)) return null;
-	const sourceRecord = source;
-	const subagent = sourceRecord.subagent;
-	if (subagent && typeof subagent === "object" && !Array.isArray(subagent)) {
-		const threadSpawn = subagent.thread_spawn;
-		if (threadSpawn && typeof threadSpawn === "object" && !Array.isArray(threadSpawn)) return threadSpawn;
-	}
-	const direct = sourceRecord.thread_spawn;
-	return direct && typeof direct === "object" && !Array.isArray(direct) ? direct : null;
-}
-function readSessionCandidate(filePath) {
-	try {
-		const line = readFirstLine(filePath);
-		if (!line) return null;
-		const entry = JSON.parse(line);
-		if (entry.type !== "session_meta" || !entry.payload) return null;
-		const payload = entry.payload;
-		const sessionId = payload.session_id ?? payload.id;
-		const cwd = payload.cwd;
-		if (typeof sessionId !== "string" || typeof cwd !== "string") return null;
-		const stat = fs.statSync(filePath);
-		const startTime = new Date(typeof payload.timestamp === "string" ? payload.timestamp : entry.timestamp ?? stat.mtimeMs);
-		const source = payload.thread_source ?? payload.source;
-		const threadSpawn = threadSpawnMetadata(source);
-		return {
-			path: filePath,
-			sessionId,
-			cwd,
-			startTime: Number.isNaN(startTime.getTime()) ? new Date(stat.mtimeMs) : startTime,
-			mtimeMs: stat.mtimeMs,
-			source,
-			parentThreadId: typeof (payload.parent_thread_id ?? threadSpawn?.parent_thread_id) === "string" ? payload.parent_thread_id ?? threadSpawn?.parent_thread_id : void 0,
-			agentPath: typeof (payload.agent_path ?? threadSpawn?.agent_path) === "string" ? payload.agent_path ?? threadSpawn?.agent_path : void 0,
-			agentNickname: typeof threadSpawn?.agent_nickname === "string" ? threadSpawn.agent_nickname : void 0,
-			agentRole: typeof threadSpawn?.agent_role === "string" ? threadSpawn.agent_role : void 0
-		};
-	} catch {
-		return null;
-	}
-}
-function listSessionCandidates(codexHome = getCodexHome()) {
-	const paths = [];
-	collectRolloutPaths(path.join(codexHome, "sessions"), paths);
-	return paths.flatMap((filePath) => {
-		const candidate = readSessionCandidate(filePath);
-		return candidate ? [candidate] : [];
-	});
-}
-function findActiveSession(options) {
-	const now = options.now ?? /* @__PURE__ */ new Date();
-	const maxAgeMs = options.maxAgeMs ?? DEFAULT_MAX_AGE_MS;
-	const launchedAfterMs = options.launchedAfter?.getTime() ?? 0;
-	const allowModifiedBeforeLaunch = options.allowModifiedBeforeLaunch ?? true;
-	return listSessionCandidates(options.codexHome).filter((candidate) => !isSubagentSource(candidate.source)).filter((candidate) => isWithinProject(candidate.cwd, options.cwd)).filter((candidate) => candidate.mtimeMs >= now.getTime() - maxAgeMs).filter((candidate) => candidate.startTime.getTime() >= launchedAfterMs || allowModifiedBeforeLaunch && candidate.mtimeMs >= launchedAfterMs).sort((left, right) => right.mtimeMs - left.mtimeMs)[0] ?? null;
-}
-
-//#endregion
 //#region node_modules/.pnpm/smol-toml@1.7.0/node_modules/smol-toml/dist/date.js
 /*!
 * Copyright (c) Squirrel Chat et al., All rights reserved.
@@ -2541,27 +763,442 @@ function parse(toml, { maxDepth = 1e3, integersAsBigInt } = {}) {
 }
 
 //#endregion
+//#region src/config/constants.ts
+const CONFIG_DIRECTORY_NAME = "codex-hud";
+const LEGACY_CONFIG_DIRECTORY_NAME = "codex-hub";
+const CONFIG_FILE_NAME = "config.json";
+const KNOWN_ELEMENTS = /* @__PURE__ */ new Set([
+	"project",
+	"addedDirs",
+	"context",
+	"usage",
+	"promptCache",
+	"memory",
+	"environment",
+	"tools",
+	"skills",
+	"mcp",
+	"agents",
+	"todos",
+	"turns",
+	"sessionTime"
+]);
+const MAX_REFRESH_INTERVAL_MS = 6e4;
+const MAX_PROMPT_CACHE_TTL_SECONDS = 86400;
+
+//#endregion
+//#region src/config/paths.ts
+function getCodexHome(env = process.env) {
+	return path.resolve(env.CODEX_HOME || path.join(os.homedir(), ".codex"));
+}
+function getConfigPath(env = process.env) {
+	const explicit = env.CODEX_HUD_CONFIG || env.CODEX_HUB_CONFIG;
+	if (explicit) return path.resolve(explicit);
+	const canonical = path.join(getCodexHome(env), CONFIG_DIRECTORY_NAME, CONFIG_FILE_NAME);
+	const legacy = path.join(getCodexHome(env), LEGACY_CONFIG_DIRECTORY_NAME, CONFIG_FILE_NAME);
+	return !fs.existsSync(canonical) && fs.existsSync(legacy) ? legacy : canonical;
+}
+function getHudStateDirectory(env = process.env) {
+	return path.join(getCodexHome(env), CONFIG_DIRECTORY_NAME);
+}
+function getLegacyStateDirectory(env = process.env) {
+	return path.join(getCodexHome(env), LEGACY_CONFIG_DIRECTORY_NAME);
+}
+
+//#endregion
+//#region src/runtime/timed-cache.ts
+function pruneTimedCache(cache, now, maxAgeMs, maxEntries) {
+	for (const [key, entry] of cache) if (now - entry.at > maxAgeMs) cache.delete(key);
+	if (cache.size <= maxEntries) return;
+	const oldest = [...cache.entries()].sort((left, right) => left[1].at - right[1].at).slice(0, cache.size - maxEntries);
+	for (const [key] of oldest) cache.delete(key);
+}
+function setTimedCache(cache, key, entry, maxAgeMs, maxEntries) {
+	cache.set(key, entry);
+	pruneTimedCache(cache, entry.at, maxAgeMs, maxEntries);
+}
+
+//#endregion
+//#region src/codex/session-endpoint.ts
+const SESSION_ID_PATTERN = /^[\w-]{1,128}$/;
+const LOG_DATABASE_PATTERN = /^logs(?:_(\d+))?\.sqlite$/;
+const QUERY_TIMEOUT_MS$1 = 750;
+const PROCESS_SESSION_QUERY_TIMEOUT_MS = 3e3;
+const ENDPOINT_CACHE_MS = 3e4;
+const PROCESS_SESSION_CACHE_MS = 1e3;
+const CACHE_MAX_AGE_MS$2 = 30 * 6e4;
+const CACHE_MAX_ENTRIES$2 = 256;
+const STORED_ENDPOINT_MAX_AGE_MS = 720 * 60 * 6e4;
+const STORED_ENDPOINT_MAX_ENTRIES = 256;
+const STORED_ENDPOINT_MAX_BYTES = 4 * 1024;
+const NEWEST_FIRST = "ORDER BY ts DESC, id DESC LIMIT 1";
+const endpointCache = /* @__PURE__ */ new Map();
+const processSessionCache = /* @__PURE__ */ new Map();
+function storedEndpointDirectory(env) {
+	return path.join(getHudStateDirectory(env), "session-endpoints");
+}
+function storedEndpointPath(sessionId, env) {
+	return path.join(storedEndpointDirectory(env), `${sessionId}.json`);
+}
+function readStoredEndpoint(sessionId, env, now) {
+	const filePath = storedEndpointPath(sessionId, env);
+	try {
+		const stat = fs.statSync(filePath);
+		if (!stat.isFile() || stat.size > STORED_ENDPOINT_MAX_BYTES || now - stat.mtimeMs > STORED_ENDPOINT_MAX_AGE_MS) return null;
+		const stored = JSON.parse(fs.readFileSync(filePath, "utf8"));
+		const observedAt = typeof stored.observedAt === "string" ? new Date(stored.observedAt) : null;
+		if (stored.version !== 1 || typeof stored.origin !== "string" || stored.evidenceSource !== "log-request" && stored.evidenceSource !== "log-init" || !observedAt || Number.isNaN(observedAt.getTime()) || now - observedAt.getTime() > STORED_ENDPOINT_MAX_AGE_MS) return null;
+		const origin = endpointOrigin(stored.origin);
+		return origin ? {
+			url: origin,
+			source: "persisted"
+		} : null;
+	} catch {
+		return null;
+	}
+}
+function pruneStoredEndpoints(directory, now) {
+	try {
+		const entries = fs.readdirSync(directory, { withFileTypes: true }).filter((entry) => entry.isFile() && SESSION_ID_PATTERN.test(entry.name.replace(/\.json$/, ""))).map((entry) => {
+			const filePath = path.join(directory, entry.name);
+			return {
+				filePath,
+				mtimeMs: fs.statSync(filePath).mtimeMs
+			};
+		}).sort((left, right) => right.mtimeMs - left.mtimeMs);
+		for (const [index, entry] of entries.entries()) if (index >= STORED_ENDPOINT_MAX_ENTRIES || now - entry.mtimeMs > STORED_ENDPOINT_MAX_AGE_MS) fs.rmSync(entry.filePath, { force: true });
+	} catch {}
+}
+function writeStoredEndpoint(sessionId, endpoint, env, now) {
+	if (endpoint.source === "persisted") return;
+	const origin = endpointOrigin(endpoint.url);
+	if (!origin) return;
+	const directory = storedEndpointDirectory(env);
+	const filePath = storedEndpointPath(sessionId, env);
+	const temporaryPath = `${filePath}.${process.pid}.tmp`;
+	try {
+		fs.mkdirSync(directory, {
+			recursive: true,
+			mode: 448
+		});
+		const stored = {
+			version: 1,
+			origin,
+			evidenceSource: endpoint.source,
+			observedAt: new Date(now).toISOString()
+		};
+		fs.writeFileSync(temporaryPath, `${JSON.stringify(stored)}\n`, {
+			encoding: "utf8",
+			mode: 384
+		});
+		fs.renameSync(temporaryPath, filePath);
+		fs.chmodSync(filePath, 384);
+		pruneStoredEndpoints(directory, now);
+	} catch {
+		try {
+			fs.rmSync(temporaryPath, { force: true });
+		} catch {}
+	}
+}
+/**
+* Codex writes its tracing log to `logs_<schema>.sqlite`; pick the newest
+* schema so a Codex upgrade that bumps the suffix keeps working.
+*/
+function findCodexLogDatabase(codexHome = getCodexHome()) {
+	let best = null;
+	let entries;
+	try {
+		entries = fs.readdirSync(codexHome, { withFileTypes: true });
+	} catch {
+		return null;
+	}
+	for (const entry of entries) {
+		const match = LOG_DATABASE_PATTERN.exec(entry.name);
+		if (!match || !entry.isFile()) continue;
+		const version = Number(match[1] ?? 0);
+		if (!best || version > best.version) best = {
+			file: path.join(codexHome, entry.name),
+			version
+		};
+	}
+	return best?.file ?? null;
+}
+function query(database, sql, timeout = QUERY_TIMEOUT_MS$1) {
+	const result = spawnSync("sqlite3", [
+		"-readonly",
+		"-noheader",
+		"-batch",
+		database,
+		sql
+	], {
+		encoding: "utf8",
+		stdio: [
+			"ignore",
+			"pipe",
+			"ignore"
+		],
+		timeout
+	});
+	return typeof result.stdout === "string" ? result.stdout.split("\n") : [];
+}
+function inspectCodexLogSchema(codexHome = getCodexHome()) {
+	const database = findCodexLogDatabase(codexHome);
+	if (!database) return {
+		database: null,
+		columns: [],
+		endpointCompatible: false,
+		rateLimitCompatible: false
+	};
+	const columns = query(database, "SELECT name FROM pragma_table_info('logs') ORDER BY cid;").map((value) => value.trim()).filter(Boolean);
+	const available = new Set(columns);
+	return {
+		database,
+		columns,
+		endpointCompatible: [
+			"id",
+			"ts",
+			"process_uuid",
+			"thread_id",
+			"target",
+			"feedback_log_body"
+		].every((column) => available.has(column)),
+		rateLimitCompatible: [
+			"id",
+			"ts",
+			"process_uuid",
+			"target",
+			"feedback_log_body"
+		].every((column) => available.has(column))
+	};
+}
+function firstUrl(value) {
+	const url = value.trim().split(/[\s"]/)[0];
+	return url.startsWith("http") ? url : null;
+}
+function endpointOrigin(value) {
+	try {
+		return new URL(value).origin.toLowerCase();
+	} catch {
+		return null;
+	}
+}
+/** Only official OpenAI origins are authoritative for Codex subscription limits. */
+function isOfficialOpenAIEndpoint(value) {
+	if (!value) return false;
+	try {
+		const hostname = new URL(value).hostname.toLowerCase();
+		return hostname === "api.openai.com" || hostname === "chatgpt.com" || hostname.endsWith(".chatgpt.com");
+	} catch {
+		return false;
+	}
+}
+const INIT_ROW = [
+	`SELECT 'init|' || substr(feedback_log_body, instr(feedback_log_body, 'base_url: Some("') + 16, 200)`,
+	`  FROM logs`,
+	` WHERE thread_id IS NULL`,
+	`   AND target = 'codex_core::session::session'`,
+	`   AND instr(feedback_log_body, 'base_url: Some("') > 0`
+].join("\n");
+/** `process_uuid` is `pid:<PID>:<uuid>`, so a PID is a prefix range on it. */
+function processRange(pid) {
+	return `(process_uuid >= 'pid:${pid}:' AND process_uuid < 'pid:${pid};')`;
+}
+/**
+* Codex runs behind an npm wrapper script, so the process that logs is a child
+* of the one the launcher spawned.
+*/
+function processFamily(pid) {
+	const result = spawnSync("pgrep", ["-P", String(pid)], {
+		encoding: "utf8",
+		stdio: [
+			"ignore",
+			"pipe",
+			"ignore"
+		],
+		timeout: QUERY_TIMEOUT_MS$1
+	});
+	return [pid, ...typeof result.stdout === "string" ? result.stdout.split("\n").map((line) => Number.parseInt(line.trim(), 10)).filter(Number.isInteger) : []];
+}
+function shellSql(value) {
+	return value.replaceAll("'", "''");
+}
+/**
+* Resolve a session from the Codex process that owns it. This is needed before
+* a HUD binding has a rollout path: selecting by cwd at that point can borrow a
+* different concurrent session in the same project.
+*/
+function resolveProcessSession(codexPid, cwd, since, env = process.env, now = Date.now()) {
+	if (!Number.isInteger(codexPid) || codexPid <= 0) return null;
+	const cacheKey = `${getCodexHome(env)}:${codexPid}:${cwd}`;
+	const cached = processSessionCache.get(cacheKey);
+	if (cached && now - cached.at < PROCESS_SESSION_CACHE_MS) return cached.value ? { ...cached.value } : null;
+	const remember = (value) => {
+		setTimedCache(processSessionCache, cacheKey, {
+			at: now,
+			value
+		}, CACHE_MAX_AGE_MS$2, CACHE_MAX_ENTRIES$2);
+		return value ? { ...value } : null;
+	};
+	const database = findCodexLogDatabase(getCodexHome(env));
+	if (!database) return remember(null);
+	const ranges = processFamily(codexPid).map(processRange).join(" OR ");
+	if (!ranges) return remember(null);
+	const ids = query(database, [
+		"SELECT DISTINCT thread_id",
+		"  FROM logs",
+		" WHERE thread_id IS NOT NULL",
+		`   AND ts >= ${Math.floor(since.getTime() / 1e3) - 60}`,
+		`   AND (${ranges})`,
+		" ORDER BY ts ASC, id ASC;"
+	].join("\n"), PROCESS_SESSION_QUERY_TIMEOUT_MS).filter((id) => SESSION_ID_PATTERN.test(id.trim()));
+	if (ids.length === 0) return remember(null);
+	const candidates = ids.map((id) => `'${shellSql(id.trim())}'`).join(",");
+	const rows = query(path.join(getCodexHome(env), "state_5.sqlite"), [
+		"SELECT id || '|' || rollout_path",
+		"  FROM threads",
+		` WHERE id IN (${candidates})`,
+		`   AND cwd = '${shellSql(path.resolve(cwd))}'`,
+		"   AND (thread_source = 'user' OR thread_source IS NULL)",
+		"   AND (agent_path IS NULL OR agent_path = '')",
+		" ORDER BY created_at_ms ASC, id ASC",
+		" LIMIT 1;"
+	].join("\n"), PROCESS_SESSION_QUERY_TIMEOUT_MS);
+	for (const row of rows) {
+		const separator = row.indexOf("|");
+		if (separator < 0) continue;
+		const sessionId = row.slice(0, separator);
+		const rolloutPath = row.slice(separator + 1);
+		if (SESSION_ID_PATTERN.test(sessionId) && fs.existsSync(rolloutPath)) return remember({
+			sessionId,
+			rolloutPath
+		});
+	}
+	return remember(null);
+}
+/**
+* The endpoint of a Codex process that has not created a session yet. Codex
+* writes no rollout until the first message, so between launch and that message
+* the process is the only thing the HUD can key on.
+*
+* `since` bounds the scan to this launch: the timestamp column is the indexed
+* one, and without a bound the lookup walks every threadless row ever logged.
+*/
+function resolveProcessEndpoint(codexPid, since, env = process.env, now = Date.now()) {
+	if (!Number.isInteger(codexPid) || codexPid <= 0) return null;
+	const codexHome = getCodexHome(env);
+	const cacheKey = `${codexHome}:pid:${codexPid}`;
+	const cached = endpointCache.get(cacheKey);
+	if (cached && now - cached.at < ENDPOINT_CACHE_MS) return cached.value ? { ...cached.value } : null;
+	const database = findCodexLogDatabase(codexHome);
+	const ranges = database ? processFamily(codexPid).map(processRange).join(" OR ") : "";
+	const lines = ranges ? query(database, [
+		INIT_ROW,
+		`   AND ts >= ${Math.floor(since.getTime() / 1e3) - 60}`,
+		`   AND (${ranges})`,
+		` ${NEWEST_FIRST};`
+	].join("\n")) : [];
+	let value = null;
+	for (const line of lines) {
+		const url = line.startsWith("init|") ? firstUrl(line.slice(5)) : null;
+		if (url) {
+			value = {
+				url,
+				source: "log-init"
+			};
+			break;
+		}
+	}
+	value ??= cached?.value ?? null;
+	sweep(now);
+	setTimedCache(endpointCache, cacheKey, {
+		at: now,
+		value
+	}, CACHE_MAX_AGE_MS$2, CACHE_MAX_ENTRIES$2);
+	return value ? { ...value } : null;
+}
+function sweep(now) {
+	pruneTimedCache(endpointCache, now, CACHE_MAX_AGE_MS$2, CACHE_MAX_ENTRIES$2);
+	pruneTimedCache(processSessionCache, now, CACHE_MAX_AGE_MS$2, CACHE_MAX_ENTRIES$2);
+}
+/**
+* The session id doubles as the tracing `thread_id`, so Codex's own log is the
+* only record of which endpoint a session really used: `config.toml` may have
+* been rewritten since, and the rollout stores just the provider id.
+*
+* Both queries are index-backed. `AND thread_id IS NULL` on the second one is
+* load-bearing for speed, not only correctness: without it the lookup degrades
+* to a full scan of a multi-hundred-megabyte table on the render path.
+*/
+function resolveSessionEndpoint(sessionId, env = process.env, now = Date.now()) {
+	if (!SESSION_ID_PATTERN.test(sessionId)) return null;
+	const codexHome = getCodexHome(env);
+	const cacheKey = `${codexHome}:${sessionId}`;
+	const cached = endpointCache.get(cacheKey);
+	if (cached && now - cached.at < ENDPOINT_CACHE_MS) return cached.value ? { ...cached.value } : null;
+	const remember = (value) => {
+		if (value) writeStoredEndpoint(sessionId, value, env, now);
+		sweep(now);
+		setTimedCache(endpointCache, cacheKey, {
+			at: now,
+			value
+		}, CACHE_MAX_AGE_MS$2, CACHE_MAX_ENTRIES$2);
+		return value ? { ...value } : null;
+	};
+	const database = findCodexLogDatabase(codexHome);
+	if (!database) return remember(cached?.value ?? readStoredEndpoint(sessionId, env, now));
+	const lines = query(database, [
+		`SELECT 'request|' || substr(feedback_log_body, instr(feedback_log_body, 'url=') + 4, 200)`,
+		`  FROM logs`,
+		` WHERE thread_id = '${sessionId}'`,
+		`   AND target IN ('codex_http_client::default_client', 'codex_http_client::client')`,
+		`   AND instr(feedback_log_body, 'url=') > 0`,
+		` ${NEWEST_FIRST};`,
+		INIT_ROW,
+		`   AND process_uuid = (SELECT process_uuid FROM logs WHERE thread_id = '${sessionId}' ${NEWEST_FIRST})`,
+		`   AND ts <= (SELECT min(ts) FROM logs WHERE thread_id = '${sessionId}')`,
+		` ${NEWEST_FIRST};`
+	].join("\n"));
+	let fallback = null;
+	for (const line of lines) {
+		const separator = line.indexOf("|");
+		if (separator < 0) continue;
+		const tag = line.slice(0, separator);
+		const url = firstUrl(line.slice(separator + 1));
+		if (!url) continue;
+		if (tag === "request") return remember({
+			url,
+			source: "log-request"
+		});
+		if (tag === "init" && !fallback) fallback = {
+			url,
+			source: "log-init"
+		};
+	}
+	return remember(fallback ?? cached?.value ?? readStoredEndpoint(sessionId, env, now));
+}
+
+//#endregion
 //#region src/collectors/session-metadata.ts
 const titleCache = /* @__PURE__ */ new Map();
 const authCache = /* @__PURE__ */ new Map();
 const METADATA_CACHE_MS = 3e4;
 const METADATA_CACHE_MAX_AGE_MS = 30 * 6e4;
 const METADATA_CACHE_MAX_ENTRIES = 256;
-function record(value) {
+function record$2(value) {
 	return value && typeof value === "object" && !Array.isArray(value) ? value : null;
 }
 function decodeJwt(value) {
 	const payload = value.split(".")[1];
 	if (!payload) return null;
 	try {
-		return record(JSON.parse(Buffer.from(payload, "base64url").toString("utf8")));
+		return record$2(JSON.parse(Buffer.from(payload, "base64url").toString("utf8")));
 	} catch {
 		return null;
 	}
 }
 function findString(value, keys, depth = 0) {
 	if (depth > 5) return null;
-	const item = record(value);
+	const item = record$2(value);
 	if (!item) return null;
 	for (const [key, child] of Object.entries(item)) if (keys.has(key.toLowerCase()) && typeof child === "string" && child.trim()) return child.trim();
 	for (const child of Object.values(item)) {
@@ -2580,7 +1217,7 @@ function jwtUser(value, depth = 0) {
 		]));
 		return email ? email.split("@")[0] : null;
 	}
-	const item = record(value);
+	const item = record$2(value);
 	if (!item) return null;
 	for (const child of Object.values(item)) {
 		const found = jwtUser(child, depth + 1);
@@ -2624,10 +1261,10 @@ function configuredBaseUrl(session, env) {
 	try {
 		const configPath = path.join(getCodexHome(env), "config.toml");
 		if (fs.statSync(configPath).mtimeMs > session.startTime.getTime()) return null;
-		const config = record(parse(fs.readFileSync(configPath, "utf8")));
+		const config = record$2(parse(fs.readFileSync(configPath, "utf8")));
 		const providerName = session?.modelProvider ?? (typeof config?.model_provider === "string" ? config.model_provider : null);
 		if (!providerName) return null;
-		const provider = record(record(config?.model_providers)?.[providerName]);
+		const provider = record$2(record$2(config?.model_providers)?.[providerName]);
 		return typeof provider?.base_url === "string" ? provider.base_url : null;
 	} catch {
 		return null;
@@ -2636,14 +1273,14 @@ function configuredBaseUrl(session, env) {
 function hasApiKeyCredential(env = process.env) {
 	if (env.OPENAI_API_KEY) return true;
 	try {
-		const auth = record(JSON.parse(fs.readFileSync(path.join(getCodexHome(env), "auth.json"), "utf8")));
+		const auth = record$2(JSON.parse(fs.readFileSync(path.join(getCodexHome(env), "auth.json"), "utf8")));
 		return typeof auth?.OPENAI_API_KEY === "string" && Boolean(auth.OPENAI_API_KEY);
 	} catch {
 		return false;
 	}
 }
 function hasChatGptCredential(auth) {
-	const tokens = record(auth.tokens);
+	const tokens = record$2(auth.tokens);
 	return [
 		"access_token",
 		"refresh_token",
@@ -2653,7 +1290,7 @@ function hasChatGptCredential(auth) {
 function hasTrustedOpenAiAuth(session, env = process.env) {
 	if (!session || hasApiKeyCredential(env)) return false;
 	try {
-		const auth = record(JSON.parse(fs.readFileSync(path.join(getCodexHome(env), "auth.json"), "utf8")));
+		const auth = record$2(JSON.parse(fs.readFileSync(path.join(getCodexHome(env), "auth.json"), "utf8")));
 		if (!auth || !hasChatGptCredential(auth)) return false;
 	} catch {
 		return false;
@@ -2661,8 +1298,8 @@ function hasTrustedOpenAiAuth(session, env = process.env) {
 	try {
 		const configPath = path.join(getCodexHome(env), "config.toml");
 		if (fs.statSync(configPath).mtimeMs > session.startTime.getTime()) return false;
-		const providers = record(record(parse(fs.readFileSync(configPath, "utf8")))?.model_providers);
-		const provider = session.modelProvider ? record(providers?.[session.modelProvider]) : null;
+		const providers = record$2(record$2(parse(fs.readFileSync(configPath, "utf8")))?.model_providers);
+		const provider = session.modelProvider ? record$2(providers?.[session.modelProvider]) : null;
 		if (session.modelProvider?.toLowerCase() === "openai" && !provider) return true;
 		const baseUrl = typeof provider?.base_url === "string" ? provider.base_url : null;
 		return provider?.requires_openai_auth === true && (!baseUrl || isOfficialOpenAIEndpoint(baseUrl));
@@ -2677,7 +1314,7 @@ function collectAuthInfo(planType, session = null, env = process.env, codexProce
 	const authPath = path.join(getCodexHome(env), "auth.json");
 	let auth = {};
 	try {
-		auth = record(JSON.parse(fs.readFileSync(authPath, "utf8"))) ?? {};
+		auth = record$2(JSON.parse(fs.readFileSync(authPath, "utf8"))) ?? {};
 	} catch {}
 	const hasApiKey = hasApiKeyCredential(env);
 	const user = jwtUser(auth) ?? findString(auth, /* @__PURE__ */ new Set([
@@ -2764,6 +1401,1753 @@ function collectSessionTitle(session, env = process.env) {
 		title: normalized
 	}, METADATA_CACHE_MAX_AGE_MS, METADATA_CACHE_MAX_ENTRIES);
 	return normalized;
+}
+
+//#endregion
+//#region src/runtime/process.ts
+function findExecutable(name, env = process.env, excludedPaths = []) {
+	const explicit = name === "codex" ? env.CODEX_HUD_CODEX_BIN || env.CODEX_HUB_CODEX_BIN : void 0;
+	const candidates = explicit ? [explicit] : (env.PATH ?? "").split(path.delimiter).filter(Boolean).map((directory) => path.join(directory, name));
+	const excluded = new Set(excludedPaths.map((value) => path.resolve(value)));
+	for (const candidate of candidates) {
+		const resolved = path.resolve(candidate);
+		if (excluded.has(resolved)) continue;
+		try {
+			fs.accessSync(resolved, fs.constants.X_OK);
+			if (fs.statSync(resolved).isFile()) {
+				if (name === "codex") {
+					const codexHome = path.resolve(env.CODEX_HOME || path.join(os.homedir(), ".codex"));
+					for (const directory of ["codex-hud", "codex-hub"]) try {
+						const state = JSON.parse(fs.readFileSync(path.join(codexHome, directory, "install.json"), "utf8"));
+						if (Array.isArray(state.managedFiles) && state.managedFiles.map((value) => path.resolve(String(value))).includes(resolved) && typeof state.realCodex === "string") {
+							fs.accessSync(state.realCodex, fs.constants.X_OK);
+							return path.resolve(state.realCodex);
+						}
+					} catch {}
+				}
+				return resolved;
+			}
+		} catch {}
+	}
+	if (name === "codex" && !explicit) {
+		const codexHome = path.resolve(env.CODEX_HOME || path.join(os.homedir(), ".codex"));
+		for (const directory of ["codex-hud", "codex-hub"]) try {
+			const state = JSON.parse(fs.readFileSync(path.join(codexHome, directory, "install.json"), "utf8"));
+			if (typeof state.realCodex !== "string" || !path.isAbsolute(state.realCodex)) continue;
+			const resolved = path.resolve(state.realCodex);
+			if (excluded.has(resolved) || Array.isArray(state.managedFiles) && state.managedFiles.some((file) => path.resolve(String(file)) === resolved)) continue;
+			fs.accessSync(resolved, fs.constants.X_OK);
+			if (fs.statSync(resolved).isFile()) return resolved;
+		} catch {}
+	}
+	return null;
+}
+function shellQuote(value) {
+	if (value.length === 0) return "''";
+	return `'${value.replace(/'/g, `'"'"'`)}'`;
+}
+function shellCommand(command, args) {
+	return [command, ...args].map(shellQuote).join(" ");
+}
+
+//#endregion
+//#region package.json
+var version = "0.9.1";
+
+//#endregion
+//#region src/version.ts
+const HUD_VERSION = version;
+
+//#endregion
+//#region src/codex/rate-limits.ts
+function numberValue$1(...values) {
+	for (const value of values) if (typeof value === "number" && Number.isFinite(value)) return value;
+	return null;
+}
+function resetDate(value) {
+	if (typeof value === "number" && Number.isFinite(value)) {
+		const milliseconds = value > 1e10 ? value : value * 1e3;
+		const date = new Date(milliseconds);
+		return Number.isNaN(date.getTime()) ? null : date;
+	}
+	if (typeof value === "string" && value) {
+		const date = new Date(value);
+		return Number.isNaN(date.getTime()) ? null : date;
+	}
+	return null;
+}
+function labelForWindow(window, fallback) {
+	const minutes = numberValue$1(window.window_minutes);
+	if (minutes === null) return fallback;
+	if (minutes % 10080 === 0) return `${minutes / 10080}w`;
+	if (minutes % 1440 === 0) return `${minutes / 1440}d`;
+	if (minutes % 60 === 0) return `${minutes / 60}h`;
+	return `${minutes}m`;
+}
+function normalizeWindow(value, fallbackLabel, individual = false) {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+	const window = value;
+	const rawPercent = individual ? numberValue$1(typeof window.remaining_percent === "number" ? 100 - window.remaining_percent : null, window.used_percent, window.used_percentage, window.utilization) : numberValue$1(window.used_percent, window.used_percentage, window.utilization);
+	const percent = rawPercent === null ? null : Math.min(100, Math.max(0, rawPercent));
+	const observedAt = resetDate(window.hud_observed_at);
+	return {
+		...observedAt ? { observedAt } : {},
+		label: labelForWindow(window, fallbackLabel),
+		percent,
+		resetAt: resetDate(window.resets_at ?? window.reset_at),
+		windowMinutes: numberValue$1(window.window_minutes)
+	};
+}
+function normalizeRateLimits(raw) {
+	if (!raw) return null;
+	const credits = raw.credits && typeof raw.credits === "object" ? raw.credits : null;
+	const rawBalance = credits && typeof credits.balance === "string" ? credits.balance.trim() : "";
+	const balance = credits && rawBalance && !(credits.has_credits === false && rawBalance === "0") ? rawBalance : null;
+	const usage = {
+		primary: normalizeWindow(raw.primary, "limit"),
+		secondary: normalizeWindow(raw.secondary, "limit"),
+		individual: normalizeWindow(raw.individual_limit, "spend", true),
+		planType: typeof raw.plan_type === "string" ? raw.plan_type : null,
+		balanceLabel: balance,
+		limitReachedType: typeof raw.rate_limit_reached_type === "string" ? raw.rate_limit_reached_type : raw.spend_control_reached === true ? "spend_control_reached" : null
+	};
+	return usage.primary || usage.secondary || usage.individual || usage.planType || usage.balanceLabel || usage.limitReachedType ? usage : null;
+}
+/**
+* Normalize only the account-wide Codex quota. Newer Codex builds also emit
+* named, model-specific limits (for example `codex_bengalfox`) through the
+* same field; those must not replace the ChatGPT account windows in the HUD.
+* Older rollout contracts had no limit id, so an absent id remains valid.
+*/
+function normalizeAccountRateLimits(raw) {
+	const limitId = typeof raw?.limit_id === "string" ? raw.limit_id.trim().toLowerCase() : "";
+	return !limitId || limitId === "codex" ? normalizeRateLimits(raw) : null;
+}
+function sameWindow(left, right) {
+	if (left.windowMinutes !== null && left.windowMinutes !== void 0 && right.windowMinutes !== null && right.windowMinutes !== void 0) return left.windowMinutes === right.windowMinutes;
+	if (left.label !== "limit" && right.label !== "limit" && left.label === right.label) return true;
+	return Boolean(left.resetAt && right.resetAt && Math.abs(left.resetAt.getTime() - right.resetAt.getTime()) <= 6e4);
+}
+function mergeWindows(current, observed) {
+	const windows = [current.primary, current.secondary].filter((window) => Boolean(window));
+	for (const window of [observed.primary, observed.secondary]) {
+		if (!window) continue;
+		const index = windows.findIndex((candidate) => sameWindow(candidate, window));
+		if (index >= 0) {
+			const previous = windows[index];
+			if (!previous.observedAt || !window.observedAt || window.observedAt >= previous.observedAt) windows[index] = window;
+		} else windows.push(window);
+	}
+	windows.sort((left, right) => (left.windowMinutes ?? Number.MAX_SAFE_INTEGER) - (right.windowMinutes ?? Number.MAX_SAFE_INTEGER));
+	return [windows[0] ?? null, windows[1] ?? null];
+}
+/** Merge a newer account-wide observation without confusing its window slots. */
+function mergeUsageData(current, observed) {
+	if (!current) return observed;
+	if (!observed) return current;
+	if (current.observedAt && observed.observedAt && current.observedAt > observed.observedAt) return mergeUsageData(observed, current);
+	if (observed.complete) return observed;
+	const [primary, secondary] = mergeWindows(current, observed);
+	return {
+		...observed.observedAt ? {
+			observedAt: observed.observedAt,
+			source: observed.source
+		} : {},
+		primary,
+		secondary,
+		individual: current.individual?.observedAt && observed.individual?.observedAt && current.individual.observedAt > observed.individual.observedAt ? current.individual : observed.individual ?? current.individual,
+		planType: observed.planType ?? current.planType,
+		balanceLabel: observed.balanceLabel ?? current.balanceLabel,
+		limitReachedType: observed.limitReachedType ?? current.limitReachedType
+	};
+}
+function observeUsage(usage, observedAt, source) {
+	if (!usage || !observedAt) return usage;
+	const stamp = (window) => window ? {
+		...window,
+		observedAt: window.observedAt ?? observedAt
+	} : null;
+	return {
+		...usage,
+		observedAt,
+		source,
+		primary: stamp(usage.primary),
+		secondary: stamp(usage.secondary),
+		individual: stamp(usage.individual)
+	};
+}
+function evaluateUsageTrust(endpoint, trustedOpenAiAuth) {
+	if (isOfficialOpenAIEndpoint(endpoint)) return {
+		trusted: true,
+		reason: "official-endpoint",
+		effectiveEndpoint: endpoint
+	};
+	if (endpoint) return {
+		trusted: false,
+		reason: "untrusted-endpoint",
+		effectiveEndpoint: endpoint
+	};
+	if (trustedOpenAiAuth) return {
+		trusted: true,
+		reason: "chatgpt-auth",
+		effectiveEndpoint: "https://chatgpt.com"
+	};
+	return {
+		trusted: false,
+		reason: "endpoint-unknown",
+		effectiveEndpoint: null
+	};
+}
+
+//#endregion
+//#region src/codex/account-usage.ts
+const ACCOUNT_USAGE_REFRESH_MS = 6e4;
+const ACCOUNT_USAGE_TIMEOUT_MS = 1e4;
+const MAX_RESPONSE_BYTES$1 = 256 * 1024;
+const localAttempts = /* @__PURE__ */ new Map();
+function record$1(value) {
+	return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+}
+function subject(token) {
+	if (typeof token !== "string") return null;
+	try {
+		const claims = record$1(JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString("utf8")));
+		return typeof claims?.sub === "string" ? claims.sub : null;
+	} catch {
+		return null;
+	}
+}
+function accountContext(endpoint, env) {
+	try {
+		if (!endpoint || new URL(endpoint).origin !== "https://chatgpt.com" || hasApiKeyCredential(env)) return null;
+		const authPath = path.join(getCodexHome(env), "auth.json");
+		const tokens = record$1(record$1(JSON.parse(fs.readFileSync(authPath, "utf8")))?.tokens);
+		if (!tokens || typeof tokens.access_token !== "string" || !tokens.access_token) return null;
+		const accountId = typeof tokens.account_id === "string" ? tokens.account_id : null;
+		const user = subject(tokens.id_token) ?? subject(tokens.access_token);
+		const key = createHash("sha256").update(JSON.stringify([accountId, user ?? tokens.access_token])).digest("hex");
+		const directory = path.join(getHudStateDirectory(env), "account-usage");
+		return {
+			key,
+			accountId,
+			authModifiedAt: fs.statSync(authPath).mtimeMs,
+			directory,
+			file: path.join(directory, `${key}.json`)
+		};
+	} catch {
+		return null;
+	}
+}
+function rawWindow$1(value) {
+	const window = record$1(value);
+	if (!window) return null;
+	const remaining = window.remainingPercent;
+	const used = window.usedPercent;
+	if (!(typeof used === "number" && Number.isFinite(used)) && !(typeof remaining === "number" && Number.isFinite(remaining))) throw new TypeError("Invalid quota window");
+	return {
+		used_percent: typeof used === "number" ? used : null,
+		remaining_percent: typeof remaining === "number" ? remaining : null,
+		window_minutes: typeof window.windowDurationMins === "number" ? window.windowDurationMins : null,
+		resets_at: typeof window.resetsAt === "number" ? window.resetsAt : null
+	};
+}
+/** Whitelist the documented account bucket; never substitute a model bucket. */
+function accountRateLimits(result) {
+	try {
+		const response = record$1(result);
+		const buckets = record$1(response?.rateLimitsByLimitId);
+		const limits = buckets ? record$1(buckets.codex) : record$1(response?.rateLimits);
+		if (!limits || limits.limitId != null && limits.limitId !== "codex") return null;
+		const credits = record$1(limits.credits);
+		const raw = {
+			limit_id: "codex",
+			primary: rawWindow$1(limits.primary),
+			secondary: rawWindow$1(limits.secondary),
+			individual_limit: rawWindow$1(limits.individualLimit),
+			credits: credits ? {
+				has_credits: credits.hasCredits === true,
+				balance: typeof credits.balance === "string" ? credits.balance : null
+			} : null,
+			plan_type: typeof limits.planType === "string" ? limits.planType : null,
+			rate_limit_reached_type: typeof limits.rateLimitReachedType === "string" ? limits.rateLimitReachedType : null,
+			spend_control_reached: limits.spendControlReached === true
+		};
+		return raw.primary || raw.secondary || raw.individual_limit || raw.credits ? raw : null;
+	} catch {
+		return null;
+	}
+}
+function readStored(context) {
+	try {
+		if (fs.statSync(context.file).size > MAX_RESPONSE_BYTES$1) return null;
+		const stored = JSON.parse(fs.readFileSync(context.file, "utf8"));
+		return stored.version === 1 && Number.isFinite(stored.attemptedAt) ? stored : null;
+	} catch {
+		return null;
+	}
+}
+function writeStored(context, value) {
+	const temporary = `${context.file}.${process.pid}.tmp`;
+	try {
+		fs.writeFileSync(temporary, `${JSON.stringify(value)}\n`, { mode: 384 });
+		fs.renameSync(temporary, context.file);
+	} finally {
+		fs.rmSync(temporary, { force: true });
+	}
+}
+function status(context) {
+	const stored = context ? readStored(context) : null;
+	const local = context ? localAttempts.get(context.file) : null;
+	const latest = local && local.at >= (stored?.attemptedAt ?? 0) ? local : null;
+	const date = stored?.observedAt && Number.isFinite(stored.observedAt) ? new Date(stored.observedAt) : null;
+	const observedAt = date && !Number.isNaN(date.getTime()) ? date : null;
+	const usage = observedAt ? observeUsage(normalizeAccountRateLimits(stored?.limits), observedAt, "account") : null;
+	return {
+		enabled: Boolean(context),
+		usage: usage ? {
+			...usage,
+			complete: true
+		} : null,
+		attemptedAt: latest ? new Date(latest.at) : stored ? new Date(stored.attemptedAt) : null,
+		failed: latest?.failed ?? stored?.failed === true,
+		authModifiedAt: context?.authModifiedAt ?? 0
+	};
+}
+/** Only initialize, check auth, and read quota. Never start a thread or login. */
+function queryAccountRateLimits(env, accountId) {
+	const executable = findExecutable("codex", {
+		...env,
+		PATH: ""
+	}) ?? findExecutable("codex", env);
+	if (!executable) return Promise.resolve(null);
+	return new Promise((resolve) => {
+		const child = spawn(executable, [
+			"app-server",
+			"-c",
+			"chatgpt_base_url=\"https://chatgpt.com/backend-api/\""
+		], {
+			cwd: getHudStateDirectory(env),
+			env: {
+				...env,
+				PATH: [path.dirname(process.execPath), env.PATH].filter(Boolean).join(path.delimiter)
+			},
+			stdio: [
+				"pipe",
+				"pipe",
+				"ignore"
+			]
+		});
+		let done = false;
+		let buffer = "";
+		let bytes = 0;
+		let expectedId = 0;
+		let timeout;
+		const kill = () => {
+			child.kill("SIGKILL");
+		};
+		const finish = (value) => {
+			if (done) return;
+			done = true;
+			clearTimeout(timeout);
+			process.off("exit", kill);
+			child.stdin.destroy();
+			kill();
+			resolve(value);
+		};
+		timeout = setTimeout(finish, ACCOUNT_USAGE_TIMEOUT_MS, null);
+		process.once("exit", kill);
+		const send = (value) => {
+			child.stdin.write(`${JSON.stringify(value)}\n`);
+		};
+		child.on("error", () => finish(null));
+		child.on("close", () => finish(null));
+		child.stdin.on("error", () => finish(null));
+		child.stdout.setEncoding("utf8");
+		child.stdout.on("data", (chunk) => {
+			bytes += Buffer.byteLength(chunk);
+			if (bytes > MAX_RESPONSE_BYTES$1) {
+				finish(null);
+				return;
+			}
+			buffer += chunk;
+			while (buffer.includes("\n")) {
+				if (done) break;
+				const newline = buffer.indexOf("\n");
+				const line = buffer.slice(0, newline);
+				buffer = buffer.slice(newline + 1);
+				try {
+					const message = record$1(JSON.parse(line));
+					if (message?.id !== expectedId) continue;
+					if (message.error || !record$1(message.result)) finish(null);
+					else if (expectedId === 0) {
+						expectedId = 1;
+						send({
+							method: "initialized",
+							params: {}
+						});
+						send({
+							id: 1,
+							method: "account/read",
+							params: { refreshToken: false }
+						});
+					} else if (expectedId === 1) {
+						if (record$1(record$1(message.result)?.account)?.type !== "chatgpt") {
+							finish(null);
+							continue;
+						}
+						expectedId = 2;
+						send({
+							id: 2,
+							method: "account/rateLimits/read"
+						});
+					} else {
+						const result = record$1(message.result);
+						finish(accountId && result?.accountId && result.accountId !== accountId ? null : accountRateLimits(result));
+					}
+				} catch {
+					finish(null);
+				}
+			}
+		});
+		send({
+			id: 0,
+			method: "initialize",
+			params: { clientInfo: {
+				name: "codex_hud",
+				version: HUD_VERSION
+			} }
+		});
+	});
+}
+const pending = /* @__PURE__ */ new Map();
+async function refreshAccountUsage(endpoint, env = process.env) {
+	const context = accountContext(endpoint, env);
+	if (!context) return status(null);
+	const existing = pending.get(context.file);
+	if (existing) return existing;
+	const cached = status(context);
+	if (cached.attemptedAt && Date.now() >= cached.attemptedAt.getTime() && Date.now() - cached.attemptedAt.getTime() < 6e4) return cached;
+	const run = async () => {
+		const lock = `${context.file}.lock`;
+		let ownsLock = false;
+		let lockInode = null;
+		const stillOwnsLock = () => {
+			try {
+				return ownsLock && fs.statSync(lock).ino === lockInode;
+			} catch {
+				return false;
+			}
+		};
+		try {
+			fs.mkdirSync(context.directory, {
+				recursive: true,
+				mode: 448
+			});
+			if (fs.existsSync(lock) && Date.now() - fs.statSync(lock).mtimeMs > 1e4 * 3) fs.rmdirSync(lock);
+			fs.mkdirSync(lock, { mode: 448 });
+			ownsLock = true;
+			lockInode = fs.statSync(lock).ino;
+			const previous = readStored(context);
+			const attemptedAt = Date.now();
+			if (previous && attemptedAt >= previous.attemptedAt && attemptedAt - previous.attemptedAt < 6e4) return status(context);
+			writeStored(context, {
+				...previous,
+				version: 1,
+				attemptedAt,
+				failed: previous?.failed ?? false
+			});
+			const limits = await queryAccountRateLimits(env, context.accountId);
+			const current = accountContext(endpoint, env);
+			if (current?.key !== context.key) return status(current);
+			if (!stillOwnsLock() || Date.now() - attemptedAt > 1e4 * 2) return status(context);
+			writeStored(context, {
+				...previous,
+				version: 1,
+				attemptedAt,
+				failed: !limits,
+				...limits ? {
+					limits,
+					observedAt: attemptedAt
+				} : {}
+			});
+			return status(context);
+		} catch {
+			if (ownsLock || !fs.existsSync(lock)) {
+				if (localAttempts.size >= 64) localAttempts.delete(localAttempts.keys().next().value);
+				localAttempts.set(context.file, {
+					at: Date.now(),
+					failed: true
+				});
+			}
+			return status(context);
+		} finally {
+			if (stillOwnsLock()) try {
+				fs.rmdirSync(lock);
+			} catch {}
+		}
+	};
+	const promise = run().finally(() => pending.delete(context.file));
+	pending.set(context.file, promise);
+	return promise;
+}
+function readCachedAccountUsage(endpoint, env = process.env, onRefresh) {
+	const context = accountContext(endpoint, env);
+	const current = status(context);
+	if (context && !pending.has(context.file) && (!current.attemptedAt || Date.now() - current.attemptedAt.getTime() >= 6e4)) refreshAccountUsage(endpoint, env).then((next) => {
+		if (next.attemptedAt?.getTime() !== current.attemptedAt?.getTime() || next.usage?.observedAt?.getTime() !== current.usage?.observedAt?.getTime() || next.failed !== current.failed) onRefresh?.();
+	});
+	return current;
+}
+function selectAccountUsage(rollout, logged, account) {
+	let usage = mergeUsageData(account?.enabled ? rollout?.observedAt && rollout.observedAt.getTime() >= account.authModifiedAt ? rollout : null : rollout, account?.enabled ? account.usage : logged);
+	if (usage && account?.failed) usage = {
+		...usage,
+		refreshFailed: true
+	};
+	return usage;
+}
+
+//#endregion
+//#region src/codex/external-usage.ts
+const MAX_BALANCE_LABEL = 80;
+const MAX_RESPONSE_BYTES = 64 * 1024;
+const WRITE_HEARTBEAT_MS = 6e4;
+const WRITE_CACHE_MAX_AGE_MS = 30 * 6e4;
+const WRITE_CACHE_MAX_ENTRIES = 64;
+const QUERY_FAILURE_RETRY_MS = 15e3;
+const QUERY_STALE_MAX_MS = 15 * 6e4;
+const QUERY_CACHE_MAX_AGE_MS = 1440 * 6e4;
+const QUERY_CACHE_MAX_ENTRIES = 64;
+const lastWrites = /* @__PURE__ */ new Map();
+const queryCache = /* @__PURE__ */ new Map();
+const inFlightQueries = /* @__PURE__ */ new Map();
+function safePercent(value) {
+	return typeof value === "number" && Number.isFinite(value) ? Math.min(100, Math.max(0, Math.round(value))) : null;
+}
+function safeReset(value) {
+	if (typeof value !== "string" && typeof value !== "number") return null;
+	const date = new Date(typeof value === "number" && value < 1e10 ? value * 1e3 : value);
+	return Number.isNaN(date.getTime()) ? null : date;
+}
+function sanitizeLabel(value) {
+	if (typeof value !== "string") return null;
+	const label = value.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, " ").replace(/\s+/g, " ").trim();
+	return label ? label.slice(0, MAX_BALANCE_LABEL) : null;
+}
+function formatCredits(value) {
+	return Number.isInteger(value) ? value.toString() : value.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
+}
+function usageData(balanceLabel) {
+	return {
+		primary: null,
+		secondary: null,
+		individual: null,
+		planType: null,
+		balanceLabel,
+		limitReachedType: null
+	};
+}
+function credentialFingerprint(value) {
+	return createHash("sha256").update(value).digest("hex").slice(0, 16);
+}
+async function responseJson(response) {
+	const contentLength = response.headers.get("content-length");
+	if (contentLength) {
+		const declaredLength = Number(contentLength);
+		if (Number.isFinite(declaredLength) && declaredLength > MAX_RESPONSE_BYTES) return null;
+	}
+	try {
+		if (!response.body) {
+			const text = await response.text();
+			if (Buffer.byteLength(text, "utf8") > MAX_RESPONSE_BYTES) return null;
+			return JSON.parse(text);
+		}
+		const reader = response.body.getReader();
+		const chunks = [];
+		let size = 0;
+		try {
+			while (true) {
+				const result = await reader.read();
+				if (result.done) break;
+				size += result.value.byteLength;
+				if (size > MAX_RESPONSE_BYTES) {
+					await reader.cancel();
+					return null;
+				}
+				chunks.push(result.value);
+			}
+		} finally {
+			reader.releaseLock();
+		}
+		const bytes = new Uint8Array(size);
+		let offset = 0;
+		for (const chunk of chunks) {
+			bytes.set(chunk, offset);
+			offset += chunk.byteLength;
+		}
+		return JSON.parse(new TextDecoder().decode(bytes));
+	} catch {
+		return null;
+	}
+}
+function newApiUsage(body, quotaPerCredit) {
+	const response = body;
+	const quota = response?.success === true && typeof response.data?.quota === "number" && Number.isFinite(response.data.quota) ? response.data.quota : null;
+	if (quota === null) return null;
+	const group = sanitizeLabel(response.data?.group);
+	return usageData(`${group ? `${group}: ` : ""}$${formatCredits(Math.max(0, quota) / quotaPerCredit)}`);
+}
+function sub2ApiUsage(body) {
+	const response = body;
+	const balance = response?.code === 0 && typeof response.data?.balance === "number" && Number.isFinite(response.data.balance) ? response.data.balance : null;
+	if (balance === null) return null;
+	return usageData(`$${formatCredits(Math.max(0, balance))}`);
+}
+function generalUsage(body) {
+	const response = body;
+	if (response?.isValid === false) return null;
+	const rawBalance = response?.remaining ?? response?.balance;
+	const balance = typeof rawBalance === "number" && Number.isFinite(rawBalance) ? rawBalance : null;
+	if (balance === null) return null;
+	const unit = sanitizeLabel(response.unit) ?? "USD";
+	const planName = sanitizeLabel(response.planName);
+	const amount = formatCredits(Math.max(0, balance));
+	const formatted = unit === "USD" ? `$${amount}` : `${amount} ${unit}`;
+	return usageData(planName ? `${planName}: ${formatted}` : formatted);
+}
+function generalQueryUrls(endpoint, origin) {
+	const urls = [`${origin}/user/balance`];
+	try {
+		const usageUrl = `${origin}${new URL(endpoint).pathname.replace(/\/(?:responses|chat\/completions)\/?$/, "")}/usage`.replace(/([^:]\/)\/+/, "$1");
+		if (!urls.includes(usageUrl)) urls.push(usageUrl);
+	} catch {}
+	return urls;
+}
+function configuredQuery(queries, endpoint) {
+	if (!endpoint) return null;
+	let origin;
+	try {
+		origin = new URL(endpoint).origin.toLowerCase();
+		const originUrl = new URL(origin);
+		const hostname = originUrl.hostname.toLowerCase();
+		if (!(originUrl.protocol === "https:" || originUrl.protocol === "http:" && (hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]"))) return null;
+	} catch {
+		return null;
+	}
+	if (isOfficialOpenAIEndpoint(origin)) return null;
+	const query = queries.find((query) => query.enabled && query.origin === origin) ?? queries.find((query) => query.enabled && query.origin === "*" && query.template === "general");
+	return query ? {
+		...query,
+		origin
+	} : null;
+}
+function inferenceApiKey(env) {
+	if (env.OPENAI_API_KEY) return env.OPENAI_API_KEY;
+	try {
+		const auth = JSON.parse(fs.readFileSync(path.join(getCodexHome(env), "auth.json"), "utf8"));
+		return typeof auth.OPENAI_API_KEY === "string" && auth.OPENAI_API_KEY ? auth.OPENAI_API_KEY : null;
+	} catch {
+		return null;
+	}
+}
+function configuredQueryContext(queries, endpoint, env) {
+	const query = configuredQuery(queries, endpoint);
+	if (!query || !endpoint) return null;
+	const credentialEnv = query.template === "general" ? query.apiKeyEnv : query.accessTokenEnv;
+	const accessToken = query.template === "general" ? credentialEnv ? env[credentialEnv] : inferenceApiKey(env) : env[credentialEnv];
+	const userId = env[query.userIdEnv];
+	if (!accessToken || query.template === "newApi" && !userId) return null;
+	return {
+		query,
+		endpoint,
+		accessToken,
+		userId,
+		cacheKey: [
+			query.origin,
+			query.template,
+			credentialEnv,
+			query.userIdEnv,
+			query.quotaPerCredit,
+			credentialFingerprint(accessToken),
+			query.template === "newApi" ? credentialFingerprint(userId) : ""
+		].join(":")
+	};
+}
+function cachedQueryValue(cached, now) {
+	return cached?.value && now - cached.valueAt <= QUERY_STALE_MAX_MS ? structuredClone(cached.value) : null;
+}
+async function performConfiguredQuery(context, now) {
+	const { query, endpoint, accessToken, userId, cacheKey } = context;
+	const cached = queryCache.get(cacheKey);
+	const controller = new AbortController();
+	const timeout = setTimeout(() => controller.abort(), 3e3);
+	let value = null;
+	try {
+		const urls = query.template === "general" ? generalQueryUrls(endpoint, query.origin) : [`${query.origin}${query.template === "newApi" ? "/api/user/self" : "/api/v1/auth/me"}`];
+		for (const url of urls) {
+			const response = await fetch(url, {
+				headers: {
+					"Accept": "application/json",
+					"Authorization": `Bearer ${accessToken}`,
+					"User-Agent": `codex-hud/${HUD_VERSION}`,
+					...query.template === "newApi" ? { "New-Api-User": userId } : {}
+				},
+				redirect: "error",
+				signal: controller.signal
+			});
+			if (!response.ok) continue;
+			const body = await responseJson(response);
+			if (body === null) continue;
+			value = query.template === "general" ? generalUsage(body) : query.template === "newApi" ? newApiUsage(body, query.quotaPerCredit) : sub2ApiUsage(body);
+			if (value) break;
+		}
+	} catch {} finally {
+		clearTimeout(timeout);
+	}
+	if (value) {
+		setTimedCache(queryCache, cacheKey, {
+			at: now,
+			valueAt: now,
+			value: structuredClone(value)
+		}, QUERY_CACHE_MAX_AGE_MS, QUERY_CACHE_MAX_ENTRIES);
+		return structuredClone(value);
+	}
+	setTimedCache(queryCache, cacheKey, {
+		at: now,
+		valueAt: cached?.valueAt ?? 0,
+		failedAt: now,
+		value: cached?.value ? structuredClone(cached.value) : null
+	}, QUERY_CACHE_MAX_AGE_MS, QUERY_CACHE_MAX_ENTRIES);
+	return cachedQueryValue(cached, now);
+}
+function startConfiguredQuery(context, now) {
+	const existing = inFlightQueries.get(context.cacheKey);
+	if (existing) return existing;
+	const promise = performConfiguredQuery(context, now).finally(() => {
+		inFlightQueries.delete(context.cacheKey);
+	});
+	inFlightQueries.set(context.cacheKey, promise);
+	return promise;
+}
+/**
+* Query a matching relay balance endpoint. Dedicated credentials are read
+* only from named environment variables and never persisted.
+*/
+async function readConfiguredExternalUsage(queries, endpoint, env, now = Date.now()) {
+	const context = configuredQueryContext(queries, endpoint, env);
+	if (!context) return null;
+	const cached = queryCache.get(context.cacheKey);
+	if (cached?.valueAt && now - cached.valueAt < context.query.refreshMs) return cached.value ? structuredClone(cached.value) : null;
+	if (cached?.failedAt && now - cached.failedAt < QUERY_FAILURE_RETRY_MS) return cachedQueryValue(cached, now);
+	return startConfiguredQuery(context, now);
+}
+function readCachedConfiguredExternalUsage(queries, endpoint, env, onUpdate, now = Date.now()) {
+	const context = configuredQueryContext(queries, endpoint, env);
+	if (!context) return null;
+	const cached = queryCache.get(context.cacheKey);
+	if (cached?.valueAt && now - cached.valueAt < context.query.refreshMs) return cached.value ? structuredClone(cached.value) : null;
+	if (!cached?.failedAt || now - cached.failedAt >= QUERY_FAILURE_RETRY_MS) {
+		if (!inFlightQueries.has(context.cacheKey)) startConfiguredQuery(context, now).finally(onUpdate);
+	}
+	return cachedQueryValue(cached, now);
+}
+function snapshotWindow(value, label, fallbackMinutes) {
+	if (!value || typeof value !== "object") return null;
+	const percent = safePercent(value.used_percentage ?? value.used_percent);
+	if (percent === null) return null;
+	return {
+		label,
+		percent,
+		resetAt: safeReset(value.resets_at),
+		windowMinutes: typeof value.window_minutes === "number" && value.window_minutes > 0 ? value.window_minutes : fallbackMinutes
+	};
+}
+function validSnapshotPath(filePath, write = false) {
+	if (!filePath || !path.isAbsolute(filePath) || !filePath.toLowerCase().endsWith(".json")) return false;
+	if (!write) return true;
+	try {
+		return fs.statSync(path.dirname(filePath)).isDirectory();
+	} catch {
+		return false;
+	}
+}
+function readExternalUsage(filePath, freshnessMs, now = /* @__PURE__ */ new Date()) {
+	if (!validSnapshotPath(filePath)) return null;
+	try {
+		const snapshot = JSON.parse(fs.readFileSync(filePath, "utf8"));
+		const updatedAt = safeReset(snapshot.updated_at);
+		if (!updatedAt || Math.abs(now.getTime() - updatedAt.getTime()) > freshnessMs) return null;
+		const primary = snapshotWindow(snapshot.five_hour, "5h", 300);
+		const secondary = snapshotWindow(snapshot.seven_day, "1w", 10080);
+		const individual = snapshotWindow(snapshot.individual, "spend", 43200);
+		const balanceLabel = sanitizeLabel(snapshot.balance_label);
+		if (!primary && !secondary && !individual && !balanceLabel) return null;
+		return {
+			primary,
+			secondary,
+			individual,
+			planType: null,
+			balanceLabel,
+			limitReachedType: null
+		};
+	} catch {
+		return null;
+	}
+}
+function serializableWindow(window) {
+	if (!window || window.percent === null) return null;
+	return {
+		used_percentage: window.percent,
+		resets_at: window.resetAt?.toISOString() ?? null,
+		window_minutes: window.windowMinutes ?? null
+	};
+}
+function writeExternalUsage(filePath, usage, now = /* @__PURE__ */ new Date()) {
+	if (!validSnapshotPath(filePath, true)) return;
+	const content = {
+		five_hour: serializableWindow(usage.primary),
+		seven_day: serializableWindow(usage.secondary),
+		individual: serializableWindow(usage.individual),
+		balance_label: usage.balanceLabel
+	};
+	const fingerprint = JSON.stringify(content);
+	const previous = lastWrites.get(filePath);
+	if (previous?.fingerprint === fingerprint && now.getTime() - previous.at < WRITE_HEARTBEAT_MS) return;
+	const snapshot = {
+		updated_at: now.toISOString(),
+		...content
+	};
+	try {
+		fs.writeFileSync(filePath, `${JSON.stringify(snapshot, null, 2)}\n`, {
+			encoding: "utf8",
+			mode: 384
+		});
+		fs.chmodSync(filePath, 384);
+		setTimedCache(lastWrites, filePath, {
+			fingerprint,
+			at: now.getTime()
+		}, WRITE_CACHE_MAX_AGE_MS, WRITE_CACHE_MAX_ENTRIES);
+	} catch {}
+}
+function resolveUsageData(nativeUsage, display, now = /* @__PURE__ */ new Date()) {
+	const external = readExternalUsage(display.externalUsagePath, display.externalUsageFreshnessMs, now);
+	if (nativeUsage) {
+		if (display.externalUsageWritePath) writeExternalUsage(display.externalUsageWritePath, nativeUsage, now);
+		return external?.balanceLabel && !nativeUsage.balanceLabel ? {
+			...nativeUsage,
+			balanceLabel: external.balanceLabel
+		} : nativeUsage;
+	}
+	return external;
+}
+
+//#endregion
+//#region src/codex/log-rate-limits.ts
+const EVENT_PREFIX = "SSE event: ";
+const EVENT_TYPE_MARKER = "codex.rate_limits";
+const QUERY_TIMEOUT_MS = 750;
+const CACHE_MS$1 = 15e3;
+const MAX_EVENT_AGE_SECONDS = 11520 * 60;
+const RESETLESS_FRESHNESS_MS = 360 * 60 * 1e3;
+const MAX_ROW_LOOKBACK = 2e5;
+const MAX_EVENT_CANDIDATES = 1e3;
+const SNAPSHOT_FILE_NAME = "account-usage.json";
+const MAX_STORED_BODY_LENGTH = 16384;
+const CACHE_MAX_AGE_MS$1 = 30 * 6e4;
+const CACHE_MAX_ENTRIES$1 = 64;
+const cache$2 = /* @__PURE__ */ new Map();
+function record(value) {
+	return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+}
+function decodeHex(value) {
+	if (!value || value.length % 2 !== 0 || !/^[\dA-F]+$/i.test(value)) return null;
+	try {
+		return Buffer.from(value, "hex").toString("utf8");
+	} catch {
+		return null;
+	}
+}
+function parseEvent(body) {
+	const marker = body.indexOf(EVENT_PREFIX);
+	if (marker < 0) return null;
+	try {
+		const event = record(JSON.parse(body.slice(marker + 11)));
+		const limits = record(event?.rate_limits);
+		if (event?.type !== "codex.rate_limits" || !limits) return null;
+		return normalizeAccountRateLimits({
+			...limits,
+			credits: record(event.credits),
+			plan_type: typeof event.plan_type === "string" ? event.plan_type : null,
+			rate_limit_reached_type: limits.limit_reached === true ? "rate_limit_reached" : null
+		});
+	} catch {
+		return null;
+	}
+}
+function rawWindow(window) {
+	return window ? {
+		used_percent: window.percent,
+		window_minutes: window.windowMinutes ?? null,
+		resets_at: window.resetAt?.toISOString() ?? null,
+		hud_observed_at: window.observedAt?.toISOString() ?? null
+	} : null;
+}
+function rolloutSnapshotBody(usage) {
+	return `${EVENT_PREFIX}${JSON.stringify({
+		type: EVENT_TYPE_MARKER,
+		plan_type: usage.planType,
+		rate_limits: {
+			limit_id: "codex",
+			limit_name: "Codex",
+			primary: rawWindow(usage.primary),
+			secondary: rawWindow(usage.secondary),
+			individual_limit: rawWindow(usage.individual),
+			limit_reached: Boolean(usage.limitReachedType)
+		},
+		credits: usage.balanceLabel ? {
+			has_credits: true,
+			unlimited: false,
+			balance: usage.balanceLabel
+		} : null
+	})}`;
+}
+function freshWindow(window, observedAt, now) {
+	if (!window) return null;
+	if (window.resetAt) return window.resetAt.getTime() > now ? window : null;
+	return now - observedAt.getTime() <= RESETLESS_FRESHNESS_MS ? window : null;
+}
+function freshUsage(usage, observedAt, now) {
+	const primary = freshWindow(usage.primary, observedAt, now);
+	const secondary = freshWindow(usage.secondary, observedAt, now);
+	const individual = freshWindow(usage.individual, observedAt, now);
+	if (!primary && !secondary && !individual && !usage.balanceLabel) return null;
+	return {
+		...usage,
+		primary,
+		secondary,
+		individual
+	};
+}
+function cloneSnapshot(value) {
+	return value ? structuredClone({
+		...value,
+		usage: observeUsage(value.usage, value.observedAt, value.source)
+	}) : null;
+}
+function storedSnapshotPath(env) {
+	return path.join(getHudStateDirectory(env), SNAPSHOT_FILE_NAME);
+}
+function readStoredSnapshot(env, now, expectedOrigin) {
+	try {
+		const stored = record(JSON.parse(fs.readFileSync(storedSnapshotPath(env), "utf8")));
+		const entries = record(stored?.entries);
+		if (stored?.version !== 2 || !entries) return null;
+		const candidates = expectedOrigin === void 0 ? Object.entries(entries) : [[expectedOrigin, entries[expectedOrigin]]];
+		let newest = null;
+		for (const [origin, rawEntry] of candidates) {
+			const entry = record(rawEntry);
+			const observedAt = typeof entry?.observed_at === "string" ? new Date(entry.observed_at) : null;
+			const body = typeof entry?.body === "string" ? entry.body : null;
+			if (!observedAt || Number.isNaN(observedAt.getTime()) || !body || body.length > MAX_STORED_BODY_LENGTH || now - observedAt.getTime() > MAX_EVENT_AGE_SECONDS * 1e3) continue;
+			const usage = parseEvent(body);
+			const fresh = usage ? freshUsage(usage, observedAt, now) : null;
+			if (fresh && (!newest || observedAt > newest.observedAt)) newest = {
+				usage: fresh,
+				observedAt,
+				origin,
+				source: entry?.source === "rollout-cache" ? "rollout-cache" : "log"
+			};
+		}
+		return newest;
+	} catch {
+		return null;
+	}
+}
+function writeStoredSnapshot(env, body, observedAt, origin, source) {
+	if (body.length > MAX_STORED_BODY_LENGTH) return;
+	const filePath = storedSnapshotPath(env);
+	const temporaryPath = `${filePath}.${process.pid}.tmp`;
+	try {
+		let stored = null;
+		try {
+			stored = record(JSON.parse(fs.readFileSync(filePath, "utf8")));
+		} catch {}
+		const currentEntries = stored?.version === 2 ? record(stored.entries) : null;
+		const entries = currentEntries ? { ...currentEntries } : {};
+		const current = record(entries[origin]);
+		const currentObservedAt = typeof current?.observed_at === "string" ? new Date(current.observed_at) : null;
+		if (currentObservedAt && !Number.isNaN(currentObservedAt.getTime()) && currentObservedAt >= observedAt) return;
+		entries[origin] = {
+			observed_at: observedAt.toISOString(),
+			source,
+			body
+		};
+		fs.mkdirSync(path.dirname(filePath), {
+			recursive: true,
+			mode: 448
+		});
+		fs.writeFileSync(temporaryPath, `${JSON.stringify({
+			version: 2,
+			entries
+		}, null, 2)}\n`, {
+			encoding: "utf8",
+			mode: 384
+		});
+		fs.renameSync(temporaryPath, filePath);
+		fs.chmodSync(filePath, 384);
+	} catch {
+		try {
+			fs.rmSync(temporaryPath, { force: true });
+		} catch {}
+	}
+}
+/**
+* Share an account-wide rollout observation with sibling HUD sessions. Recent
+* Codex builds can emit limits only into rollout JSONL, while a concurrent
+* model-specific session has no account quota of its own to display.
+*/
+function persistRolloutRateLimits(usage, observedAt, endpoint, env = process.env) {
+	if (!usage || !observedAt || Number.isNaN(observedAt.getTime()) || !endpoint || !isOfficialOpenAIEndpoint(endpoint)) return;
+	const origin = endpointOrigin(endpoint);
+	if (!origin) return;
+	writeStoredSnapshot(env, rolloutSnapshotBody(usage), observedAt, origin, "rollout-cache");
+	const cacheKey = `${getCodexHome(env)}:${origin}`;
+	const cached = cache$2.get(cacheKey);
+	if (!cached?.value || observedAt > cached.value.observedAt) cache$2.delete(cacheKey);
+}
+function eventOrigin(database, processUuid, timestamp) {
+	const result = spawnSync("sqlite3", [
+		"-readonly",
+		"-noheader",
+		"-batch",
+		database,
+		[
+			"SELECT feedback_log_body",
+			"  FROM logs",
+			` WHERE process_uuid = '${processUuid.replaceAll("'", "''")}'`,
+			`   AND ts BETWEEN ${timestamp - MAX_EVENT_AGE_SECONDS} AND ${timestamp + 60}`,
+			`   AND target IN ('codex_http_client::default_client', 'codex_http_client::client')`,
+			`   AND instr(feedback_log_body, 'url=') > 0`,
+			` ORDER BY abs(ts - ${timestamp}) ASC, id DESC`,
+			" LIMIT 1;"
+		].join("\n")
+	], {
+		encoding: "utf8",
+		stdio: [
+			"ignore",
+			"pipe",
+			"ignore"
+		],
+		timeout: QUERY_TIMEOUT_MS
+	});
+	const match = typeof result.stdout === "string" ? /\burl=(https?:\/\/[^\s"]+)/.exec(result.stdout) : null;
+	return match ? endpointOrigin(match[1]) : null;
+}
+/**
+* Codex currently logs `codex.rate_limits` SSE events but does not copy them
+* into rollout token-count events for every provider. Keep the newest
+* account-wide event per provider origin and share it with other open HUD
+* processes. `expectedEndpoint` names the provider the caller is bound to; passing
+* null means the endpoint is unknown, and showing no usage beats showing
+* another provider's account.
+*/
+function readLatestLoggedRateLimits(env = process.env, now = Date.now(), expectedEndpoint) {
+	const expectedOrigin = expectedEndpoint === void 0 ? void 0 : expectedEndpoint ? endpointOrigin(expectedEndpoint) : null;
+	if (expectedOrigin === null) return null;
+	const codexHome = getCodexHome(env);
+	const cacheKey = `${codexHome}:${expectedOrigin ?? "*"}`;
+	const cached = cache$2.get(cacheKey);
+	if (cached && now - cached.at < CACHE_MS$1) return cloneSnapshot(cached.value);
+	const remember = (value) => {
+		setTimedCache(cache$2, cacheKey, {
+			at: now,
+			value: cloneSnapshot(value)
+		}, CACHE_MAX_AGE_MS$1, CACHE_MAX_ENTRIES$1);
+		return cloneSnapshot(value);
+	};
+	let previous = readStoredSnapshot(env, now, expectedOrigin);
+	if (cached?.value) {
+		const fallback = freshUsage(cached.value.usage, cached.value.observedAt, now);
+		if (fallback) {
+			const cachedSnapshot = {
+				usage: fallback,
+				observedAt: cached.value.observedAt,
+				origin: cached.value.origin,
+				source: cached.value.source
+			};
+			if (!previous || cachedSnapshot.observedAt > previous.observedAt) previous = cachedSnapshot;
+		}
+	}
+	const database = findCodexLogDatabase(codexHome);
+	if (!database) return remember(previous);
+	const since = Math.floor(now / 1e3) - MAX_EVENT_AGE_SECONDS;
+	const result = spawnSync("sqlite3", [
+		"-readonly",
+		"-noheader",
+		"-batch",
+		database,
+		[
+			`SELECT ts || '|' || hex(process_uuid) || '|' || hex(substr(feedback_log_body, 1, ${MAX_STORED_BODY_LENGTH}))`,
+			"  FROM logs",
+			` WHERE id >= (SELECT max(id) - ${MAX_ROW_LOOKBACK} FROM logs)`,
+			`   AND ts >= ${since}`,
+			`   AND instr(feedback_log_body, '${EVENT_PREFIX}') > 0`,
+			`   AND instr(feedback_log_body, '${EVENT_TYPE_MARKER}') > 0`,
+			" ORDER BY ts DESC, id DESC",
+			` LIMIT ${MAX_EVENT_CANDIDATES};`
+		].join("\n")
+	], {
+		encoding: "utf8",
+		stdio: [
+			"ignore",
+			"pipe",
+			"ignore"
+		],
+		timeout: QUERY_TIMEOUT_MS
+	});
+	if (typeof result.stdout !== "string") return remember(previous);
+	const origins = /* @__PURE__ */ new Map();
+	for (const line of result.stdout.split("\n")) {
+		const [timestampValue, processValue, bodyValue] = line.split("|");
+		const timestamp = Number(timestampValue);
+		const processUuid = decodeHex(processValue ?? "");
+		const body = decodeHex(bodyValue ?? "");
+		if (!Number.isFinite(timestamp) || !processUuid || !body) continue;
+		const observedAt = /* @__PURE__ */ new Date(timestamp * 1e3);
+		const usage = parseEvent(body);
+		const fresh = usage ? freshUsage(usage, observedAt, now) : null;
+		if (!fresh) continue;
+		const origin = origins.has(processUuid) ? origins.get(processUuid) ?? null : eventOrigin(database, processUuid, timestamp);
+		origins.set(processUuid, origin);
+		if (!origin || expectedOrigin !== void 0 && origin !== expectedOrigin) continue;
+		if (previous && previous.observedAt >= observedAt) return remember(previous);
+		writeStoredSnapshot(env, body, observedAt, origin, "log");
+		return remember({
+			usage: fresh,
+			observedAt,
+			origin,
+			source: "log"
+		});
+	}
+	return remember(previous);
+}
+function inspectLoggedRateLimitTargets(env = process.env, now = Date.now()) {
+	const database = findCodexLogDatabase(getCodexHome(env));
+	if (!database) return [];
+	const since = Math.floor(now / 1e3) - MAX_EVENT_AGE_SECONDS;
+	const result = spawnSync("sqlite3", [
+		"-readonly",
+		"-noheader",
+		"-batch",
+		database,
+		[
+			`SELECT hex(target) || '|' || hex(substr(feedback_log_body, 1, ${MAX_STORED_BODY_LENGTH}))`,
+			"  FROM logs",
+			` WHERE id >= (SELECT max(id) - ${MAX_ROW_LOOKBACK} FROM logs)`,
+			`   AND ts >= ${since}`,
+			`   AND instr(feedback_log_body, '${EVENT_PREFIX}') > 0`,
+			`   AND instr(feedback_log_body, '${EVENT_TYPE_MARKER}') > 0`,
+			" ORDER BY id DESC",
+			` LIMIT ${MAX_EVENT_CANDIDATES};`
+		].join("\n")
+	], {
+		encoding: "utf8",
+		stdio: [
+			"ignore",
+			"pipe",
+			"ignore"
+		],
+		timeout: QUERY_TIMEOUT_MS
+	});
+	if (typeof result.stdout !== "string") return [];
+	const counts = /* @__PURE__ */ new Map();
+	for (const line of result.stdout.split("\n")) {
+		const [targetValue, bodyValue] = line.split("|");
+		const target = decodeHex(targetValue ?? "");
+		const body = decodeHex(bodyValue ?? "");
+		if (target && body && parseEvent(body)) counts.set(target, (counts.get(target) ?? 0) + 1);
+	}
+	return [...counts.entries()].map(([target, count]) => ({
+		target,
+		count
+	})).sort((left, right) => right.count - left.count || left.target.localeCompare(right.target));
+}
+
+//#endregion
+//#region src/codex/context-usage.ts
+const BASELINE_TOKENS = 12e3;
+function clamp(value, minimum, maximum) {
+	return Math.min(maximum, Math.max(minimum, value));
+}
+function calculateContextUsage(usage, contextWindow) {
+	if (!usage || !contextWindow || contextWindow <= 0) return null;
+	const rawUsed = Math.max(0, usage.total_tokens ?? 0);
+	let used;
+	let total;
+	if (contextWindow <= 12e3) {
+		total = contextWindow;
+		used = clamp(rawUsed, 0, total);
+	} else {
+		total = contextWindow - BASELINE_TOKENS;
+		used = clamp(rawUsed - BASELINE_TOKENS, 0, total);
+	}
+	const percent = total > 0 ? Math.round(used / total * 100) : 0;
+	return {
+		used,
+		total,
+		percent: clamp(percent, 0, 100),
+		remainingPercent: clamp(100 - percent, 0, 100),
+		inputTokens: Math.max(0, (usage.input_tokens ?? 0) - (usage.cached_input_tokens ?? 0)),
+		outputTokens: Math.max(0, usage.output_tokens ?? 0),
+		cachedTokens: Math.max(0, usage.cached_input_tokens ?? 0)
+	};
+}
+
+//#endregion
+//#region src/codex/jsonl-tail.ts
+var JsonlTail = class {
+	offset = 0;
+	remainder = "";
+	inode = null;
+	reset() {
+		this.offset = 0;
+		this.remainder = "";
+		this.inode = null;
+	}
+	read(filePath) {
+		const stat = fs.statSync(filePath);
+		const replaced = this.inode !== null && stat.ino !== this.inode;
+		const truncated = stat.size < this.offset;
+		const reset = replaced || truncated;
+		if (reset) {
+			this.offset = 0;
+			this.remainder = "";
+		}
+		this.inode = stat.ino;
+		if (stat.size === this.offset) return {
+			lines: [],
+			reset
+		};
+		const length = stat.size - this.offset;
+		const descriptor = fs.openSync(filePath, "r");
+		try {
+			const buffer = Buffer.allocUnsafe(length);
+			fs.readSync(descriptor, buffer, 0, length, this.offset);
+			this.offset = stat.size;
+			const parts = (this.remainder + buffer.toString("utf8")).split(/\r?\n/);
+			this.remainder = parts.pop() ?? "";
+			return {
+				lines: parts.filter(Boolean),
+				reset
+			};
+		} finally {
+			fs.closeSync(descriptor);
+		}
+	}
+};
+
+//#endregion
+//#region src/codex/rollout-parser.ts
+const MAX_TARGET_LENGTH = 80;
+const IMAGE_EXTENSIONS = /* @__PURE__ */ new Set([
+	".png",
+	".jpg",
+	".jpeg",
+	".webp",
+	".gif",
+	".bmp",
+	".tif",
+	".tiff"
+]);
+const IMAGE_PATH_PATTERN = /(?:^|[\s"'`(])(\/[^\s"'`),;]+\.(?:png|jpe?g|webp|gif|bmp|tiff?)|[a-z]:[\\/][^\s"'`),;]+\.(?:png|jpe?g|webp|gif|bmp|tiff?))(?:$|[\s"'`),;.])/gi;
+function initialState() {
+	return {
+		session: null,
+		context: null,
+		usage: null,
+		usageObservedAt: null,
+		sessionTokens: null,
+		tools: [],
+		images: [],
+		skills: [],
+		mcpServers: [],
+		todos: [],
+		goal: null,
+		conversationTurns: [],
+		compactCount: 0
+	};
+}
+function safeDate$1(value, fallback) {
+	if (typeof value !== "string" && typeof value !== "number") return fallback;
+	const date = new Date(value);
+	return Number.isNaN(date.getTime()) ? fallback : date;
+}
+function policyLabel(value) {
+	if (typeof value === "string") return value;
+	if (value && typeof value === "object" && !Array.isArray(value)) {
+		if ("type" in value && typeof value.type === "string") return value.type;
+		if ("granular" in value) return "granular";
+	}
+}
+function parseArguments(value) {
+	if (!value) return null;
+	try {
+		const parsed = JSON.parse(value);
+		return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+	} catch {
+		return null;
+	}
+}
+function redactSensitiveText(value) {
+	return value.replace(/\bBearer\s+[^\s"',;]+/gi, "Bearer [REDACTED]").replace(/\bsk-[\w-]{8,}/g, "sk-[REDACTED]").replace(/((?:OPENAI_API_KEY|API[_-]?KEY|ACCESS[_-]?TOKEN|AUTH[_-]?TOKEN|BEARER[_-]?TOKEN|PASSWORD|PASSWD|SECRET)\s*=\s*)(?:"[^"]*"|'[^']*'|[^\s;]+)/gi, "$1[REDACTED]").replace(/(--(?:api[-_]?key|access[-_]?token|auth[-_]?token|bearer[-_]?token|password|passwd|secret)(?:\s+|=\s*))(?:"[^"]*"|'[^']*'|[^\s;]+)/gi, "$1[REDACTED]").replace(/(^|[\s,{])(["']?(?:api[_-]?key|access[_-]?token|auth[_-]?token|bearer[_-]?token|password|passwd|secret)["']?\s*:\s*)(?:"[^"]*"|'[^']*'|[^\s,}]+)/gim, "$1$2[REDACTED]").replace(/(https?:\/\/)[^/\s:@]+:[^@\s/]+@/gi, "$1[REDACTED]@");
+}
+function truncate(value) {
+	const redacted = redactSensitiveText(value);
+	const normalized = Array.from(redacted, (character) => {
+		const codePoint = character.codePointAt(0) ?? 0;
+		return codePoint <= 31 || codePoint === 127 ? " " : character;
+	}).join("").replace(/\s+/g, " ").trim();
+	return normalized.length <= MAX_TARGET_LENGTH ? normalized : `${normalized.slice(0, MAX_TARGET_LENGTH - 1)}…`;
+}
+function nestedToolName(input) {
+	if (!input) return null;
+	return /\btools\.(\w+)/.exec(input)?.[1] ?? null;
+}
+function displayToolName(payload) {
+	if (payload.name === "exec") return nestedToolName(payload.input) ?? payload.name;
+	return payload.name || "tool";
+}
+function toolTarget(payload) {
+	const args = parseArguments(payload.arguments);
+	if (args) {
+		const target = [
+			args.file_path,
+			args.path,
+			args.file,
+			args.pattern,
+			args.command,
+			args.cmd,
+			args.description,
+			args.question,
+			args.target
+		].find((value) => typeof value === "string");
+		if (typeof target === "string") return truncate(target);
+	}
+	if (payload.name === "exec") return nestedToolName(payload.input) ? void 0 : payload.input ? truncate(payload.input) : void 0;
+}
+function isErrorOutput(output) {
+	if (output && typeof output === "object" && !Array.isArray(output)) {
+		const record = output;
+		return record.success === false || record.status === "error" || record.is_error === true;
+	}
+	return false;
+}
+function imageIsAvailable(value) {
+	try {
+		return fs.statSync(value).isFile() && IMAGE_EXTENSIONS.has(path.extname(value).toLowerCase());
+	} catch {
+		return false;
+	}
+}
+function normalizeImagePath(value) {
+	const candidate = value.trim().replace(/[.,;)]+$/, "");
+	if (!path.isAbsolute(candidate) || !IMAGE_EXTENSIONS.has(path.extname(candidate).toLowerCase())) return null;
+	return path.normalize(candidate);
+}
+function imagePathsFromValue(value) {
+	const result = /* @__PURE__ */ new Set();
+	const visit = (current, depth) => {
+		if (depth > 3 || result.size >= 20) return;
+		if (typeof current === "string") {
+			try {
+				const parsed = JSON.parse(current);
+				if (parsed !== current) visit(parsed, depth + 1);
+			} catch {}
+			for (const match of current.matchAll(IMAGE_PATH_PATTERN)) {
+				const normalized = normalizeImagePath(match[1]);
+				if (normalized) result.add(normalized);
+			}
+			const direct = normalizeImagePath(current);
+			if (direct) result.add(direct);
+			return;
+		}
+		if (Array.isArray(current)) {
+			current.forEach((item) => visit(item, depth + 1));
+			return;
+		}
+		if (current && typeof current === "object") Object.values(current).forEach((item) => visit(item, depth + 1));
+	};
+	visit(value, 0);
+	return [...result];
+}
+function imageSourceForTool(name) {
+	if (name === "view_image") return "view_image";
+	return /image|img|picture|photo/i.test(name) && /imagegen|generate|create|edit|save|output/i.test(name) ? "generated_image" : null;
+}
+function registerImagePaths(images, paths, source, createdAt, callId) {
+	for (const imagePath of paths) if (!images.has(imagePath)) images.set(imagePath, {
+		path: imagePath,
+		source,
+		createdAt,
+		callId
+	});
+}
+function toSessionTokens(usage) {
+	if (!usage) return null;
+	return {
+		inputTokens: Math.max(0, usage.input_tokens ?? 0),
+		outputTokens: Math.max(0, usage.output_tokens ?? 0),
+		reasoningOutputTokens: Math.max(0, usage.reasoning_output_tokens ?? 0),
+		cachedInputTokens: Math.max(0, usage.cached_input_tokens ?? 0),
+		cacheWriteInputTokens: Math.max(0, usage.cache_write_input_tokens ?? 0),
+		totalTokens: Math.max(0, usage.total_tokens ?? 0)
+	};
+}
+function normalizePlan(plan) {
+	if (!Array.isArray(plan)) return [];
+	return plan.flatMap((item) => {
+		if (typeof item.step !== "string" || !item.step.trim()) return [];
+		const status = item.status === "in_progress" ? "in_progress" : item.status === "completed" ? "completed" : "pending";
+		return [{
+			content: truncate(item.step),
+			status
+		}];
+	});
+}
+function normalizeGoal(value) {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+	const goal = value;
+	return {
+		objective: typeof goal.objective === "string" ? truncate(goal.objective) : void 0,
+		status: typeof goal.status === "string" ? goal.status : void 0,
+		tokenBudget: typeof (goal.tokenBudget ?? goal.token_budget) === "number" ? goal.tokenBudget ?? goal.token_budget : null,
+		tokensUsed: typeof (goal.tokensUsed ?? goal.tokens_used) === "number" ? goal.tokensUsed ?? goal.tokens_used : void 0,
+		timeUsedSeconds: typeof (goal.timeUsedSeconds ?? goal.time_used_seconds) === "number" ? goal.timeUsedSeconds ?? goal.time_used_seconds : void 0
+	};
+}
+var RolloutParser = class {
+	tail = new JsonlTail();
+	state = initialState();
+	filePath = null;
+	runningTools = /* @__PURE__ */ new Map();
+	images = /* @__PURE__ */ new Map();
+	latestTokenUsage = null;
+	captureConversationBodies;
+	constructor(options = {}) {
+		this.captureConversationBodies = options.captureConversationBodies ?? true;
+	}
+	setConversationCapture(enabled) {
+		if (enabled === this.captureConversationBodies) return;
+		this.captureConversationBodies = enabled;
+		this.reset();
+	}
+	setFile(filePath) {
+		if (filePath === this.filePath) return;
+		this.filePath = filePath;
+		this.reset();
+	}
+	reset() {
+		this.tail.reset();
+		this.state = initialState();
+		this.runningTools.clear();
+		this.images.clear();
+		this.latestTokenUsage = null;
+	}
+	getState() {
+		this.state.images = Array.from(this.images.values()).filter((image) => imageIsAvailable(image.path));
+		return structuredClone(this.state);
+	}
+	parse() {
+		if (!this.filePath) return this.getState();
+		const result = this.tail.read(this.filePath);
+		if (result.reset) {
+			this.state = initialState();
+			this.runningTools.clear();
+			this.images.clear();
+			this.latestTokenUsage = null;
+		}
+		for (const line of result.lines) this.parseLine(line);
+		return this.getState();
+	}
+	parseLine(line) {
+		let entry;
+		try {
+			entry = JSON.parse(line);
+		} catch {
+			return;
+		}
+		const timestamp = safeDate$1(entry.timestamp, /* @__PURE__ */ new Date());
+		if (entry.type === "session_meta") {
+			this.onSessionMeta(entry.payload, timestamp);
+			return;
+		}
+		if (entry.type === "turn_context") {
+			this.onTurnContext(entry.payload);
+			return;
+		}
+		if (entry.type === "response_item") {
+			this.onResponseItem(entry.payload, timestamp);
+			return;
+		}
+		if (entry.type === "event_msg") this.onEvent(entry.payload, timestamp);
+	}
+	onSessionMeta(payload, timestamp) {
+		const id = payload.session_id ?? payload.id;
+		if (!id || !this.filePath) return;
+		this.state.session = {
+			id,
+			rolloutPath: this.filePath,
+			startTime: safeDate$1(payload.timestamp, timestamp),
+			cwd: payload.cwd ?? process.cwd(),
+			originator: payload.originator,
+			cliVersion: payload.cli_version,
+			modelProvider: payload.model_provider,
+			source: payload.thread_source ?? payload.source
+		};
+	}
+	onTurnContext(payload) {
+		if (!this.state.session) return;
+		this.state.session.turnId = payload.turn_id;
+		this.state.session.cwd = payload.cwd ?? this.state.session.cwd;
+		this.state.session.workspaceRoots = payload.workspace_roots ?? this.state.session.workspaceRoots;
+		this.state.session.model = payload.model ?? payload.collaboration_mode?.settings?.model ?? this.state.session.model;
+		this.state.session.reasoningEffort = payload.effort ?? payload.reasoning_effort ?? payload.collaboration_mode?.settings?.reasoning_effort ?? this.state.session.reasoningEffort;
+		this.state.session.collaborationMode = payload.collaboration_mode?.mode;
+		this.state.session.approvalPolicy = policyLabel(payload.approval_policy);
+		this.state.session.sandboxMode = policyLabel(payload.sandbox_policy);
+		this.state.session.permissionProfile = policyLabel(payload.permission_profile);
+	}
+	onResponseItem(payload, timestamp) {
+		if ((payload.type === "function_call" || payload.type === "custom_tool_call") && payload.name) {
+			const id = payload.call_id ?? payload.id ?? `${payload.name}-${timestamp.getTime()}`;
+			const tool = {
+				id,
+				name: displayToolName(payload),
+				target: toolTarget(payload),
+				status: "running",
+				startTime: timestamp
+			};
+			this.runningTools.set(id, tool);
+			this.state.tools.push(tool);
+			this.state.tools = this.state.tools.slice(-100);
+			const imageSource = imageSourceForTool(payload.name);
+			if (imageSource) registerImagePaths(this.images, imagePathsFromValue(payload.arguments), imageSource, timestamp, id);
+			if (tool.name === "Skill" && tool.target) this.state.skills = Array.from(/* @__PURE__ */ new Set([...this.state.skills, tool.target]));
+			const mcp = /^mcp__(.+?)__/.exec(tool.name)?.[1];
+			if (mcp) this.state.mcpServers = Array.from(/* @__PURE__ */ new Set([...this.state.mcpServers, mcp]));
+			return;
+		}
+		if ((payload.type === "function_call_output" || payload.type === "custom_tool_call_output") && payload.call_id) {
+			const running = this.runningTools.get(payload.call_id);
+			if (!running) return;
+			running.status = isErrorOutput(payload.output) ? "error" : "completed";
+			running.endTime = timestamp;
+			running.durationMs = Math.max(0, timestamp.getTime() - running.startTime.getTime());
+			const imageSource = imageSourceForTool(running.name);
+			if (imageSource) registerImagePaths(this.images, imagePathsFromValue(payload.output), imageSource, timestamp, payload.call_id);
+			this.runningTools.delete(payload.call_id);
+			return;
+		}
+		if (payload.type === "message" && payload.role === "assistant" && this.state.session) {
+			registerImagePaths(this.images, imagePathsFromValue(payload.content), "generated_image", timestamp, payload.id);
+			this.state.session.lastResponseAt = timestamp;
+		}
+	}
+	onEvent(payload, timestamp) {
+		if (payload.type === "mcp_tool_call_end" || payload.type === "mcp_tool_call_begin") {
+			const invocation = payload.invocation;
+			const server = invocation && typeof invocation === "object" && !Array.isArray(invocation) ? invocation.server : null;
+			if (typeof server === "string" && server.trim()) this.state.mcpServers = Array.from(/* @__PURE__ */ new Set([...this.state.mcpServers, server.trim()]));
+			return;
+		}
+		if (payload.type === "user_message" && typeof payload.message === "string") {
+			const userMessage = payload.message.trim();
+			if (userMessage) {
+				const turnId = payload.turn_id ?? this.state.session?.turnId;
+				this.state.conversationTurns.push({
+					id: turnId ?? `turn-${String(this.state.conversationTurns.length + 1)}`,
+					turnId,
+					startedAt: timestamp,
+					userMessage: this.captureConversationBodies ? userMessage : "",
+					assistantMessage: ""
+				});
+			}
+			return;
+		}
+		if (payload.type === "agent_message" && typeof payload.message === "string") {
+			if (!this.captureConversationBodies) return;
+			const turn = this.state.conversationTurns.at(-1);
+			const message = payload.message.trim();
+			if (!turn || !message) return;
+			if (payload.phase === "final_answer") {
+				turn.assistantMessage = message;
+				turn.assistantPhase = payload.phase;
+			} else if (turn.assistantPhase !== "final_answer") {
+				turn.assistantMessage = turn.assistantMessage ? `${turn.assistantMessage}\n\n${message}` : message;
+				turn.assistantPhase = payload.phase;
+			}
+			return;
+		}
+		if (payload.type === "token_count") {
+			this.latestTokenUsage = payload.info ?? this.latestTokenUsage;
+			this.state.context = calculateContextUsage(this.latestTokenUsage?.last_token_usage, this.latestTokenUsage?.model_context_window);
+			this.state.sessionTokens = toSessionTokens(this.latestTokenUsage?.total_token_usage);
+			const observedUsage = observeUsage(normalizeAccountRateLimits(payload.rate_limits), timestamp, "rollout");
+			this.state.usage = mergeUsageData(this.state.usage, observedUsage);
+			if (observedUsage) this.state.usageObservedAt = timestamp;
+			return;
+		}
+		if (payload.type === "plan_update") {
+			this.state.todos = normalizePlan(payload.plan);
+			return;
+		}
+		if (payload.type === "thread_goal_updated") {
+			this.state.goal = normalizeGoal(payload.goal);
+			return;
+		}
+		if (payload.type === "context_compacted") {
+			this.state.compactCount += 1;
+			return;
+		}
+		if (!this.state.session) return;
+		if (payload.type === "task_started") {
+			this.state.session.lastTurnStartedAt = safeDate$1(payload.started_at, timestamp);
+			if (typeof payload.model_context_window === "number") this.latestTokenUsage = {
+				total_token_usage: this.latestTokenUsage?.total_token_usage ?? {},
+				last_token_usage: this.latestTokenUsage?.last_token_usage ?? {},
+				model_context_window: payload.model_context_window
+			};
+			return;
+		}
+		if (payload.type === "task_complete" || payload.type === "turn_aborted") {
+			this.state.session.lastTurnCompletedAt = safeDate$1(payload.completed_at, timestamp);
+			this.state.session.lastTurnDurationMs = typeof payload.duration_ms === "number" ? payload.duration_ms : void 0;
+			this.state.session.timeToFirstTokenMs = typeof payload.time_to_first_token_ms === "number" ? payload.time_to_first_token_ms : void 0;
+			const outputTokens = this.latestTokenUsage?.last_token_usage?.output_tokens;
+			const generationMs = (this.state.session.lastTurnDurationMs ?? 0) - (this.state.session.timeToFirstTokenMs ?? 0);
+			const outputSpeed = typeof outputTokens === "number" && outputTokens >= 0 && generationMs > 0 ? outputTokens / (generationMs / 1e3) : void 0;
+			this.state.session.outputTokensPerSecond = outputSpeed !== void 0 && outputSpeed <= 2e3 ? outputSpeed : void 0;
+		}
+	}
+};
+
+//#endregion
+//#region src/codex/session-finder.ts
+const MAX_SESSION_META_BYTES = 4 * 1024 * 1024;
+const DEFAULT_MAX_AGE_MS = 336 * 60 * 60 * 1e3;
+function realPath(value) {
+	try {
+		return fs.realpathSync.native(value);
+	} catch {
+		return path.resolve(value);
+	}
+}
+function normalizedPath$1(value) {
+	const resolved = realPath(value);
+	return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+function isWithinProject(candidateCwd, targetCwd) {
+	const candidate = normalizedPath$1(candidateCwd);
+	const target = normalizedPath$1(targetCwd);
+	return candidate === target || candidate.startsWith(`${target}${path.sep}`);
+}
+function readFirstLine(filePath) {
+	const descriptor = fs.openSync(filePath, "r");
+	try {
+		const chunks = [];
+		let total = 0;
+		let position = 0;
+		while (total < MAX_SESSION_META_BYTES) {
+			const buffer = Buffer.allocUnsafe(Math.min(64 * 1024, MAX_SESSION_META_BYTES - total));
+			const bytesRead = fs.readSync(descriptor, buffer, 0, buffer.length, position);
+			if (bytesRead === 0) break;
+			const chunk = buffer.subarray(0, bytesRead);
+			const newline = chunk.indexOf(10);
+			if (newline >= 0) {
+				chunks.push(chunk.subarray(0, newline));
+				return Buffer.concat(chunks).toString("utf8").replace(/\r$/, "");
+			}
+			chunks.push(chunk);
+			total += bytesRead;
+			position += bytesRead;
+		}
+		return chunks.length > 0 ? Buffer.concat(chunks).toString("utf8") : null;
+	} finally {
+		fs.closeSync(descriptor);
+	}
+}
+function collectRolloutPaths(directory, output) {
+	let entries;
+	try {
+		entries = fs.readdirSync(directory, { withFileTypes: true });
+	} catch {
+		return;
+	}
+	for (const entry of entries) {
+		const entryPath = path.join(directory, entry.name);
+		if (entry.isDirectory()) collectRolloutPaths(entryPath, output);
+		else if (entry.isFile() && /^rollout-.*\.jsonl$/.test(entry.name)) output.push(entryPath);
+	}
+}
+function isSubagentSource(source) {
+	if (!source || typeof source === "string") return typeof source === "string" && source.toLowerCase().includes("subagent");
+	return "subagent" in source || "thread_spawn" in source;
+}
+function threadSpawnMetadata(source) {
+	if (!source || typeof source !== "object" || Array.isArray(source)) return null;
+	const sourceRecord = source;
+	const subagent = sourceRecord.subagent;
+	if (subagent && typeof subagent === "object" && !Array.isArray(subagent)) {
+		const threadSpawn = subagent.thread_spawn;
+		if (threadSpawn && typeof threadSpawn === "object" && !Array.isArray(threadSpawn)) return threadSpawn;
+	}
+	const direct = sourceRecord.thread_spawn;
+	return direct && typeof direct === "object" && !Array.isArray(direct) ? direct : null;
+}
+function readSessionCandidate(filePath) {
+	try {
+		const line = readFirstLine(filePath);
+		if (!line) return null;
+		const entry = JSON.parse(line);
+		if (entry.type !== "session_meta" || !entry.payload) return null;
+		const payload = entry.payload;
+		const sessionId = payload.session_id ?? payload.id;
+		const cwd = payload.cwd;
+		if (typeof sessionId !== "string" || typeof cwd !== "string") return null;
+		const stat = fs.statSync(filePath);
+		const startTime = new Date(typeof payload.timestamp === "string" ? payload.timestamp : entry.timestamp ?? stat.mtimeMs);
+		const source = payload.thread_source ?? payload.source;
+		const threadSpawn = threadSpawnMetadata(source);
+		return {
+			path: filePath,
+			sessionId,
+			cwd,
+			startTime: Number.isNaN(startTime.getTime()) ? new Date(stat.mtimeMs) : startTime,
+			mtimeMs: stat.mtimeMs,
+			source,
+			parentThreadId: typeof (payload.parent_thread_id ?? threadSpawn?.parent_thread_id) === "string" ? payload.parent_thread_id ?? threadSpawn?.parent_thread_id : void 0,
+			agentPath: typeof (payload.agent_path ?? threadSpawn?.agent_path) === "string" ? payload.agent_path ?? threadSpawn?.agent_path : void 0,
+			agentNickname: typeof threadSpawn?.agent_nickname === "string" ? threadSpawn.agent_nickname : void 0,
+			agentRole: typeof threadSpawn?.agent_role === "string" ? threadSpawn.agent_role : void 0
+		};
+	} catch {
+		return null;
+	}
+}
+function listSessionCandidates(codexHome = getCodexHome()) {
+	const paths = [];
+	collectRolloutPaths(path.join(codexHome, "sessions"), paths);
+	return paths.flatMap((filePath) => {
+		const candidate = readSessionCandidate(filePath);
+		return candidate ? [candidate] : [];
+	});
+}
+function findActiveSession(options) {
+	const now = options.now ?? /* @__PURE__ */ new Date();
+	const maxAgeMs = options.maxAgeMs ?? DEFAULT_MAX_AGE_MS;
+	const launchedAfterMs = options.launchedAfter?.getTime() ?? 0;
+	const allowModifiedBeforeLaunch = options.allowModifiedBeforeLaunch ?? true;
+	return listSessionCandidates(options.codexHome).filter((candidate) => !isSubagentSource(candidate.source)).filter((candidate) => isWithinProject(candidate.cwd, options.cwd)).filter((candidate) => candidate.mtimeMs >= now.getTime() - maxAgeMs).filter((candidate) => candidate.startTime.getTime() >= launchedAfterMs || allowModifiedBeforeLaunch && candidate.mtimeMs >= launchedAfterMs).sort((left, right) => right.mtimeMs - left.mtimeMs)[0] ?? null;
 }
 
 //#endregion
@@ -5006,6 +5390,9 @@ const MESSAGES = {
 	"en": {
 		context: "Context",
 		usage: "Usage",
+		usageCached: "cached",
+		usageUpdated: "updated",
+		usageTimeUnknown: "time unknown",
 		resetsIn: "resets in",
 		resetsAt: "at",
 		tools: "Tools",
@@ -5043,6 +5430,9 @@ const MESSAGES = {
 	"zh-Hans": {
 		context: "上下文",
 		usage: "额度",
+		usageCached: "缓存",
+		usageUpdated: "更新于",
+		usageTimeUnknown: "更新时间未知",
 		resetsIn: "重置于",
 		resetsAt: "重置于",
 		tools: "工具",
@@ -5410,7 +5800,17 @@ function renderWindow(ctx, window) {
 	const reset = formatResetTime(window.resetAt, ctx.now, resetMode, window.windowMinutes, ctx.config.language === "zh-Hans" ? "zh-CN" : "en-US");
 	const resetLabel = resetMode === "absolute" ? "resetsAt" : "resetsIn";
 	const resetText = reset ? ` (${ctx.config.display.showResetLabel ? `${message(ctx.config.language, resetLabel)} ` : ""}${reset})` : "";
-	return `${window.label}: ${bar}${value}${suffix}${resetText}`;
+	const observedAt = window.observedAt ?? ctx.state.usage?.observedAt;
+	const cached = observedAt && ctx.now.getTime() - observedAt.getTime() >= 9e4 || ctx.state.usage?.refreshFailed;
+	const updated = observedAt ? observedAt.toLocaleString(ctx.config.language === "zh-Hans" ? "zh-CN" : "en-US", {
+		month: "2-digit",
+		day: "2-digit",
+		hour: "2-digit",
+		minute: "2-digit",
+		hour12: false
+	}) : message(ctx.config.language, "usageTimeUnknown");
+	const freshness = cached ? ` [${message(ctx.config.language, "usageCached")}, ${message(ctx.config.language, "usageUpdated")} ${updated}]` : "";
+	return `${window.label}: ${bar}${value}${suffix}${freshness}${resetText}`;
 }
 function renderUsageLine(ctx) {
 	if (!ctx.config.display.showUsage || !ctx.state.usage) return null;
@@ -6146,9 +6546,9 @@ function collectProjectInfo(cwd, workspaceRoots = [], env = process.env, include
 
 //#endregion
 //#region src/runtime/state.ts
-function buildHudState(cwd, rollout, sessionStart, config, now = /* @__PURE__ */ new Date(), codexProcess = null, loggedUsage = null, queriedUsage = null, endpoint = null) {
+function buildHudState(cwd, rollout, sessionStart, config, now = /* @__PURE__ */ new Date(), codexProcess = null, loggedUsage = null, queriedUsage = null, endpoint = null, accountUsage = null) {
 	const workspaceRoots = rollout.session?.workspaceRoots ?? [];
-	const usage = resolveUsageData(trustedUsageData(evaluateUsageTrust(endpoint, hasTrustedOpenAiAuth(rollout.session, process.env)), rollout.usage, loggedUsage), config.display, now);
+	const usage = resolveUsageData(evaluateUsageTrust(endpoint, hasTrustedOpenAiAuth(rollout.session, process.env)).trusted ? selectAccountUsage(rollout.usage, loggedUsage, accountUsage) : null, config.display, now);
 	const title = config.display.showSessionName ? collectSessionTitle(rollout.session) : null;
 	const session = rollout.session ? {
 		...rollout.session,
@@ -6299,5 +6699,5 @@ async function waitForNewRootSession(cwd, snapshot, codexHome = getCodexHome(), 
 }
 
 //#endregion
-export { evaluateUsageTrust as A, resolveSessionEndpoint as B, DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY as C, inspectLoggedRateLimitTargets as D, RolloutParser as E, findCodexLogDatabase as F, getLegacyStateDirectory as G, getCodexHome as H, inspectCodexLogSchema as I, isOfficialOpenAIEndpoint as L, readCachedConfiguredExternalUsage as M, readConfiguredExternalUsage as N, persistRolloutRateLimits as O, resolveUsageData as P, resolveProcessEndpoint as R, DEFAULT_CONFIG as S, findActiveSession as T, getConfigPath as U, HUD_VERSION as V, getHudStateDirectory as W, sliceAnsi as _, waitForNewRootSession as a, applyConfigMigrations as b, desiredPaneHeight as c, resizeCmuxPane as d, resizeHudPane as f, visibleWidth as g, truncateAnsi as h, snapshotRootSessions as i, trustedUsageData as j, readLatestLoggedRateLimits as k, hudRenderHeight as l, renderHud as m, createSessionBindingPath as n, writeSessionBinding as o, settleCmuxPaneHeight as p, readSessionBinding as r, buildHudState as s, acquireSessionDiscoveryLock as t, readCmuxPaneGeometry as u, loadConfig as v, hasTrustedOpenAiAuth as w, rawConfigVersion as x, reloadConfig as y, resolveProcessSession as z };
-//# sourceMappingURL=session-binding-C46L2ABs.mjs.map
+export { readConfiguredExternalUsage as A, hasTrustedOpenAiAuth as B, DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY as C, persistRolloutRateLimits as D, inspectLoggedRateLimitTargets as E, evaluateUsageTrust as F, resolveProcessSession as G, inspectCodexLogSchema as H, HUD_VERSION as I, getConfigPath as J, resolveSessionEndpoint as K, findExecutable as L, readCachedAccountUsage as M, refreshAccountUsage as N, readLatestLoggedRateLimits as O, selectAccountUsage as P, shellCommand as R, DEFAULT_CONFIG as S, RolloutParser as T, isOfficialOpenAIEndpoint as U, findCodexLogDatabase as V, resolveProcessEndpoint as W, getLegacyStateDirectory as X, getHudStateDirectory as Y, sliceAnsi as _, waitForNewRootSession as a, applyConfigMigrations as b, desiredPaneHeight as c, resizeCmuxPane as d, resizeHudPane as f, visibleWidth as g, truncateAnsi as h, snapshotRootSessions as i, resolveUsageData as j, readCachedConfiguredExternalUsage as k, hudRenderHeight as l, renderHud as m, createSessionBindingPath as n, writeSessionBinding as o, settleCmuxPaneHeight as p, getCodexHome as q, readSessionBinding as r, buildHudState as s, acquireSessionDiscoveryLock as t, readCmuxPaneGeometry as u, loadConfig as v, findActiveSession as w, rawConfigVersion as x, reloadConfig as y, shellQuote as z };
+//# sourceMappingURL=session-binding-By2fhasI.mjs.map

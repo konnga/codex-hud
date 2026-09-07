@@ -4,13 +4,14 @@ import fs from 'node:fs'
 import path from 'node:path'
 // @env node
 import process from 'node:process'
+import { refreshAccountUsage, selectAccountUsage } from './codex/account-usage.js'
 import { resolveUsageData } from './codex/external-usage.js'
 import {
   inspectLoggedRateLimitTargets,
   persistRolloutRateLimits,
   readLatestLoggedRateLimits,
 } from './codex/log-rate-limits.js'
-import { evaluateUsageTrust, trustedUsageData } from './codex/rate-limits.js'
+import { evaluateUsageTrust } from './codex/rate-limits.js'
 import { RolloutParser } from './codex/rollout-parser.js'
 import { findCodexLogDatabase, inspectCodexLogSchema, resolveSessionEndpoint } from './codex/session-endpoint.js'
 import { findActiveSession } from './codex/session-finder.js'
@@ -199,7 +200,10 @@ async function main(args = process.argv.slice(2)): Promise<void> {
     const loggedSnapshot = usageTrust.trusted && usageTrust.effectiveEndpoint
       ? readLatestLoggedRateLimits(process.env, Date.now(), usageTrust.effectiveEndpoint)
       : null
-    const nativeUsage = trustedUsageData(usageTrust, parsed.usage, loggedSnapshot?.usage ?? null)
+    const accountUsage = config.config.display.showUsage && usageTrust.trusted
+      ? await refreshAccountUsage(usageTrust.effectiveEndpoint)
+      : null
+    const nativeUsage = usageTrust.trusted ? selectAccountUsage(parsed.usage, loggedSnapshot?.usage ?? null, accountUsage) : null
     const resolvedUsage = resolveUsageData(nativeUsage, {
       ...config.config.display,
       externalUsageWritePath: '',
@@ -209,7 +213,7 @@ async function main(args = process.argv.slice(2)): Promise<void> {
       loggedSnapshot?.source ?? null,
     ].filter((source): source is string => Boolean(source))
     const usageSource = nativeUsage
-      ? [...new Set(nativeUsageSources)].join('+')
+      ? nativeUsage.source ?? [...new Set(nativeUsageSources)].join('+')
       : resolvedUsage ? 'external-snapshot' : null
     const usageHiddenReason = !config.config.display.showUsage
       ? 'display-disabled'
@@ -261,6 +265,10 @@ async function main(args = process.argv.slice(2)): Promise<void> {
         effectiveEndpoint: usageTrust.effectiveEndpoint,
         rolloutObservedAt: parsed.usageObservedAt?.toISOString() ?? null,
         loggedObservedAt: loggedSnapshot?.observedAt.toISOString() ?? null,
+        observedAt: nativeUsage?.observedAt?.toISOString() ?? null,
+        accountRefreshEnabled: accountUsage?.enabled ?? false,
+        accountAttemptedAt: accountUsage?.attemptedAt?.toISOString() ?? null,
+        accountRefreshFailed: accountUsage?.failed ?? false,
         hiddenReason: usageHiddenReason,
         windows: [resolvedUsage?.primary, resolvedUsage?.secondary, resolvedUsage?.individual]
           .flatMap(window => window

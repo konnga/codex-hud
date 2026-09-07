@@ -86,6 +86,24 @@ function request(ts: number, processUuid: string, endpoint: string): LogRow {
 }
 
 describe('logged rate limits', () => {
+  it('invalidates an older in-memory quota immediately after a newer rollout observation', () => {
+    const codexHome = codexHomeWithLogs([
+      rateLimit(nowSeconds - 60, 'pid:1:chatgpt', 58),
+      request(nowSeconds - 60, 'pid:1:chatgpt', 'https://chatgpt.com/backend-api/codex/responses'),
+    ])
+    const env = { CODEX_HOME: codexHome }
+    expect(readLatestLoggedRateLimits(env, now, 'https://chatgpt.com')?.usage.primary?.percent).toBe(58)
+    persistRolloutRateLimits({
+      primary: { label: '1w', percent: 65, resetAt: new Date(now + 604800000), windowMinutes: 10080, observedAt: new Date(now) },
+      secondary: null,
+      individual: null,
+      planType: 'pro',
+      balanceLabel: null,
+      limitReachedType: null,
+    }, new Date(now), 'https://chatgpt.com', env)
+    expect(readLatestLoggedRateLimits(env, now + 1, 'https://chatgpt.com')?.usage.primary).toMatchObject({ percent: 65, observedAt: new Date(now) })
+  })
+
   it('reads and shares the newest account-wide event', () => {
     const codexHome = codexHomeWithLogs([
       rateLimit(nowSeconds - 60, 'pid:1:mine', 19),

@@ -3,6 +3,7 @@ import type { HudConfig, Language, LineLayout } from '../types/config.js'
 // @env node
 import process from 'node:process'
 import * as prompts from '@clack/prompts'
+import { refreshAccountUsage } from '../codex/account-usage.js'
 import { readConfiguredExternalUsage } from '../codex/external-usage.js'
 import { persistRolloutRateLimits, readLatestLoggedRateLimits } from '../codex/log-rate-limits.js'
 import { evaluateUsageTrust } from '../codex/rate-limits.js'
@@ -256,6 +257,7 @@ async function preview(config: HudConfig): Promise<string> {
     loggedUsage,
     queriedUsage,
     endpoint?.url ?? null,
+    config.display.showUsage && usageTrust.trusted ? await refreshAccountUsage(usageTrust.effectiveEndpoint) : null,
   )
   return renderHud({
     config,

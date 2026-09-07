@@ -1,11 +1,13 @@
 // @env node
+import type { AccountUsageStatus } from '../codex/account-usage.js'
 import type { ParsedRolloutState } from '../codex/rollout-parser.js'
 import type { CodexProcess } from '../collectors/session-metadata.js'
 import type { HudConfig } from '../types/config.js'
 import type { HudState, UsageData } from '../types/state.js'
 import process from 'node:process'
+import { selectAccountUsage } from '../codex/account-usage.js'
 import { resolveUsageData } from '../codex/external-usage.js'
-import { evaluateUsageTrust, trustedUsageData } from '../codex/rate-limits.js'
+import { evaluateUsageTrust } from '../codex/rate-limits.js'
 import {
   collectAgentEntries,
   collectAuthInfo,
@@ -26,6 +28,7 @@ export function buildHudState(
   loggedUsage: UsageData | null = null,
   queriedUsage: UsageData | null = null,
   endpoint: string | null = null,
+  accountUsage: AccountUsageStatus | null = null,
 ): HudState {
   const workspaceRoots = rollout.session?.workspaceRoots ?? []
   const usageTrust = evaluateUsageTrust(
@@ -33,7 +36,7 @@ export function buildHudState(
     hasTrustedOpenAiAuth(rollout.session, process.env),
   )
   const usage = resolveUsageData(
-    trustedUsageData(usageTrust, rollout.usage, loggedUsage),
+    usageTrust.trusted ? selectAccountUsage(rollout.usage, loggedUsage, accountUsage) : null,
     config.display,
     now,
   )

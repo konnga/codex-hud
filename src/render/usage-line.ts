@@ -29,7 +29,23 @@ function renderWindow(ctx: RenderContext, window: UsageWindow): string | null {
   const resetText = reset
     ? ` (${ctx.config.display.showResetLabel ? `${message(ctx.config.language, resetLabel)} ` : ''}${reset})`
     : ''
-  return `${window.label}: ${bar}${value}${suffix}${resetText}`
+  const observedAt = window.observedAt ?? ctx.state.usage?.observedAt
+  const stale = observedAt && ctx.now.getTime() - observedAt.getTime() >= 90_000
+  const cached = stale || ctx.state.usage?.refreshFailed
+  const updated = observedAt
+    ? observedAt.toLocaleString(ctx.config.language === 'zh-Hans' ? 'zh-CN' : 'en-US', {
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      })
+    : message(ctx.config.language, 'usageTimeUnknown')
+  const freshness = cached
+    ? ` [${message(ctx.config.language, 'usageCached')}, ${message(ctx.config.language, 'usageUpdated')} ${updated}]`
+    : ''
+  // Keep freshness next to the value so narrow layouts don't hide it behind reset dates.
+  return `${window.label}: ${bar}${value}${suffix}${freshness}${resetText}`
 }
 
 export function renderUsageLine(ctx: RenderContext): string | null {

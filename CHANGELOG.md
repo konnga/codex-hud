@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Refresh ChatGPT account quota every minute even when session logs stop updating. Concurrent HUD panes share an account-scoped read through Codex app-server, with bounded requests and no separate credential storage.
+- Preserve the last successful quota and its observation time after a failed refresh, and label failed or stale values as cached. Older observations cannot overwrite newer values; quota resets and complete account snapshots can clear previous limits.
+- Resolve the managed Codex executable and reuse the HUD's Node runtime when cmux launches a pane with a minimal PATH or a Codex forwarding wrapper.
+
+---
+
+### 修复
+
+- 即使会话日志停止更新，也每分钟主动刷新 ChatGPT 账户额度。多个 HUD 面板按账户共用 Codex app-server 查询，限制请求时长，不另行保存凭据。
+- 查询失败后保留最近成功额度及其观测时间，并为失败或陈旧的记录标注缓存状态。旧观测不再覆盖新值，额度重置和完整账户快照可清除原有限制。
+- cmux 以精简 PATH 或 Codex 转发脚本启动面板时，使用受管理的 Codex 程序与 HUD 自身的 Node 运行时完成额度查询。
+
 ## 0.9.1 - 2026-09-05
 
 ### Added

@@ -5,10 +5,36 @@ import {
   mergeUsageData,
   normalizeAccountRateLimits,
   normalizeRateLimits,
+  observeUsage,
   trustedUsageDataForEndpoint,
 } from './rate-limits.js'
 
 describe('normalizeRateLimits', () => {
+  it('keeps per-window observation times when newer events update only another window', () => {
+    const old = observeUsage(normalizeRateLimits({
+      primary: { used_percent: 10, window_minutes: 300 },
+      secondary: { used_percent: 58, window_minutes: 10080 },
+    }), new Date(1000), 'rollout')
+    const update = observeUsage(normalizeRateLimits({ primary: { used_percent: 20, window_minutes: 300 } }), new Date(3000), 'rollout')
+    const merged = mergeUsageData(old, update)
+    expect(merged?.primary?.observedAt).toEqual(new Date(3000))
+    expect(merged?.secondary?.observedAt).toEqual(new Date(1000))
+    const account = observeUsage(normalizeRateLimits({ secondary: { used_percent: 65, window_minutes: 10080 } }), new Date(2000), 'account')
+    expect(mergeUsageData(account, merged)?.secondary).toMatchObject({ percent: 65, observedAt: new Date(2000) })
+  })
+
+  it('lets a newer complete account read clear missing windows and spend state', () => {
+    const old = observeUsage(normalizeRateLimits({
+      primary: { used_percent: 100, window_minutes: 300 },
+      secondary: { used_percent: 65, window_minutes: 10080 },
+      individual_limit: { remaining_percent: 0 },
+      credits: { balance: '$5' },
+      rate_limit_reached_type: 'limit_reached',
+    }), new Date(1000), 'rollout')
+    const current = { ...observeUsage(normalizeRateLimits({ primary: { used_percent: 0, window_minutes: 10080 } }), new Date(2000), 'account')!, complete: true }
+    expect(mergeUsageData(current, old)).toMatchObject({ primary: { percent: 0 }, secondary: null, individual: null, balanceLabel: null, limitReachedType: null })
+  })
+
   it('does not assume a five-hour window when telemetry omits the duration', () => {
     expect(normalizeRateLimits({
       primary: { used_percent: 25 },

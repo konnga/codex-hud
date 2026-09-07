@@ -5,6 +5,7 @@ import fs from 'node:fs'
 // @env node
 import process from 'node:process'
 import { pathToFileURL } from 'node:url'
+import { readCachedAccountUsage, refreshAccountUsage } from './codex/account-usage.js'
 import { readCachedConfiguredExternalUsage, readConfiguredExternalUsage } from './codex/external-usage.js'
 import { persistRolloutRateLimits, readLatestLoggedRateLimits } from './codex/log-rate-limits.js'
 import { evaluateUsageTrust } from './codex/rate-limits.js'
@@ -243,6 +244,11 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
             now.getTime(),
           )
       : null
+    const accountUsage = loaded.config.display.showUsage && usageTrust.trusted
+      ? options.once
+        ? await refreshAccountUsage(usageTrust.effectiveEndpoint)
+        : readCachedAccountUsage(usageTrust.effectiveEndpoint, process.env, () => void render())
+      : null
     const state = buildHudState(
       options.cwd,
       rollout,
@@ -253,6 +259,7 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
       loggedUsage,
       queriedUsage,
       endpoint?.url ?? null,
+      accountUsage,
     )
     latestTurns = state.conversationTurns
     latestImages = state.images

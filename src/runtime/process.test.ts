@@ -28,6 +28,11 @@ describe('process helpers', () => {
       managedFiles: [shim],
     }))
     expect(findExecutable('codex', { CODEX_HOME: codexHome, PATH: bin })).toBe(real)
+    expect(findExecutable('codex', { CODEX_HOME: codexHome, PATH: '/missing-gui-path' })).toBe(real)
+    expect(findExecutable('codex', { CODEX_HOME: codexHome, PATH: '' }, [real])).toBeNull()
+    expect(findExecutable('codex', { CODEX_HOME: codexHome, PATH: '', CODEX_HUD_CODEX_BIN: '/explicit-missing' })).toBeNull()
+    fs.writeFileSync(path.join(codexHome, 'codex-hud', 'install.json'), JSON.stringify({ realCodex: shim, managedFiles: [shim] }))
+    expect(findExecutable('codex', { CODEX_HOME: codexHome, PATH: '' })).toBeNull()
   })
 
   it('accepts the legacy executable override during migration', () => {

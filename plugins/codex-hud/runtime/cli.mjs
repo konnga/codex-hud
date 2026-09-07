@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-import { A as evaluateUsageTrust, B as resolveSessionEndpoint, C as DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY, D as inspectLoggedRateLimitTargets, E as RolloutParser, F as findCodexLogDatabase, G as getLegacyStateDirectory, H as getCodexHome, I as inspectCodexLogSchema, L as isOfficialOpenAIEndpoint, N as readConfiguredExternalUsage, O as persistRolloutRateLimits, P as resolveUsageData, S as DEFAULT_CONFIG, T as findActiveSession, U as getConfigPath, V as HUD_VERSION, W as getHudStateDirectory, a as waitForNewRootSession, b as applyConfigMigrations, i as snapshotRootSessions, j as trustedUsageData, k as readLatestLoggedRateLimits, m as renderHud, n as createSessionBindingPath, o as writeSessionBinding, s as buildHudState, t as acquireSessionDiscoveryLock, v as loadConfig, w as hasTrustedOpenAiAuth, x as rawConfigVersion } from "./session-binding-C46L2ABs.mjs";
+import { A as readConfiguredExternalUsage, B as hasTrustedOpenAiAuth, C as DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY, D as persistRolloutRateLimits, E as inspectLoggedRateLimitTargets, F as evaluateUsageTrust, H as inspectCodexLogSchema, I as HUD_VERSION, J as getConfigPath, K as resolveSessionEndpoint, L as findExecutable, N as refreshAccountUsage, O as readLatestLoggedRateLimits, P as selectAccountUsage, R as shellCommand, S as DEFAULT_CONFIG, T as RolloutParser, U as isOfficialOpenAIEndpoint, V as findCodexLogDatabase, X as getLegacyStateDirectory, Y as getHudStateDirectory, a as waitForNewRootSession, b as applyConfigMigrations, i as snapshotRootSessions, j as resolveUsageData, m as renderHud, n as createSessionBindingPath, o as writeSessionBinding, q as getCodexHome, s as buildHudState, t as acquireSessionDiscoveryLock, v as loadConfig, w as findActiveSession, x as rawConfigVersion, z as shellQuote } from "./session-binding-By2fhasI.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import process$1, { stdin, stdout } from "node:process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import os from "node:os";
-import { spawn, spawnSync } from "node:child_process";
 import { styleText } from "node:util";
 import l__default from "node:readline";
 import { fileURLToPath } from "node:url";
@@ -1545,7 +1545,7 @@ async function preview(config) {
 	const queriedUsage = config.display.showAuth ? await readConfiguredExternalUsage(config.display.externalUsageQueries, endpoint?.url ?? null, process$1.env, now.getTime()) : null;
 	return renderHud({
 		config,
-		state: buildHudState(process$1.cwd(), rollout, now, config, now, null, loggedUsage, queriedUsage, endpoint?.url ?? null),
+		state: buildHudState(process$1.cwd(), rollout, now, config, now, null, loggedUsage, queriedUsage, endpoint?.url ?? null, config.display.showUsage && usageTrust.trusted ? await refreshAccountUsage(usageTrust.effectiveEndpoint) : null),
 		options: {
 			width: Math.min(process$1.stdout.columns || 120, 140),
 			height: 30,
@@ -1752,42 +1752,6 @@ function migrateConfig(options = {}) {
 		toVersion: migration.toVersion,
 		migrated: migration.migrated
 	};
-}
-
-//#endregion
-//#region src/runtime/process.ts
-function findExecutable(name, env = process$1.env, excludedPaths = []) {
-	const explicit = name === "codex" ? env.CODEX_HUD_CODEX_BIN || env.CODEX_HUB_CODEX_BIN : void 0;
-	const candidates = explicit ? [explicit] : (env.PATH ?? "").split(path.delimiter).filter(Boolean).map((directory) => path.join(directory, name));
-	const excluded = new Set(excludedPaths.map((value) => path.resolve(value)));
-	for (const candidate of candidates) {
-		const resolved = path.resolve(candidate);
-		if (excluded.has(resolved)) continue;
-		try {
-			fs.accessSync(resolved, fs.constants.X_OK);
-			if (fs.statSync(resolved).isFile()) {
-				if (name === "codex") {
-					const codexHome = path.resolve(env.CODEX_HOME || path.join(os.homedir(), ".codex"));
-					for (const directory of ["codex-hud", "codex-hub"]) try {
-						const state = JSON.parse(fs.readFileSync(path.join(codexHome, directory, "install.json"), "utf8"));
-						if (Array.isArray(state.managedFiles) && state.managedFiles.map((value) => path.resolve(String(value))).includes(resolved) && typeof state.realCodex === "string") {
-							fs.accessSync(state.realCodex, fs.constants.X_OK);
-							return path.resolve(state.realCodex);
-						}
-					} catch {}
-				}
-				return resolved;
-			}
-		} catch {}
-	}
-	return null;
-}
-function shellQuote(value) {
-	if (value.length === 0) return "''";
-	return `'${value.replace(/'/g, `'"'"'`)}'`;
-}
-function shellCommand(command, args) {
-	return [command, ...args].map(shellQuote).join(" ");
 }
 
 //#endregion
@@ -3100,13 +3064,14 @@ async function main(args = process$1.argv.slice(2)) {
 		const usageTrust = evaluateUsageTrust(endpoint?.url ?? null, hasTrustedOpenAiAuth(parsed.session, process$1.env));
 		if (usageTrust.trusted) persistRolloutRateLimits(parsed.usage, parsed.usageObservedAt, usageTrust.effectiveEndpoint);
 		const loggedSnapshot = usageTrust.trusted && usageTrust.effectiveEndpoint ? readLatestLoggedRateLimits(process$1.env, Date.now(), usageTrust.effectiveEndpoint) : null;
-		const nativeUsage = trustedUsageData(usageTrust, parsed.usage, loggedSnapshot?.usage ?? null);
+		const accountUsage = config.config.display.showUsage && usageTrust.trusted ? await refreshAccountUsage(usageTrust.effectiveEndpoint) : null;
+		const nativeUsage = usageTrust.trusted ? selectAccountUsage(parsed.usage, loggedSnapshot?.usage ?? null, accountUsage) : null;
 		const resolvedUsage = resolveUsageData(nativeUsage, {
 			...config.config.display,
 			externalUsageWritePath: ""
 		}, /* @__PURE__ */ new Date());
 		const nativeUsageSources = [parsed.usage ? "rollout" : null, loggedSnapshot?.source ?? null].filter((source) => Boolean(source));
-		const usageSource = nativeUsage ? [...new Set(nativeUsageSources)].join("+") : resolvedUsage ? "external-snapshot" : null;
+		const usageSource = nativeUsage ? nativeUsage.source ?? [...new Set(nativeUsageSources)].join("+") : resolvedUsage ? "external-snapshot" : null;
 		const usageHiddenReason = !config.config.display.showUsage ? "display-disabled" : parsed.usage && !usageTrust.trusted ? usageTrust.reason : !resolvedUsage ? "no-fresh-usage-observation" : null;
 		const pluginManifest = installedPluginManifest();
 		const managedInstall = inspectManagedInstall();
@@ -3149,6 +3114,10 @@ async function main(args = process$1.argv.slice(2)) {
 				effectiveEndpoint: usageTrust.effectiveEndpoint,
 				rolloutObservedAt: parsed.usageObservedAt?.toISOString() ?? null,
 				loggedObservedAt: loggedSnapshot?.observedAt.toISOString() ?? null,
+				observedAt: nativeUsage?.observedAt?.toISOString() ?? null,
+				accountRefreshEnabled: accountUsage?.enabled ?? false,
+				accountAttemptedAt: accountUsage?.attemptedAt?.toISOString() ?? null,
+				accountRefreshFailed: accountUsage?.failed ?? false,
 				hiddenReason: usageHiddenReason,
 				windows: [
 					resolvedUsage?.primary,

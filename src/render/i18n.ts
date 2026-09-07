@@ -4,6 +4,9 @@ const MESSAGES = {
   'en': {
     context: 'Context',
     usage: 'Usage',
+    usageCached: 'cached',
+    usageUpdated: 'updated',
+    usageTimeUnknown: 'time unknown',
     resetsIn: 'resets in',
     resetsAt: 'at',
     tools: 'Tools',
@@ -41,6 +44,9 @@ const MESSAGES = {
   'zh-Hans': {
     context: '上下文',
     usage: '额度',
+    usageCached: '缓存',
+    usageUpdated: '更新于',
+    usageTimeUnknown: '更新时间未知',
     resetsIn: '重置于',
     resetsAt: '重置于',
     tools: '工具',

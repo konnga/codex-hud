@@ -58,6 +58,7 @@ export interface ConversationTurn {
 }
 
 export interface UsageWindow {
+  observedAt?: Date
   label: string
   percent: number | null
   resetAt: Date | null
@@ -65,6 +66,10 @@ export interface UsageWindow {
 }
 
 export interface UsageData {
+  observedAt?: Date
+  source?: 'rollout' | 'log' | 'rollout-cache' | 'account'
+  complete?: boolean
+  refreshFailed?: boolean
   primary: UsageWindow | null
   secondary: UsageWindow | null
   individual: UsageWindow | null
