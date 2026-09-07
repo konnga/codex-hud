@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## 0.9.2 - 2026-09-07
+
 ### Fixed
 
 - Refresh ChatGPT account quota every minute even when session logs stop updating. Concurrent HUD panes share an account-scoped read through Codex app-server, with bounded requests and no separate credential storage.

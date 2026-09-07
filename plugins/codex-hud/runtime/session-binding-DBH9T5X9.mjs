@@ -1452,7 +1452,7 @@ function shellCommand(command, args) {
 
 //#endregion
 //#region package.json
-var version = "0.9.1";
+var version = "0.9.2";
 
 //#endregion
 //#region src/version.ts
@@ -6700,4 +6700,4 @@ async function waitForNewRootSession(cwd, snapshot, codexHome = getCodexHome(), 
 
 //#endregion
 export { readConfiguredExternalUsage as A, hasTrustedOpenAiAuth as B, DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY as C, persistRolloutRateLimits as D, inspectLoggedRateLimitTargets as E, evaluateUsageTrust as F, resolveProcessSession as G, inspectCodexLogSchema as H, HUD_VERSION as I, getConfigPath as J, resolveSessionEndpoint as K, findExecutable as L, readCachedAccountUsage as M, refreshAccountUsage as N, readLatestLoggedRateLimits as O, selectAccountUsage as P, shellCommand as R, DEFAULT_CONFIG as S, RolloutParser as T, isOfficialOpenAIEndpoint as U, findCodexLogDatabase as V, resolveProcessEndpoint as W, getLegacyStateDirectory as X, getHudStateDirectory as Y, sliceAnsi as _, waitForNewRootSession as a, applyConfigMigrations as b, desiredPaneHeight as c, resizeCmuxPane as d, resizeHudPane as f, visibleWidth as g, truncateAnsi as h, snapshotRootSessions as i, resolveUsageData as j, readCachedConfiguredExternalUsage as k, hudRenderHeight as l, renderHud as m, createSessionBindingPath as n, writeSessionBinding as o, settleCmuxPaneHeight as p, getCodexHome as q, readSessionBinding as r, buildHudState as s, acquireSessionDiscoveryLock as t, readCmuxPaneGeometry as u, loadConfig as v, findActiveSession as w, rawConfigVersion as x, reloadConfig as y, shellQuote as z };
-//# sourceMappingURL=session-binding-By2fhasI.mjs.map
+//# sourceMappingURL=session-binding-DBH9T5X9.mjs.map
