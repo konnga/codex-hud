@@ -82,10 +82,12 @@ The maximum remains 30 rows.
 
 The navigator incrementally reads the active `$CODEX_HOME/sessions/**/rollout-*.jsonl` file already bound to the HUD renderer.
 
-- `event_msg.user_message` creates a logical conversation turn.
+- `response_item.message` records with `role: "user"` create logical conversation turns when their internal content kinds include a `user.*` input (including image-only prompts).
+- `event_msg.item_completed` records with `item.type: "UserMessage"` are supported as the completion form of the same user input.
 - The active `turn_id` from turn context becomes the stable logical anchor when available.
-- `event_msg.agent_message` updates the assistant side of the current turn.
+- `response_item.message` records with `role: "assistant"` and `event_msg.item_completed` records with `item.type: "AgentMessage"` update the assistant side of the current turn.
 - Commentary is available while a turn is running; a `final_answer` replaces it when the final response arrives.
+- Text block type matching is case-insensitive because completed items may use `Text` while response items use `output_text`.
 - Injected `environment_context`, developer instructions, and other `response_item` records are not treated as user submissions.
 
 Navigation uses logical turns rather than terminal line numbers. This keeps the index stable when terminal width changes, text reflows, or the HUD pane is resized.
@@ -140,7 +142,7 @@ These boundaries keep the feature independent of undocumented Codex TUI internal
 3. 按 `n` 或 `Enter` 打开导航器。
 4. 使用 `j/k` 选择轮次，`Enter` 查看详情，`/` 搜索，`y` 复制完整会话 ID，`Esc` 或 `q` 退出。
 
-导航器只把 `event_msg.user_message` 识别为真实用户提交，因此不会把环境上下文或 developer 指令列入历史。详情中的 assistant 内容来自相应的 `agent_message`；最终回复到达后会替换执行过程中的 commentary。
+导航器会识别新版 `response_item.message`（`role: "user"`）以及 `event_msg.item_completed` 中的 `UserMessage`，并根据 `user.*` 内容类型保留文本或图片用户输入；因此不会把环境上下文或 developer 指令列入历史。详情中的 assistant 内容来自相应的 `response_item.message` 或 `AgentMessage`；最终回复到达后会替换执行过程中的 commentary。
 
 隐私边界：紧凑 HUD 只显示轮次数量；完整消息只会在用户主动打开导航器后显示。消息不会上传网络，也不会被复制到新的 transcript 或 HUD 配置文件中。由于用户输入可能包含敏感信息，屏幕共享或录屏时应谨慎打开。
 

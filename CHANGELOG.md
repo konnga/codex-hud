@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+## 0.9.3 - 2026-09-08
+
+### Fixed
+
+- Restore conversation turn counts and history navigation for current Codex rollout logs by parsing `response_item.message` and `item_completed` user/assistant records without double-counting mirrored events.
+- Handle case-insensitive completed-message text blocks and multimodal user inputs such as image-only prompts, while continuing to exclude injected environment and developer context.
+- Count current `ContextCompaction` completion items as well as legacy compaction events, with duplicate item IDs ignored.
+
+---
+
+### 修复
+
+- 解析当前 Codex rollout 日志中的 `response_item.message` 和 `item_completed` 用户/助手记录，并去除镜像事件重复计数，恢复会话轮次和历史导航。
+- 兼容大小写不同的完成消息文本块及仅包含图片的多模态用户输入，同时继续排除注入的环境上下文和 developer 指令。
+- 同时统计新版 `ContextCompaction` 完成项和旧版压缩事件，并忽略重复的完成项 ID。
+
 ## 0.9.2 - 2026-09-07
 
 ### Fixed

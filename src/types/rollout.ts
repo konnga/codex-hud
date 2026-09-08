@@ -78,6 +78,7 @@ export interface ResponseItemPayload {
   type?: string
   id?: string
   call_id?: string
+  turn_id?: string
   name?: string
   arguments?: string
   input?: string
@@ -86,6 +87,7 @@ export interface ResponseItemPayload {
   role?: string
   content?: unknown
   phase?: string
+  [key: string]: unknown
 }
 
 export interface EventMessagePayload {
@@ -106,6 +108,14 @@ export interface EventMessagePayload {
   threadId?: string
   reason?: string
   thread_settings?: Record<string, unknown>
+  item?: {
+    type?: string
+    id?: string
+    content?: unknown
+    phase?: string
+    message?: string
+    [key: string]: unknown
+  }
   [key: string]: unknown
 }
 

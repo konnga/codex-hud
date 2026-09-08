@@ -1452,7 +1452,7 @@ function shellCommand(command, args) {
 
 //#endregion
 //#region package.json
-var version = "0.9.2";
+var version = "0.9.3";
 
 //#endregion
 //#region src/version.ts
@@ -2698,6 +2698,32 @@ function parseArguments(value) {
 		return null;
 	}
 }
+function messageText(content, output = false) {
+	if (typeof content === "string") return content.trim();
+	if (!Array.isArray(content)) return "";
+	return content.flatMap((item) => {
+		if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+		const record = item;
+		const type = typeof record.type === "string" ? record.type.toLowerCase() : "";
+		const text = record.text;
+		if (typeof text !== "string") return [];
+		if (output ? type === "output_text" || type === "text" : type === "input_text" || type === "text") return [text];
+		return [];
+	}).join("\n").trim();
+}
+function responseTurnId(payload) {
+	if (typeof payload.turn_id === "string") return payload.turn_id;
+	const metadata = payload.internal_chat_message_metadata_passthrough;
+	if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return;
+	const turnId = metadata.turn_id;
+	return typeof turnId === "string" ? turnId : void 0;
+}
+function isUserPrompt(payload) {
+	const metadata = payload.internal_chat_message_metadata_passthrough;
+	if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return true;
+	const kinds = metadata.content_item_kinds;
+	return !Array.isArray(kinds) || kinds.some((kind) => typeof kind === "string" && kind.startsWith("user."));
+}
 function redactSensitiveText(value) {
 	return value.replace(/\bBearer\s+[^\s"',;]+/gi, "Bearer [REDACTED]").replace(/\bsk-[\w-]{8,}/g, "sk-[REDACTED]").replace(/((?:OPENAI_API_KEY|API[_-]?KEY|ACCESS[_-]?TOKEN|AUTH[_-]?TOKEN|BEARER[_-]?TOKEN|PASSWORD|PASSWD|SECRET)\s*=\s*)(?:"[^"]*"|'[^']*'|[^\s;]+)/gi, "$1[REDACTED]").replace(/(--(?:api[-_]?key|access[-_]?token|auth[-_]?token|bearer[-_]?token|password|passwd|secret)(?:\s+|=\s*))(?:"[^"]*"|'[^']*'|[^\s;]+)/gi, "$1[REDACTED]").replace(/(^|[\s,{])(["']?(?:api[_-]?key|access[_-]?token|auth[_-]?token|bearer[_-]?token|password|passwd|secret)["']?\s*:\s*)(?:"[^"]*"|'[^']*'|[^\s,}]+)/gim, "$1$2[REDACTED]").replace(/(https?:\/\/)[^/\s:@]+:[^@\s/]+@/gi, "$1[REDACTED]@");
 }
@@ -2833,6 +2859,8 @@ var RolloutParser = class {
 	images = /* @__PURE__ */ new Map();
 	latestTokenUsage = null;
 	captureConversationBodies;
+	conversationMessageIds = /* @__PURE__ */ new Set();
+	compactionIds = /* @__PURE__ */ new Set();
 	constructor(options = {}) {
 		this.captureConversationBodies = options.captureConversationBodies ?? true;
 	}
@@ -2852,6 +2880,8 @@ var RolloutParser = class {
 		this.runningTools.clear();
 		this.images.clear();
 		this.latestTokenUsage = null;
+		this.conversationMessageIds.clear();
+		this.compactionIds.clear();
 	}
 	getState() {
 		this.state.images = Array.from(this.images.values()).filter((image) => imageIsAvailable(image.path));
@@ -2865,6 +2895,8 @@ var RolloutParser = class {
 			this.runningTools.clear();
 			this.images.clear();
 			this.latestTokenUsage = null;
+			this.conversationMessageIds.clear();
+			this.compactionIds.clear();
 		}
 		for (const line of result.lines) this.parseLine(line);
 		return this.getState();
@@ -2918,6 +2950,18 @@ var RolloutParser = class {
 		this.state.session.permissionProfile = policyLabel(payload.permission_profile);
 	}
 	onResponseItem(payload, timestamp) {
+		if (payload.type === "message" && payload.role === "user") {
+			if (isUserPrompt(payload)) this.appendUserTurn(messageText(payload.content), timestamp, responseTurnId(payload) ?? this.state.session?.turnId, payload.id);
+			return;
+		}
+		if (payload.type === "message" && payload.role === "assistant") {
+			this.appendAssistantMessage(messageText(payload.content, true), payload.phase, responseTurnId(payload) ?? this.state.session?.turnId);
+			if (this.state.session) {
+				registerImagePaths(this.images, imagePathsFromValue(payload.content), "generated_image", timestamp, payload.id);
+				this.state.session.lastResponseAt = timestamp;
+			}
+			return;
+		}
 		if ((payload.type === "function_call" || payload.type === "custom_tool_call") && payload.name) {
 			const id = payload.call_id ?? payload.id ?? `${payload.name}-${timestamp.getTime()}`;
 			const tool = {
@@ -2946,14 +2990,50 @@ var RolloutParser = class {
 			const imageSource = imageSourceForTool(running.name);
 			if (imageSource) registerImagePaths(this.images, imagePathsFromValue(payload.output), imageSource, timestamp, payload.call_id);
 			this.runningTools.delete(payload.call_id);
+		}
+	}
+	appendUserTurn(userMessage, timestamp, turnId, messageId) {
+		if (!userMessage && !turnId && !messageId || messageId && this.conversationMessageIds.has(messageId)) return;
+		if (messageId) this.conversationMessageIds.add(messageId);
+		const previous = this.state.conversationTurns.at(-1);
+		if (previous && (turnId && previous.turnId === turnId || previous.userMessage === userMessage && (!previous.turnId || !turnId) && Math.abs(previous.startedAt.getTime() - timestamp.getTime()) <= 5e3)) {
+			previous.turnId = turnId ?? previous.turnId;
 			return;
 		}
-		if (payload.type === "message" && payload.role === "assistant" && this.state.session) {
-			registerImagePaths(this.images, imagePathsFromValue(payload.content), "generated_image", timestamp, payload.id);
-			this.state.session.lastResponseAt = timestamp;
+		this.state.conversationTurns.push({
+			id: turnId ?? messageId ?? `turn-${String(this.state.conversationTurns.length + 1)}`,
+			turnId,
+			startedAt: timestamp,
+			userMessage: this.captureConversationBodies ? userMessage : "",
+			assistantMessage: ""
+		});
+	}
+	appendAssistantMessage(message, phase, turnId) {
+		if (!this.captureConversationBodies || !message) return;
+		const turn = turnId ? this.state.conversationTurns.findLast((candidate) => candidate.turnId === turnId) : this.state.conversationTurns.at(-1);
+		if (!turn) return;
+		if (turn.assistantMessage === message || turn.assistantMessage.endsWith(`\n\n${message}`)) return;
+		if (phase === "final_answer") {
+			turn.assistantMessage = message;
+			turn.assistantPhase = phase;
+		} else if (turn.assistantPhase !== "final_answer") {
+			turn.assistantMessage = turn.assistantMessage ? `${turn.assistantMessage}\n\n${message}` : message;
+			turn.assistantPhase = phase;
 		}
 	}
 	onEvent(payload, timestamp) {
+		if (payload.type === "item_completed" && payload.item && typeof payload.item === "object") {
+			const item = payload.item;
+			const itemType = typeof item.type === "string" ? item.type.toLowerCase() : "";
+			if (itemType === "contextcompaction") {
+				this.recordCompaction(item.id);
+				return;
+			}
+			const content = messageText(item.content, itemType.includes("agent")) || (typeof item.message === "string" ? item.message.trim() : "");
+			if (itemType === "usermessage") this.appendUserTurn(content, timestamp, payload.turn_id, item.id);
+			else if (itemType === "agentmessage") this.appendAssistantMessage(content, item.phase, payload.turn_id);
+			return;
+		}
 		if (payload.type === "mcp_tool_call_end" || payload.type === "mcp_tool_call_begin") {
 			const invocation = payload.invocation;
 			const server = invocation && typeof invocation === "object" && !Array.isArray(invocation) ? invocation.server : null;
@@ -2961,31 +3041,13 @@ var RolloutParser = class {
 			return;
 		}
 		if (payload.type === "user_message" && typeof payload.message === "string") {
-			const userMessage = payload.message.trim();
-			if (userMessage) {
-				const turnId = payload.turn_id ?? this.state.session?.turnId;
-				this.state.conversationTurns.push({
-					id: turnId ?? `turn-${String(this.state.conversationTurns.length + 1)}`,
-					turnId,
-					startedAt: timestamp,
-					userMessage: this.captureConversationBodies ? userMessage : "",
-					assistantMessage: ""
-				});
-			}
+			this.appendUserTurn(payload.message.trim(), timestamp, payload.turn_id ?? this.state.session?.turnId);
 			return;
 		}
 		if (payload.type === "agent_message" && typeof payload.message === "string") {
 			if (!this.captureConversationBodies) return;
-			const turn = this.state.conversationTurns.at(-1);
 			const message = payload.message.trim();
-			if (!turn || !message) return;
-			if (payload.phase === "final_answer") {
-				turn.assistantMessage = message;
-				turn.assistantPhase = payload.phase;
-			} else if (turn.assistantPhase !== "final_answer") {
-				turn.assistantMessage = turn.assistantMessage ? `${turn.assistantMessage}\n\n${message}` : message;
-				turn.assistantPhase = payload.phase;
-			}
+			this.appendAssistantMessage(message, payload.phase, payload.turn_id ?? this.state.session?.turnId);
 			return;
 		}
 		if (payload.type === "token_count") {
@@ -3005,8 +3067,8 @@ var RolloutParser = class {
 			this.state.goal = normalizeGoal(payload.goal);
 			return;
 		}
-		if (payload.type === "context_compacted") {
-			this.state.compactCount += 1;
+		if (payload.type === "context_compacted" || payload.type === "compacted") {
+			this.recordCompaction();
 			return;
 		}
 		if (!this.state.session) return;
@@ -3028,6 +3090,11 @@ var RolloutParser = class {
 			const outputSpeed = typeof outputTokens === "number" && outputTokens >= 0 && generationMs > 0 ? outputTokens / (generationMs / 1e3) : void 0;
 			this.state.session.outputTokensPerSecond = outputSpeed !== void 0 && outputSpeed <= 2e3 ? outputSpeed : void 0;
 		}
+	}
+	recordCompaction(id) {
+		if (id && this.compactionIds.has(id)) return;
+		if (id) this.compactionIds.add(id);
+		this.state.compactCount += 1;
 	}
 };
 
@@ -6700,4 +6767,4 @@ async function waitForNewRootSession(cwd, snapshot, codexHome = getCodexHome(), 
 
 //#endregion
 export { readConfiguredExternalUsage as A, hasTrustedOpenAiAuth as B, DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY as C, persistRolloutRateLimits as D, inspectLoggedRateLimitTargets as E, evaluateUsageTrust as F, resolveProcessSession as G, inspectCodexLogSchema as H, HUD_VERSION as I, getConfigPath as J, resolveSessionEndpoint as K, findExecutable as L, readCachedAccountUsage as M, refreshAccountUsage as N, readLatestLoggedRateLimits as O, selectAccountUsage as P, shellCommand as R, DEFAULT_CONFIG as S, RolloutParser as T, isOfficialOpenAIEndpoint as U, findCodexLogDatabase as V, resolveProcessEndpoint as W, getLegacyStateDirectory as X, getHudStateDirectory as Y, sliceAnsi as _, waitForNewRootSession as a, applyConfigMigrations as b, desiredPaneHeight as c, resizeCmuxPane as d, resizeHudPane as f, visibleWidth as g, truncateAnsi as h, snapshotRootSessions as i, resolveUsageData as j, readCachedConfiguredExternalUsage as k, hudRenderHeight as l, renderHud as m, createSessionBindingPath as n, writeSessionBinding as o, settleCmuxPaneHeight as p, getCodexHome as q, readSessionBinding as r, buildHudState as s, acquireSessionDiscoveryLock as t, readCmuxPaneGeometry as u, loadConfig as v, findActiveSession as w, rawConfigVersion as x, reloadConfig as y, shellQuote as z };
-//# sourceMappingURL=session-binding-DBH9T5X9.mjs.map
+//# sourceMappingURL=session-binding-BFNZNE3m.mjs.map
