@@ -4,6 +4,7 @@ coverage/
 *.tgz
 .DS_Store
 .codex-hud/
+.workbuddy/
 
 # 本地计划文档，不提交
 docs/superpowers/plans/
