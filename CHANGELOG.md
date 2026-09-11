@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+## 0.9.4 - 2026-09-11
+
+### Fixed
+
+- Recognize an API-key credential that Codex reads inline from `config.toml`, either as an `experimental_bearer_token` or through an `env_key` naming the variable. Sessions configured this way resolved to no authentication, so the first line omitted the provider name and the relay balance query never ran.
+- Reuse that credential for relay balance queries, so a provider that keeps its key inline is no longer treated as having nothing to query with.
+- Keep the existing evidence guards unchanged: a `config.toml` rewritten after the session started is never attributed to it, a credential is never rendered, and a cache key stores only its hash.
+
+---
+
+### 修复
+
+- 识别 Codex 从 `config.toml` 内联读取的 API-key 凭据，包括 `experimental_bearer_token` 与指向环境变量的 `env_key` 两种写法。此前这类会话会被判为“无凭据”，导致首行缺少中转站名称，余额查询也不会发起。
+- 让中转站余额查询复用同一凭据，使以内联方式保存密钥的中转站不再被当作无从查询。
+- 原有证据守卫保持不变：会话开始后被重写过的 `config.toml` 不归属该会话，凭据不参与渲染，缓存键仅保存其哈希。
+
 ## 0.9.3 - 2026-09-08
 
 ### Fixed

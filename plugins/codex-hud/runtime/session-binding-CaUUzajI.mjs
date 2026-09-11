@@ -806,6 +806,63 @@ function getLegacyStateDirectory(env = process.env) {
 }
 
 //#endregion
+//#region src/codex/provider-credentials.ts
+function record$3(value) {
+	return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+}
+function nonEmptyString(value) {
+	return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+/**
+* config.toml is only evidence about a session while it has not been rewritten
+* since that session started. A newer file may describe a provider the user
+* switched to afterwards, and before a session is bound there is nothing to
+* attribute the file to — that window is exactly Codex's startup, when a
+* provider the user just switched away from is still the newest thing on disk.
+*/
+function readActiveProviderConfig(session, env = process.env) {
+	if (!session) return null;
+	try {
+		const configPath = path.join(getCodexHome(env), "config.toml");
+		if (fs.statSync(configPath).mtimeMs > session.startTime.getTime()) return null;
+		const config = record$3(parse(fs.readFileSync(configPath, "utf8")));
+		const name = session.modelProvider ?? nonEmptyString(config?.model_provider);
+		if (!name) return null;
+		const provider = record$3(record$3(config?.model_providers)?.[name]);
+		if (!provider) return name.toLowerCase() === "openai" ? {
+			name,
+			baseUrl: null,
+			inlineToken: null,
+			envKey: null
+		} : null;
+		return {
+			name,
+			baseUrl: nonEmptyString(provider.base_url),
+			inlineToken: nonEmptyString(provider.experimental_bearer_token),
+			envKey: nonEmptyString(provider.env_key)
+		};
+	} catch {
+		return null;
+	}
+}
+/**
+* The credential a resolved provider authenticates with, when it does not come
+* from `OPENAI_API_KEY` or `auth.json`. Never returned for rendering: callers
+* use it to reach the relay the session already talks to, and a query stores it
+* only as a hash when it needs a cache key.
+*/
+function providerCredential(provider, env = process.env) {
+	if (!provider) return null;
+	if (provider.inlineToken) return provider.inlineToken;
+	if (provider.envKey) return nonEmptyString(env[provider.envKey]);
+	return null;
+}
+/** `providerCredential` for a session, resolving the provider from `config.toml` first. */
+function configuredProviderCredential(session, env = process.env) {
+	return providerCredential(readActiveProviderConfig(session, env), env);
+}
+
+//#endregion
 //#region src/runtime/timed-cache.ts
 function pruneTimedCache(cache, now, maxAgeMs, maxEntries) {
 	for (const [key, entry] of cache) if (now - entry.at > maxAgeMs) cache.delete(key);
@@ -1250,26 +1307,6 @@ function isChatGptEndpoint(baseUrl) {
 		return false;
 	}
 }
-/**
-* The endpoint declared in config.toml is only evidence about a session if the
-* file has not been rewritten since Codex read it at session start. Before a
-* session is bound the HUD has nothing to attribute the file to, so it must not
-* borrow the label: that window is exactly Codex's startup, when a provider the
-* user just switched away from is still the newest thing on disk.
-*/
-function configuredBaseUrl(session, env) {
-	try {
-		const configPath = path.join(getCodexHome(env), "config.toml");
-		if (fs.statSync(configPath).mtimeMs > session.startTime.getTime()) return null;
-		const config = record$2(parse(fs.readFileSync(configPath, "utf8")));
-		const providerName = session?.modelProvider ?? (typeof config?.model_provider === "string" ? config.model_provider : null);
-		if (!providerName) return null;
-		const provider = record$2(record$2(config?.model_providers)?.[providerName]);
-		return typeof provider?.base_url === "string" ? provider.base_url : null;
-	} catch {
-		return null;
-	}
-}
 function hasApiKeyCredential(env = process.env) {
 	if (env.OPENAI_API_KEY) return true;
 	try {
@@ -1288,7 +1325,7 @@ function hasChatGptCredential(auth) {
 	].some((key) => typeof tokens?.[key] === "string" && Boolean(tokens[key]));
 }
 function hasTrustedOpenAiAuth(session, env = process.env) {
-	if (!session || hasApiKeyCredential(env)) return false;
+	if (!session || hasApiKeyCredential(env) || configuredProviderCredential(session, env)) return false;
 	try {
 		const auth = record$2(JSON.parse(fs.readFileSync(path.join(getCodexHome(env), "auth.json"), "utf8")));
 		if (!auth || !hasChatGptCredential(auth)) return false;
@@ -1308,7 +1345,9 @@ function hasTrustedOpenAiAuth(session, env = process.env) {
 	}
 }
 function collectAuthInfo(planType, session = null, env = process.env, codexProcess = null) {
-	const cacheKey = `${getCodexHome(env)}:${planType ?? ""}:${session?.id ?? codexProcess?.pid ?? ""}:${Boolean(env.OPENAI_API_KEY)}`;
+	const provider = readActiveProviderConfig(session, env);
+	const hasProviderCredential = providerCredential(provider, env) !== null;
+	const cacheKey = `${getCodexHome(env)}:${planType ?? ""}:${session?.id ?? codexProcess?.pid ?? ""}:${Boolean(env.OPENAI_API_KEY)}:${provider?.name ?? ""}`;
 	const cached = authCache.get(cacheKey);
 	if (cached && Date.now() - cached.at < METADATA_CACHE_MS) return cached.value ? structuredClone(cached.value) : null;
 	const authPath = path.join(getCodexHome(env), "auth.json");
@@ -1316,14 +1355,14 @@ function collectAuthInfo(planType, session = null, env = process.env, codexProce
 	try {
 		auth = record$2(JSON.parse(fs.readFileSync(authPath, "utf8"))) ?? {};
 	} catch {}
-	const hasApiKey = hasApiKeyCredential(env);
+	const hasApiKey = hasApiKeyCredential(env) || hasProviderCredential;
 	const user = jwtUser(auth) ?? findString(auth, /* @__PURE__ */ new Set([
 		"email",
 		"preferred_username",
 		"username"
 	]))?.split("@")[0];
 	const endpoint = session ? resolveSessionEndpoint(session.id, env) : codexProcess && resolveProcessEndpoint(codexProcess.pid, codexProcess.launchedAt, env);
-	const baseUrl = session ? endpoint?.url ?? configuredBaseUrl(session, env) : endpoint?.url ?? null;
+	const baseUrl = session ? endpoint?.url ?? provider?.baseUrl ?? null : endpoint?.url ?? null;
 	if (planType && (isChatGptEndpoint(baseUrl) || !hasApiKey)) {
 		const value = {
 			method: `ChatGPT ${planType}`,
@@ -1452,7 +1491,7 @@ function shellCommand(command, args) {
 
 //#endregion
 //#region package.json
-var version = "0.9.3";
+var version = "0.9.4";
 
 //#endregion
 //#region src/version.ts
@@ -2041,20 +2080,19 @@ function configuredQuery(queries, endpoint) {
 		origin
 	} : null;
 }
-function inferenceApiKey(env) {
+function inferenceApiKey(env, session) {
 	if (env.OPENAI_API_KEY) return env.OPENAI_API_KEY;
 	try {
 		const auth = JSON.parse(fs.readFileSync(path.join(getCodexHome(env), "auth.json"), "utf8"));
-		return typeof auth.OPENAI_API_KEY === "string" && auth.OPENAI_API_KEY ? auth.OPENAI_API_KEY : null;
-	} catch {
-		return null;
-	}
+		if (typeof auth.OPENAI_API_KEY === "string" && auth.OPENAI_API_KEY) return auth.OPENAI_API_KEY;
+	} catch {}
+	return configuredProviderCredential(session, env);
 }
-function configuredQueryContext(queries, endpoint, env) {
+function configuredQueryContext(queries, endpoint, env, session) {
 	const query = configuredQuery(queries, endpoint);
 	if (!query || !endpoint) return null;
 	const credentialEnv = query.template === "general" ? query.apiKeyEnv : query.accessTokenEnv;
-	const accessToken = query.template === "general" ? credentialEnv ? env[credentialEnv] : inferenceApiKey(env) : env[credentialEnv];
+	const accessToken = query.template === "general" ? credentialEnv ? env[credentialEnv] : inferenceApiKey(env, session) : env[credentialEnv];
 	const userId = env[query.userIdEnv];
 	if (!accessToken || query.template === "newApi" && !userId) return null;
 	return {
@@ -2131,18 +2169,20 @@ function startConfiguredQuery(context, now) {
 }
 /**
 * Query a matching relay balance endpoint. Dedicated credentials are read
-* only from named environment variables and never persisted.
+* only from named environment variables and never persisted. A session is
+* optional and only widens the credential search to config.toml, which is how
+* a provider configured with an inline token is reached.
 */
-async function readConfiguredExternalUsage(queries, endpoint, env, now = Date.now()) {
-	const context = configuredQueryContext(queries, endpoint, env);
+async function readConfiguredExternalUsage(queries, endpoint, env, now = Date.now(), session = null) {
+	const context = configuredQueryContext(queries, endpoint, env, session);
 	if (!context) return null;
 	const cached = queryCache.get(context.cacheKey);
 	if (cached?.valueAt && now - cached.valueAt < context.query.refreshMs) return cached.value ? structuredClone(cached.value) : null;
 	if (cached?.failedAt && now - cached.failedAt < QUERY_FAILURE_RETRY_MS) return cachedQueryValue(cached, now);
 	return startConfiguredQuery(context, now);
 }
-function readCachedConfiguredExternalUsage(queries, endpoint, env, onUpdate, now = Date.now()) {
-	const context = configuredQueryContext(queries, endpoint, env);
+function readCachedConfiguredExternalUsage(queries, endpoint, env, onUpdate, now = Date.now(), session = null) {
+	const context = configuredQueryContext(queries, endpoint, env, session);
 	if (!context) return null;
 	const cached = queryCache.get(context.cacheKey);
 	if (cached?.valueAt && now - cached.valueAt < context.query.refreshMs) return cached.value ? structuredClone(cached.value) : null;
@@ -6767,4 +6807,4 @@ async function waitForNewRootSession(cwd, snapshot, codexHome = getCodexHome(), 
 
 //#endregion
 export { readConfiguredExternalUsage as A, hasTrustedOpenAiAuth as B, DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY as C, persistRolloutRateLimits as D, inspectLoggedRateLimitTargets as E, evaluateUsageTrust as F, resolveProcessSession as G, inspectCodexLogSchema as H, HUD_VERSION as I, getConfigPath as J, resolveSessionEndpoint as K, findExecutable as L, readCachedAccountUsage as M, refreshAccountUsage as N, readLatestLoggedRateLimits as O, selectAccountUsage as P, shellCommand as R, DEFAULT_CONFIG as S, RolloutParser as T, isOfficialOpenAIEndpoint as U, findCodexLogDatabase as V, resolveProcessEndpoint as W, getLegacyStateDirectory as X, getHudStateDirectory as Y, sliceAnsi as _, waitForNewRootSession as a, applyConfigMigrations as b, desiredPaneHeight as c, resizeCmuxPane as d, resizeHudPane as f, visibleWidth as g, truncateAnsi as h, snapshotRootSessions as i, resolveUsageData as j, readCachedConfiguredExternalUsage as k, hudRenderHeight as l, renderHud as m, createSessionBindingPath as n, writeSessionBinding as o, settleCmuxPaneHeight as p, getCodexHome as q, readSessionBinding as r, buildHudState as s, acquireSessionDiscoveryLock as t, readCmuxPaneGeometry as u, loadConfig as v, findActiveSession as w, rawConfigVersion as x, reloadConfig as y, shellQuote as z };
-//# sourceMappingURL=session-binding-BFNZNE3m.mjs.map
+//# sourceMappingURL=session-binding-CaUUzajI.mjs.map
