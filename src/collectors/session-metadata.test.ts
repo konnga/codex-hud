@@ -28,6 +28,13 @@ function apiKeyHome(prefix: string): string {
   return codexHome
 }
 
+/** A Codex home with no auth.json at all, as a custom provider leaves it. */
+function bareHome(prefix: string): string {
+  const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), prefix))
+  directories.push(codexHome)
+  return codexHome
+}
+
 /** Writes config.toml and stamps its mtime relative to SESSION_START. */
 function writeConfig(codexHome: string, baseUrl: string, mtimeOffsetMs: number): void {
   const configPath = path.join(codexHome, 'config.toml')
@@ -36,6 +43,17 @@ function writeConfig(codexHome: string, baseUrl: string, mtimeOffsetMs: number):
     '[model_providers.custom]',
     `base_url = "${baseUrl}"`,
   ].join('\n'))
+  const seconds = (SESSION_START + mtimeOffsetMs) / 1_000
+  fs.utimesSync(configPath, seconds, seconds)
+}
+
+/**
+ * Writes the provider shape CC Switch uses: the credential lives inline in
+ * config.toml, so nothing is ever written to auth.json.
+ */
+function writeConfigLines(codexHome: string, lines: string[], mtimeOffsetMs = -1_000): void {
+  const configPath = path.join(codexHome, 'config.toml')
+  fs.writeFileSync(configPath, lines.join('\n'))
   const seconds = (SESSION_START + mtimeOffsetMs) / 1_000
   fs.utimesSync(configPath, seconds, seconds)
 }
@@ -216,6 +234,97 @@ describe('session metadata collectors', () => {
     const codexHome = apiKeyHome('codex-hud-auth-suffix-')
     writeConfig(codexHome, 'https://api.relay.com.cn/v1', -1_000)
     expect(collectAuthInfo(null, session('session-suffix'), { CODEX_HOME: codexHome })).toEqual({ method: 'relay' })
+  })
+
+  it('names the relay for a provider that keeps its key inline in config.toml', () => {
+    // CC Switch stores the API key as an inline bearer token, so auth.json is
+    // absent and OPENAI_API_KEY never enters the HUD's environment.
+    const codexHome = bareHome('codex-hud-auth-inline-')
+    writeConfigLines(codexHome, [
+      'model_provider = "custom"',
+      '[model_providers.custom]',
+      'wire_api = "responses"',
+      'requires_openai_auth = false',
+      'base_url = "https://anyrouter.top/v1"',
+      'experimental_bearer_token = "sk-inline-secret"',
+    ])
+    expect(collectAuthInfo(null, session('session-inline'), { CODEX_HOME: codexHome })).toEqual({ method: 'anyrouter' })
+  })
+
+  it('never renders the inline credential itself', () => {
+    const codexHome = bareHome('codex-hud-auth-inline-secret-')
+    writeConfigLines(codexHome, [
+      'model_provider = "custom"',
+      '[model_providers.custom]',
+      'base_url = "https://anyrouter.top/v1"',
+      'experimental_bearer_token = "sk-inline-secret"',
+    ])
+    const info = collectAuthInfo(null, session('session-inline-secret'), { CODEX_HOME: codexHome })
+    expect(JSON.stringify(info)).not.toContain('sk-inline-secret')
+  })
+
+  it('reads the credential an env_key points at', () => {
+    const codexHome = bareHome('codex-hud-auth-envkey-')
+    writeConfigLines(codexHome, [
+      'model_provider = "custom"',
+      '[model_providers.custom]',
+      'base_url = "https://anyrouter.top/v1"',
+      'env_key = "RELAY_API_KEY"',
+    ])
+    expect(collectAuthInfo(null, session('session-envkey'), {
+      CODEX_HOME: codexHome,
+      RELAY_API_KEY: 'sk-env-secret',
+    })).toEqual({ method: 'anyrouter' })
+  })
+
+  it('stays unauthenticated when an env_key names an unset variable', () => {
+    const codexHome = bareHome('codex-hud-auth-envkey-missing-')
+    writeConfigLines(codexHome, [
+      'model_provider = "custom"',
+      '[model_providers.custom]',
+      'base_url = "https://anyrouter.top/v1"',
+      'env_key = "RELAY_API_KEY"',
+    ])
+    expect(collectAuthInfo(null, session('session-envkey-missing'), { CODEX_HOME: codexHome })).toBeNull()
+  })
+
+  it('stays unauthenticated when a custom provider declares no credential', () => {
+    const codexHome = bareHome('codex-hud-auth-nocred-')
+    writeConfigLines(codexHome, [
+      'model_provider = "custom"',
+      '[model_providers.custom]',
+      'base_url = "https://anyrouter.top/v1"',
+    ])
+    expect(collectAuthInfo(null, session('session-nocred'), { CODEX_HOME: codexHome })).toBeNull()
+  })
+
+  it('does not borrow an inline credential before a session is bound', () => {
+    const codexHome = bareHome('codex-hud-auth-inline-unbound-')
+    writeConfigLines(codexHome, [
+      'model_provider = "custom"',
+      '[model_providers.custom]',
+      'base_url = "https://anyrouter.top/v1"',
+      'experimental_bearer_token = "sk-inline-secret"',
+    ])
+    expect(collectAuthInfo(null, null, { CODEX_HOME: codexHome })).toBeNull()
+  })
+
+  it('does not trust an inline key as ChatGPT authentication', () => {
+    const codexHome = bareHome('codex-hud-auth-inline-trust-')
+    fs.writeFileSync(path.join(codexHome, 'auth.json'), JSON.stringify({
+      tokens: { access_token: 'not-a-jwt' },
+    }))
+    writeConfigLines(codexHome, [
+      'model_provider = "custom"',
+      '[model_providers.custom]',
+      'requires_openai_auth = true',
+      'base_url = "https://chatgpt.com/backend-api/codex"',
+      'experimental_bearer_token = "sk-inline-secret"',
+    ])
+    expect(hasTrustedOpenAiAuth(
+      { ...session('session-inline-trust'), modelProvider: 'custom' },
+      { CODEX_HOME: codexHome },
+    )).toBe(false)
   })
 
   it('reads a session title from the Codex state database when sqlite3 is available', () => {

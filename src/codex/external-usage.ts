@@ -1,5 +1,5 @@
 import type { DisplayConfig, ExternalUsageQueryConfig } from '../types/config.js'
-import type { UsageData, UsageWindow } from '../types/state.js'
+import type { SessionInfo, UsageData, UsageWindow } from '../types/state.js'
 // @env node
 import { Buffer } from 'node:buffer'
 import { createHash } from 'node:crypto'
@@ -8,6 +8,7 @@ import path from 'node:path'
 import { getCodexHome } from '../config/paths.js'
 import { setTimedCache } from '../runtime/timed-cache.js'
 import { HUD_VERSION } from '../version.js'
+import { configuredProviderCredential } from './provider-credentials.js'
 import { isOfficialOpenAIEndpoint } from './session-endpoint.js'
 
 interface SnapshotWindow {
@@ -239,17 +240,23 @@ function configuredQuery(
   return query ? { ...query, origin } : null
 }
 
-function inferenceApiKey(env: NodeJS.ProcessEnv): string | null {
+function inferenceApiKey(env: NodeJS.ProcessEnv, session: SessionInfo | null): string | null {
   if (env.OPENAI_API_KEY) {
     return env.OPENAI_API_KEY
   }
   try {
     const auth = JSON.parse(fs.readFileSync(path.join(getCodexHome(env), 'auth.json'), 'utf8')) as Record<string, unknown>
-    return typeof auth.OPENAI_API_KEY === 'string' && auth.OPENAI_API_KEY ? auth.OPENAI_API_KEY : null
+    if (typeof auth.OPENAI_API_KEY === 'string' && auth.OPENAI_API_KEY) {
+      return auth.OPENAI_API_KEY
+    }
   }
   catch {
-    return null
+    // A provider-configured credential is tried below.
   }
+  // A custom provider can keep the key inline in config.toml, which never
+  // reaches auth.json. It is still the credential this session talks with, so
+  // a balance query to the same origin is entitled to it.
+  return configuredProviderCredential(session, env)
 }
 
 interface ConfiguredQueryContext {
@@ -264,6 +271,7 @@ function configuredQueryContext(
   queries: ExternalUsageQueryConfig[],
   endpoint: string | null,
   env: NodeJS.ProcessEnv,
+  session: SessionInfo | null,
 ): ConfiguredQueryContext | null {
   const query = configuredQuery(queries, endpoint)
   if (!query || !endpoint) {
@@ -271,7 +279,7 @@ function configuredQueryContext(
   }
   const credentialEnv = query.template === 'general' ? query.apiKeyEnv : query.accessTokenEnv
   const accessToken = query.template === 'general'
-    ? credentialEnv ? env[credentialEnv] : inferenceApiKey(env)
+    ? credentialEnv ? env[credentialEnv] : inferenceApiKey(env, session)
     : env[credentialEnv]
   const userId = env[query.userIdEnv]
   if (!accessToken || (query.template === 'newApi' && !userId)) {
@@ -376,15 +384,18 @@ function startConfiguredQuery(context: ConfiguredQueryContext, now: number): Pro
 
 /**
  * Query a matching relay balance endpoint. Dedicated credentials are read
- * only from named environment variables and never persisted.
+ * only from named environment variables and never persisted. A session is
+ * optional and only widens the credential search to config.toml, which is how
+ * a provider configured with an inline token is reached.
  */
 export async function readConfiguredExternalUsage(
   queries: ExternalUsageQueryConfig[],
   endpoint: string | null,
   env: NodeJS.ProcessEnv,
   now = Date.now(),
+  session: SessionInfo | null = null,
 ): Promise<UsageData | null> {
-  const context = configuredQueryContext(queries, endpoint, env)
+  const context = configuredQueryContext(queries, endpoint, env, session)
   if (!context) {
     return null
   }
@@ -404,8 +415,9 @@ export function readCachedConfiguredExternalUsage(
   env: NodeJS.ProcessEnv,
   onUpdate: () => void,
   now = Date.now(),
+  session: SessionInfo | null = null,
 ): UsageData | null {
-  const context = configuredQueryContext(queries, endpoint, env)
+  const context = configuredQueryContext(queries, endpoint, env, session)
   if (!context) {
     return null
   }

@@ -170,6 +170,46 @@ describe('external usage snapshots', () => {
     }))
   })
 
+  it('falls back to the inline config.toml credential when auth.json is absent', async () => {
+    const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-usage-inline-'))
+    directories.push(codexHome)
+    const configPath = path.join(codexHome, 'config.toml')
+    fs.writeFileSync(configPath, [
+      'model_provider = "custom"',
+      '[model_providers.custom]',
+      'base_url = "https://relay.example.com/v1"',
+      'experimental_bearer_token = "sk-inline-secret"',
+    ].join('\n'))
+    const startedAt = Date.parse('2026-07-20T00:00:00Z')
+    const seconds = (startedAt - 1_000) / 1_000
+    fs.utimesSync(configPath, seconds, seconds)
+
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ balance: 4.5 })))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const usage = await readConfiguredExternalUsage([{
+      enabled: true,
+      origin: 'https://relay.example.com',
+      template: 'general',
+      apiKeyEnv: '',
+      accessTokenEnv: '',
+      userIdEnv: '',
+      refreshMs: 300_000,
+      quotaPerCredit: 500_000,
+    }], 'https://relay.example.com/v1/responses', { CODEX_HOME: codexHome }, Date.now(), {
+      id: 'session-inline-balance',
+      rolloutPath: '/tmp/rollout.jsonl',
+      startTime: new Date(startedAt),
+      cwd: '/tmp',
+      modelProvider: 'custom',
+    })
+
+    expect(usage).toMatchObject({ balanceLabel: '$4.5' })
+    expect(fetchMock).toHaveBeenCalledWith('https://relay.example.com/user/balance', expect.objectContaining({
+      headers: expect.objectContaining({ Authorization: 'Bearer sk-inline-secret' }),
+    }))
+  })
+
   it('refreshes cached usage in the background and merges concurrent requests', async () => {
     let resolveResponse: ((response: Response) => void) | undefined
     const fetchMock = vi.fn().mockImplementation(() => new Promise<Response>((resolve) => {

@@ -235,13 +235,14 @@ export async function runRenderCli(args = process.argv.slice(2)): Promise<void> 
       : null
     const queriedUsage = loaded.config.display.showAuth
       ? options.once
-        ? await readConfiguredExternalUsage(loaded.config.display.externalUsageQueries, endpoint?.url ?? null, process.env, now.getTime())
+        ? await readConfiguredExternalUsage(loaded.config.display.externalUsageQueries, endpoint?.url ?? null, process.env, now.getTime(), rollout.session)
         : readCachedConfiguredExternalUsage(
             loaded.config.display.externalUsageQueries,
             endpoint?.url ?? null,
             process.env,
             () => void render(),
             now.getTime(),
+            rollout.session,
           )
       : null
     const accountUsage = loaded.config.display.showUsage && usageTrust.trusted

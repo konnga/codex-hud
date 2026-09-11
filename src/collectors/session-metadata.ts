@@ -6,6 +6,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 import { parse } from 'smol-toml'
+import { configuredProviderCredential, providerCredential, readActiveProviderConfig } from '../codex/provider-credentials.js'
 import { isOfficialOpenAIEndpoint, resolveProcessEndpoint, resolveSessionEndpoint } from '../codex/session-endpoint.js'
 import { getCodexHome } from '../config/paths.js'
 import { setTimedCache } from '../runtime/timed-cache.js'
@@ -126,33 +127,6 @@ function isChatGptEndpoint(baseUrl: string | null): boolean {
   }
 }
 
-/**
- * The endpoint declared in config.toml is only evidence about a session if the
- * file has not been rewritten since Codex read it at session start. Before a
- * session is bound the HUD has nothing to attribute the file to, so it must not
- * borrow the label: that window is exactly Codex's startup, when a provider the
- * user just switched away from is still the newest thing on disk.
- */
-function configuredBaseUrl(session: SessionInfo, env: NodeJS.ProcessEnv): string | null {
-  try {
-    const configPath = path.join(getCodexHome(env), 'config.toml')
-    if (fs.statSync(configPath).mtimeMs > session.startTime.getTime()) {
-      return null
-    }
-    const config = record(parse(fs.readFileSync(configPath, 'utf8')))
-    const providerName = session?.modelProvider
-      ?? (typeof config?.model_provider === 'string' ? config.model_provider : null)
-    if (!providerName) {
-      return null
-    }
-    const provider = record(record(config?.model_providers)?.[providerName])
-    return typeof provider?.base_url === 'string' ? provider.base_url : null
-  }
-  catch {
-    return null
-  }
-}
-
 export function hasApiKeyCredential(env: NodeJS.ProcessEnv = process.env): boolean {
   if (env.OPENAI_API_KEY) {
     return true
@@ -176,7 +150,9 @@ export function hasTrustedOpenAiAuth(
   session: SessionInfo | null,
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
-  if (!session || hasApiKeyCredential(env)) {
+  // An API-key credential, wherever Codex reads it from, means the session is
+  // not on a ChatGPT subscription even when an `auth.json` is also present.
+  if (!session || hasApiKeyCredential(env) || configuredProviderCredential(session, env)) {
     return false
   }
   try {
@@ -218,7 +194,11 @@ export function collectAuthInfo(
   env: NodeJS.ProcessEnv = process.env,
   codexProcess: CodexProcess | null = null,
 ): AuthInfo | null {
-  const cacheKey = `${getCodexHome(env)}:${planType ?? ''}:${session?.id ?? codexProcess?.pid ?? ''}:${Boolean(env.OPENAI_API_KEY)}`
+  // Read the session's provider once: it decides both whether an API-key
+  // credential exists and which host to name when no endpoint was observed.
+  const provider = readActiveProviderConfig(session, env)
+  const hasProviderCredential = providerCredential(provider, env) !== null
+  const cacheKey = `${getCodexHome(env)}:${planType ?? ''}:${session?.id ?? codexProcess?.pid ?? ''}:${Boolean(env.OPENAI_API_KEY)}:${provider?.name ?? ''}`
   const cached = authCache.get(cacheKey)
   if (cached && Date.now() - cached.at < METADATA_CACHE_MS) {
     return cached.value ? structuredClone(cached.value) : null
@@ -231,12 +211,12 @@ export function collectAuthInfo(
   catch {
     // Environment-only authentication is still detectable below.
   }
-  const hasApiKey = hasApiKeyCredential(env)
+  const hasApiKey = hasApiKeyCredential(env) || hasProviderCredential
   const user = jwtUser(auth) ?? findString(auth, new Set(['email', 'preferred_username', 'username']))?.split('@')[0]
   const endpoint = session
     ? resolveSessionEndpoint(session.id, env)
     : codexProcess && resolveProcessEndpoint(codexProcess.pid, codexProcess.launchedAt, env)
-  const baseUrl = session ? endpoint?.url ?? configuredBaseUrl(session, env) : endpoint?.url ?? null
+  const baseUrl = session ? endpoint?.url ?? provider?.baseUrl ?? null : endpoint?.url ?? null
   if (planType && (isChatGptEndpoint(baseUrl) || !hasApiKey)) {
     const value = { method: `ChatGPT ${planType}`, user: user ?? undefined }
     setTimedCache(authCache, cacheKey, { at: Date.now(), value }, METADATA_CACHE_MAX_AGE_MS, METADATA_CACHE_MAX_ENTRIES)
