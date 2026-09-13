@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Keep an already identified API-key relay name visible when CC Switch rewrites `config.toml` during a session. Retain only a session-scoped origin in HUD memory; newer official endpoint evidence supersedes it. Credential reads, relay-query authorization, and ChatGPT subscription quota trust remain unchanged.
+
+---
+
+### 修复
+
+- 会话运行期间 CC Switch 改写 `config.toml` 后，保留已识别的 API Key 中转站名称。仅在 HUD 内存中按会话保留 origin，新的官方 endpoint 证据会取代旧身份；凭据读取、中转查询授权与 ChatGPT 订阅额度信任规则保持不变。
+
 ## 0.9.4 - 2026-09-11
 
 ### Fixed

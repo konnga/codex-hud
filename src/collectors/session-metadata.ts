@@ -7,7 +7,7 @@ import path from 'node:path'
 import process from 'node:process'
 import { parse } from 'smol-toml'
 import { configuredProviderCredential, providerCredential, readActiveProviderConfig } from '../codex/provider-credentials.js'
-import { isOfficialOpenAIEndpoint, resolveProcessEndpoint, resolveSessionEndpoint } from '../codex/session-endpoint.js'
+import { endpointOrigin, isOfficialOpenAIEndpoint, resolveProcessEndpoint, resolveSessionEndpoint } from '../codex/session-endpoint.js'
 import { getCodexHome } from '../config/paths.js'
 import { setTimedCache } from '../runtime/timed-cache.js'
 
@@ -20,6 +20,11 @@ export interface CodexProcess {
 type UnknownRecord = Record<string, unknown>
 const titleCache = new Map<string, { at: number, title: string | null }>()
 const authCache = new Map<string, { at: number, value: AuthInfo | null }>()
+// Display-only evidence for an already identified relay session. Keep only the
+// normalized origin, never a credential or the provider config. Unlike the
+// short-lived render cache, this survives config rewrites for an active HUD;
+// it must not be used to authorize balance queries or trust subscription quota.
+const relayIdentityCache = new Map<string, { at: number, origin: string }>()
 const METADATA_CACHE_MS = 30_000
 const METADATA_CACHE_MAX_AGE_MS = 30 * 60_000
 const METADATA_CACHE_MAX_ENTRIES = 256
@@ -198,7 +203,11 @@ export function collectAuthInfo(
   // credential exists and which host to name when no endpoint was observed.
   const provider = readActiveProviderConfig(session, env)
   const hasProviderCredential = providerCredential(provider, env) !== null
-  const cacheKey = `${getCodexHome(env)}:${planType ?? ''}:${session?.id ?? codexProcess?.pid ?? ''}:${Boolean(env.OPENAI_API_KEY)}:${provider?.name ?? ''}`
+  const sessionScope = session
+    ? `${session.id}:${session.startTime.getTime()}:${session.modelProvider ?? ''}`
+    : `${codexProcess?.pid ?? ''}`
+  const identityKey = `${getCodexHome(env)}:${sessionScope}`
+  const cacheKey = `${identityKey}:${planType ?? ''}:${Boolean(env.OPENAI_API_KEY)}:${provider?.name ?? ''}`
   const cached = authCache.get(cacheKey)
   if (cached && Date.now() - cached.at < METADATA_CACHE_MS) {
     return cached.value ? structuredClone(cached.value) : null
@@ -211,21 +220,34 @@ export function collectAuthInfo(
   catch {
     // Environment-only authentication is still detectable below.
   }
-  const hasApiKey = hasApiKeyCredential(env) || hasProviderCredential
   const user = jwtUser(auth) ?? findString(auth, new Set(['email', 'preferred_username', 'username']))?.split('@')[0]
   const endpoint = session
     ? resolveSessionEndpoint(session.id, env)
     : codexProcess && resolveProcessEndpoint(codexProcess.pid, codexProcess.launchedAt, env)
-  const baseUrl = session ? endpoint?.url ?? provider?.baseUrl ?? null : endpoint?.url ?? null
+  const resolvedUrl = session ? endpoint?.url ?? provider?.baseUrl ?? null : endpoint?.url ?? null
+  if (session && isOfficialOpenAIEndpoint(resolvedUrl)) {
+    // A resumed session can now be on ChatGPT. Its previous relay identity
+    // must not turn subscription authentication into API-key authentication.
+    relayIdentityCache.delete(identityKey)
+  }
+  const identity = session ? relayIdentityCache.get(identityKey) : undefined
+  const baseUrl = resolvedUrl ?? identity?.origin ?? null
+  const hasApiKey = hasApiKeyCredential(env) || hasProviderCredential || Boolean(identity)
   if (planType && (isChatGptEndpoint(baseUrl) || !hasApiKey)) {
     const value = { method: `ChatGPT ${planType}`, user: user ?? undefined }
     setTimedCache(authCache, cacheKey, { at: Date.now(), value }, METADATA_CACHE_MAX_AGE_MS, METADATA_CACHE_MAX_ENTRIES)
     return structuredClone(value)
   }
   if (hasApiKey) {
-    // Prefer the endpoint this session actually reached, because config.toml
-    // may have been rewritten since the session started. When neither source
-    // can prove an endpoint, stay generic rather than name the wrong host.
+    // Preserve previously verified API-key identity even when a config rewrite
+    // makes its credential unavailable. New endpoint evidence takes precedence
+    // over the saved origin; an endpoint alone cannot establish this identity.
+    const origin = baseUrl ? endpointOrigin(baseUrl) : null
+    if (session && origin && !isOfficialOpenAIEndpoint(origin)) {
+      setTimedCache(relayIdentityCache, identityKey, { at: Date.now(), origin }, METADATA_CACHE_MAX_AGE_MS, METADATA_CACHE_MAX_ENTRIES)
+    }
+    // With no observed or previously verified origin, stay generic rather
+    // than borrow the provider the user switched to in a different session.
     const value: AuthInfo = { method: (baseUrl ? providerLabel(baseUrl) : null) || 'API Key' }
     setTimedCache(authCache, cacheKey, { at: Date.now(), value }, METADATA_CACHE_MAX_AGE_MS, METADATA_CACHE_MAX_ENTRIES)
     return value
