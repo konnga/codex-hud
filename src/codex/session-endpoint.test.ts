@@ -306,6 +306,31 @@ describe('session endpoint resolution', () => {
     )).toEqual({ sessionId: 'thread-mine', rolloutPath: mine })
   })
 
+  it.skipIf(process.platform !== 'linux')('resolves process sessions across WSL drive path casing', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-wsl-process-'))
+    directories.push(directory)
+    const rolloutPath = path.join(directory, 'rollout-wsl.jsonl')
+    fs.writeFileSync(rolloutPath, '')
+    const codexHome = codexHomeWithLogs([
+      { ts: 2_000, processUuid: `pid:${process.pid}:wsl`, threadId: 'thread-wsl', target: 'session', body: '' },
+    ])
+    addStateThreads(codexHome, [{
+      id: 'thread-wsl',
+      rolloutPath,
+      cwd: '/mnt/d/__codexhudfixture__/project',
+      createdAtMs: 2_000_000,
+    }])
+    clock += 2_000
+
+    expect(resolveProcessSession(
+      process.pid,
+      '/mnt/d/__CodexHudFixture__/Project',
+      new Date(1_000_000),
+      { CODEX_HOME: codexHome, WSL_DISTRO_NAME: 'Ubuntu' },
+      clock,
+    )).toEqual({ sessionId: 'thread-wsl', rolloutPath })
+  })
+
   it('does not borrow another process session from the same cwd', () => {
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-project-'))
     directories.push(cwd)

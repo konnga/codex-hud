@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import process from 'node:process'
 import { afterEach, describe, expect, it } from 'vitest'
 import { collectProjectInfo } from './project.js'
 
@@ -29,5 +30,19 @@ describe('project collector caching', () => {
     fs.writeFileSync(path.join(root, 'AGENTS.md'), 'test')
     expect(collectProjectInfo(root, [], env, true, 2_000).agentsMdCount).toBe(0)
     expect(collectProjectInfo(root, [], env, true, 32_000).agentsMdCount).toBe(1)
+  })
+
+  it.skipIf(process.platform !== 'linux')('deduplicates WSL workspace roots that differ only by case', () => {
+    const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-project-home-'))
+    directories.push(codexHome)
+    const projectRoot = '/mnt/d/__CodexHudFixture__/Project'
+    const info = collectProjectInfo(
+      projectRoot,
+      ['/mnt/d/__codexhudfixture__/project'],
+      { CODEX_HOME: codexHome, WSL_DISTRO_NAME: 'Ubuntu' },
+      false,
+    )
+
+    expect(info.workspaceRoots).toEqual([projectRoot])
   })
 })

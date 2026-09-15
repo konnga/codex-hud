@@ -863,6 +863,28 @@ function configuredProviderCredential(session, env = process.env) {
 }
 
 //#endregion
+//#region src/runtime/path-identity.ts
+const WSL_WINDOWS_DRIVE_PATH = /^\/mnt\/[a-z](?:\/|$)/i;
+function isWsl(env) {
+	if (process.platform !== "linux") return false;
+	return Boolean(env.WSL_DISTRO_NAME || env.WSL_INTEROP) || os.release().toLowerCase().includes("microsoft");
+}
+/** Paths backed by a case-insensitive filesystem need a stable comparison key. */
+function isCaseInsensitivePath(value, env = process.env) {
+	if (process.platform === "win32") return true;
+	return isWsl(env) && WSL_WINDOWS_DRIVE_PATH.test(path.resolve(value));
+}
+function pathIdentity(value, env = process.env) {
+	let resolved;
+	try {
+		resolved = fs.realpathSync.native(value);
+	} catch {
+		resolved = path.resolve(value);
+	}
+	return isCaseInsensitivePath(resolved, env) ? resolved.toLowerCase() : resolved;
+}
+
+//#endregion
 //#region src/runtime/timed-cache.ts
 function pruneTimedCache(cache, now, maxAgeMs, maxEntries) {
 	for (const [key, entry] of cache) if (now - entry.at > maxAgeMs) cache.delete(key);
@@ -1086,7 +1108,7 @@ function shellSql(value) {
 */
 function resolveProcessSession(codexPid, cwd, since, env = process.env, now = Date.now()) {
 	if (!Number.isInteger(codexPid) || codexPid <= 0) return null;
-	const cacheKey = `${getCodexHome(env)}:${codexPid}:${cwd}`;
+	const cacheKey = `${getCodexHome(env)}:${codexPid}:${pathIdentity(cwd, env)}`;
 	const cached = processSessionCache.get(cacheKey);
 	if (cached && now - cached.at < PROCESS_SESSION_CACHE_MS) return cached.value ? { ...cached.value } : null;
 	const remember = (value) => {
@@ -1110,11 +1132,14 @@ function resolveProcessSession(codexPid, cwd, since, env = process.env, now = Da
 	].join("\n"), PROCESS_SESSION_QUERY_TIMEOUT_MS).filter((id) => SESSION_ID_PATTERN.test(id.trim()));
 	if (ids.length === 0) return remember(null);
 	const candidates = ids.map((id) => `'${shellSql(id.trim())}'`).join(",");
-	const rows = query(path.join(getCodexHome(env), "state_5.sqlite"), [
+	const stateDatabase = path.join(getCodexHome(env), "state_5.sqlite");
+	const resolvedCwd = path.resolve(cwd);
+	const cwdColumn = isCaseInsensitivePath(resolvedCwd, env) ? "cwd COLLATE NOCASE" : "cwd";
+	const rows = query(stateDatabase, [
 		"SELECT id || '|' || rollout_path",
 		"  FROM threads",
 		` WHERE id IN (${candidates})`,
-		`   AND cwd = '${shellSql(path.resolve(cwd))}'`,
+		`   AND ${cwdColumn} = '${shellSql(resolvedCwd)}'`,
 		"   AND (thread_source = 'user' OR thread_source IS NULL)",
 		"   AND (agent_path IS NULL OR agent_path = '')",
 		" ORDER BY created_at_ms ASC, id ASC",
@@ -3153,20 +3178,9 @@ var RolloutParser = class {
 //#region src/codex/session-finder.ts
 const MAX_SESSION_META_BYTES = 4 * 1024 * 1024;
 const DEFAULT_MAX_AGE_MS = 336 * 60 * 60 * 1e3;
-function realPath(value) {
-	try {
-		return fs.realpathSync.native(value);
-	} catch {
-		return path.resolve(value);
-	}
-}
-function normalizedPath$1(value) {
-	const resolved = realPath(value);
-	return process.platform === "win32" ? resolved.toLowerCase() : resolved;
-}
 function isWithinProject(candidateCwd, targetCwd) {
-	const candidate = normalizedPath$1(candidateCwd);
-	const target = normalizedPath$1(targetCwd);
+	const candidate = pathIdentity(candidateCwd);
+	const target = pathIdentity(targetCwd);
 	return candidate === target || candidate.startsWith(`${target}${path.sep}`);
 }
 function readFirstLine(filePath) {
@@ -6631,7 +6645,13 @@ function hookCountFromJson(filePath) {
 function collectProjectInfo(cwd, workspaceRoots = [], env = process.env, includeCounts = true, now = Date.now()) {
 	const codexHome = getCodexHome(env);
 	const projectRoot = findGitRoot(cwd) ?? path.resolve(cwd);
-	const roots = Array.from(/* @__PURE__ */ new Set([projectRoot, ...workspaceRoots.map((root) => path.resolve(root))]));
+	const rootIdentities = /* @__PURE__ */ new Set();
+	const roots = [projectRoot, ...workspaceRoots.map((root) => path.resolve(root))].filter((root) => {
+		const identity = pathIdentity(root, env);
+		if (rootIdentities.has(identity)) return false;
+		rootIdentities.add(identity);
+		return true;
+	});
 	const cacheKey = `${codexHome}:${projectRoot}:${includeCounts}:${roots.join("\0")}`;
 	const cached = projectCache.get(cacheKey);
 	if (cached && now - cached.at < PROJECT_CACHE_MS) return structuredClone(cached.value);
@@ -6702,18 +6722,9 @@ function buildHudState(cwd, rollout, sessionStart, config, now = /* @__PURE__ */
 //#region src/runtime/session-binding.ts
 const DISCOVERY_TIMEOUT_MS = 1e4;
 const LOCK_STALE_MS = 3e4;
-function normalizedPath(value) {
-	let resolved;
-	try {
-		resolved = fs.realpathSync.native(value);
-	} catch {
-		resolved = path.resolve(value);
-	}
-	return process.platform === "win32" ? resolved.toLowerCase() : resolved;
-}
 function rootSessions(cwd, codexHome = getCodexHome()) {
-	const normalizedCwd = normalizedPath(cwd);
-	return listSessionCandidates(codexHome).filter((candidate) => !isSubagentSource(candidate.source)).filter((candidate) => normalizedPath(candidate.cwd) === normalizedCwd);
+	const normalizedCwd = pathIdentity(cwd);
+	return listSessionCandidates(codexHome).filter((candidate) => !isSubagentSource(candidate.source)).filter((candidate) => pathIdentity(candidate.cwd) === normalizedCwd);
 }
 function snapshotRootSessions(cwd, codexHome = getCodexHome()) {
 	return new Map(rootSessions(cwd, codexHome).map((candidate) => [candidate.path, candidate.mtimeMs]));
@@ -6726,7 +6737,7 @@ function findNewRootSession(cwd, snapshot, codexHome = getCodexHome(), allowModi
 	})[0] ?? null;
 }
 function createSessionBindingPath(cwd, env = process.env) {
-	const digest = createHash("sha1").update(normalizedPath(cwd)).digest("hex").slice(0, 12);
+	const digest = createHash("sha1").update(pathIdentity(cwd, env)).digest("hex").slice(0, 12);
 	return path.join(getHudStateDirectory(env), "bindings", `${digest}-${randomUUID()}.json`);
 }
 /**
@@ -6761,7 +6772,7 @@ function readSessionBinding(bindingPath) {
 	}
 }
 function lockPath(cwd, env = process.env) {
-	const digest = createHash("sha1").update(normalizedPath(cwd)).digest("hex");
+	const digest = createHash("sha1").update(pathIdentity(cwd, env)).digest("hex");
 	return path.join(getHudStateDirectory(env), "bindings", "locks", digest);
 }
 function delay(milliseconds, signal) {
@@ -6818,4 +6829,4 @@ async function waitForNewRootSession(cwd, snapshot, codexHome = getCodexHome(), 
 
 //#endregion
 export { readConfiguredExternalUsage as A, hasTrustedOpenAiAuth as B, DEFAULT_GENERAL_EXTERNAL_USAGE_QUERY as C, persistRolloutRateLimits as D, inspectLoggedRateLimitTargets as E, evaluateUsageTrust as F, resolveProcessSession as G, inspectCodexLogSchema as H, HUD_VERSION as I, getConfigPath as J, resolveSessionEndpoint as K, findExecutable as L, readCachedAccountUsage as M, refreshAccountUsage as N, readLatestLoggedRateLimits as O, selectAccountUsage as P, shellCommand as R, DEFAULT_CONFIG as S, RolloutParser as T, isOfficialOpenAIEndpoint as U, findCodexLogDatabase as V, resolveProcessEndpoint as W, getLegacyStateDirectory as X, getHudStateDirectory as Y, sliceAnsi as _, waitForNewRootSession as a, applyConfigMigrations as b, desiredPaneHeight as c, resizeCmuxPane as d, resizeHudPane as f, visibleWidth as g, truncateAnsi as h, snapshotRootSessions as i, resolveUsageData as j, readCachedConfiguredExternalUsage as k, hudRenderHeight as l, renderHud as m, createSessionBindingPath as n, writeSessionBinding as o, settleCmuxPaneHeight as p, getCodexHome as q, readSessionBinding as r, buildHudState as s, acquireSessionDiscoveryLock as t, readCmuxPaneGeometry as u, loadConfig as v, findActiveSession as w, rawConfigVersion as x, reloadConfig as y, shellQuote as z };
-//# sourceMappingURL=session-binding-K8_ZgfTM.mjs.map
+//# sourceMappingURL=session-binding-BvI69Rrx.mjs.map
