@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## 0.9.6 - 2026-09-19
+
 ### Fixed
 
 - Match paths on WSL Windows drive mounts case-insensitively while discovering and binding sessions, resolving process-owned rollouts, and deduplicating workspace roots. A casing difference between the launch directory and Codex state no longer leaves the HUD without session data.
