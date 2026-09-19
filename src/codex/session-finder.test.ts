@@ -1,7 +1,8 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import process from 'node:process'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { findActiveSession, isSubagentSource, readSessionCandidate } from './session-finder.js'
 
 const temporaryDirectories: string[] = []
@@ -25,6 +26,7 @@ function writeSession(
 }
 
 afterEach(() => {
+  vi.unstubAllEnvs()
   for (const directory of temporaryDirectories.splice(0)) {
     fs.rmSync(directory, { recursive: true, force: true })
   }
@@ -76,6 +78,24 @@ describe('session discovery', () => {
       codexHome: directory,
       now: new Date('2026-07-16T08:06:00Z'),
     })?.sessionId).toBe('new')
+  })
+
+  it.skipIf(process.platform !== 'linux')('finds sessions whose WSL drive path casing differs', () => {
+    vi.stubEnv('WSL_DISTRO_NAME', 'Ubuntu')
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-session-'))
+    temporaryDirectories.push(directory)
+    writeSession(directory, 'wsl', {
+      id: 'wsl',
+      timestamp: '2026-07-16T08:00:00Z',
+      cwd: '/mnt/d/__codexhudfixture__/project',
+      source: 'cli',
+    }, new Date('2026-07-16T08:01:00Z'))
+
+    expect(findActiveSession({
+      cwd: '/mnt/d/__CodexHudFixture__/Project',
+      codexHome: directory,
+      now: new Date('2026-07-16T08:02:00Z'),
+    })?.sessionId).toBe('wsl')
   })
 
   it('can ignore an older session that was only modified after launch', () => {

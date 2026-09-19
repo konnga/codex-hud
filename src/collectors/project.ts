@@ -5,6 +5,7 @@ import path from 'node:path'
 import process from 'node:process'
 import { parse } from 'smol-toml'
 import { getCodexHome } from '../config/paths.js'
+import { pathIdentity } from '../runtime/path-identity.js'
 import { setTimedCache } from '../runtime/timed-cache.js'
 import { findGitRoot } from './git.js'
 
@@ -122,7 +123,16 @@ export function collectProjectInfo(
 ): ProjectInfo {
   const codexHome = getCodexHome(env)
   const projectRoot = findGitRoot(cwd) ?? path.resolve(cwd)
-  const roots = Array.from(new Set([projectRoot, ...workspaceRoots.map(root => path.resolve(root))]))
+  const rootIdentities = new Set<string>()
+  const roots = [projectRoot, ...workspaceRoots.map(root => path.resolve(root))]
+    .filter((root) => {
+      const identity = pathIdentity(root, env)
+      if (rootIdentities.has(identity)) {
+        return false
+      }
+      rootIdentities.add(identity)
+      return true
+    })
   const cacheKey = `${codexHome}:${projectRoot}:${includeCounts}:${roots.join('\0')}`
   const cached = projectCache.get(cacheKey)
   if (cached && now - cached.at < PROJECT_CACHE_MS) {

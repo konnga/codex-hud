@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Match paths on WSL Windows drive mounts case-insensitively while discovering and binding sessions, resolving process-owned rollouts, and deduplicating workspace roots. A casing difference between the launch directory and Codex state no longer leaves the HUD without session data.
+
+---
+
+### 修复
+
+- 在 WSL Windows 盘挂载路径上以不区分大小写的方式发现并绑定会话、解析进程所属 rollout，以及去重工作区根目录。启动目录与 Codex 状态中的路径大小写不一致时，HUD 不再丢失会话数据。
+
 ## 0.9.5 - 2026-09-13
 
 ### Fixed

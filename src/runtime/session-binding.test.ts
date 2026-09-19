@@ -1,7 +1,8 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import process from 'node:process'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   findNewRootSession,
   readSessionBinding,
@@ -25,6 +26,7 @@ function writeSession(codexHome: string, name: string, cwd: string, timestamp: s
 }
 
 afterEach(() => {
+  vi.unstubAllEnvs()
   directories.splice(0).forEach(directory => fs.rmSync(directory, { recursive: true, force: true }))
 })
 
@@ -40,6 +42,21 @@ describe('managed session binding', () => {
     const created = writeSession(codexHome, 'created-by-this-launch', cwd, '2026-07-17T01:02:00Z')
 
     expect(findNewRootSession(cwd, snapshot, codexHome)?.path).toBe(created)
+  })
+
+  it.skipIf(process.platform !== 'linux')('matches WSL drive paths when Codex records different casing', () => {
+    vi.stubEnv('WSL_DISTRO_NAME', 'Ubuntu')
+    const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-binding-'))
+    directories.push(codexHome)
+    const launcherCwd = '/mnt/d/__CodexHudFixture__/Project'
+    const created = writeSession(
+      codexHome,
+      'created-by-this-launch',
+      '/mnt/d/__codexhudfixture__/project',
+      '2026-07-17T01:02:00Z',
+    )
+
+    expect(findNewRootSession(launcherCwd, new Map(), codexHome)?.path).toBe(created)
   })
 
   it('does not bind a session launched from a nested or sibling directory', () => {

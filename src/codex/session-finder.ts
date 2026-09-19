@@ -3,8 +3,8 @@ import type { SessionSource } from '../types/rollout.js'
 import { Buffer } from 'node:buffer'
 import fs from 'node:fs'
 import path from 'node:path'
-import process from 'node:process'
 import { getCodexHome } from '../config/paths.js'
+import { pathIdentity } from '../runtime/path-identity.js'
 
 const MAX_SESSION_META_BYTES = 4 * 1024 * 1024
 const DEFAULT_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000
@@ -31,23 +31,9 @@ export interface FindSessionOptions {
   now?: Date
 }
 
-function realPath(value: string): string {
-  try {
-    return fs.realpathSync.native(value)
-  }
-  catch {
-    return path.resolve(value)
-  }
-}
-
-function normalizedPath(value: string): string {
-  const resolved = realPath(value)
-  return process.platform === 'win32' ? resolved.toLowerCase() : resolved
-}
-
 function isWithinProject(candidateCwd: string, targetCwd: string): boolean {
-  const candidate = normalizedPath(candidateCwd)
-  const target = normalizedPath(targetCwd)
+  const candidate = pathIdentity(candidateCwd)
+  const target = pathIdentity(targetCwd)
   return candidate === target || candidate.startsWith(`${target}${path.sep}`)
 }
 
