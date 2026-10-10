@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   clearEndpointCaches,
   findCodexLogDatabase,
@@ -13,10 +13,26 @@ import {
   resolveSessionEndpoint,
 } from './session-endpoint.js'
 
+const processSnapshot = vi.hoisted(() => ({ stdout: null as string | null, status: 0 }))
+vi.mock('node:child_process', async (importOriginal) => {
+  const original = await importOriginal<typeof import('node:child_process')>()
+  return {
+    ...original,
+    spawnSync: (...args: Parameters<typeof original.spawnSync>) => {
+      if (args[0] === 'ps' && processSnapshot.stdout !== null) {
+        return { stdout: processSnapshot.stdout, status: processSnapshot.status }
+      }
+      return original.spawnSync(...args)
+    },
+  }
+})
+
 const directories: string[] = []
 let clock = 1_000_000
 
 afterEach(() => {
+  processSnapshot.stdout = null
+  processSnapshot.status = 0
   clearEndpointCaches()
   directories.splice(0).forEach(directory => fs.rmSync(directory, { recursive: true, force: true }))
 })
@@ -477,6 +493,65 @@ describe('session endpoint resolution', () => {
       { CODEX_HOME: codexHome },
       clock,
     )).toEqual({ sessionId: 'thread-mine', rolloutPath: mine })
+  })
+
+  it('discovers a delayed app-server rollout through multiple process generations', () => {
+    processSnapshot.stdout = '51001 1\n51002 51001\n51003 51002\n51004 51003\n52001 1\n52002 52001\n'
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-project-'))
+    directories.push(cwd)
+    const mine = path.join(cwd, 'mine.jsonl')
+    const theirs = path.join(cwd, 'theirs.jsonl')
+    fs.writeFileSync(mine, '')
+    fs.writeFileSync(theirs, '')
+    const codexHome = codexHomeWithLogs([
+      { ts: 1_420, processUuid: 'pid:51003:daemon', threadId: 'thread-mine', target: 'session', body: '' },
+      { ts: 1_410, processUuid: 'pid:52002:neighbor', threadId: 'thread-theirs', target: 'session', body: '' },
+    ])
+    addStateThreads(codexHome, [
+      { id: 'thread-mine', rolloutPath: mine, cwd, createdAtMs: 1_420_000 },
+      { id: 'thread-theirs', rolloutPath: theirs, cwd, createdAtMs: 1_410_000 },
+    ])
+    expect(resolveProcessSession(51001, cwd, new Date(1_000_000), { CODEX_HOME: codexHome }))
+      .toEqual({ sessionId: 'thread-mine', rolloutPath: mine })
+  })
+
+  it('does not guess between root threads owned by the same descendant server', () => {
+    processSnapshot.stdout = '51001 1\n51002 51001\n51003 51002\n'
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hud-project-'))
+    directories.push(cwd)
+    const rollout = path.join(cwd, 'rollout.jsonl')
+    fs.writeFileSync(rollout, '')
+    const codexHome = codexHomeWithLogs([
+      { ts: 1_420, processUuid: 'pid:51003:daemon', threadId: 'thread-a', target: 'session', body: '' },
+      { ts: 1_430, processUuid: 'pid:51003:daemon', threadId: 'thread-b', target: 'session', body: '' },
+    ])
+    installManagedDaemon(codexHome)
+    addStateThreads(codexHome, ['thread-a', 'thread-b'].map(id => ({ id, rolloutPath: rollout, cwd })))
+    expect(resolveProcessSession(51001, cwd, new Date(1_000_000), { CODEX_HOME: codexHome })).toBeNull()
+  })
+
+  it('ignores malformed process rows and cycles while finding a descendant endpoint', () => {
+    processSnapshot.stdout = '51001 51003\n51002 51001\n51003 51002\n51004junk 51001\n52001 1\n'
+    const codexHome = codexHomeWithLogs([
+      init(1_420, 'pid:51003:daemon', 'https://mine.example.com'),
+      init(1_430, 'pid:51004:invalid', 'https://invalid.example.com'),
+      init(1_440, 'pid:52001:neighbor', 'https://neighbor.example.com'),
+    ])
+    expect(resolveProcessEndpoint(51001, new Date(1_000_000), { CODEX_HOME: codexHome }))
+      .toEqual({ url: 'https://mine.example.com', source: 'log-init' })
+  })
+
+  it('does not trust partial process output after a failed snapshot', () => {
+    processSnapshot.stdout = '51002 51001\n'
+    processSnapshot.status = 1
+    const codexHome = codexHomeWithLogs([init(1_420, 'pid:51002:daemon', 'https://partial.example.com')])
+    expect(resolveProcessEndpoint(51001, new Date(1_000_000), { CODEX_HOME: codexHome })).toBeNull()
+  })
+
+  it('bounds oversized descendant trees without adopting a partial family', () => {
+    processSnapshot.stdout = Array.from({ length: 256 }, (_, i) => `${51002 + i} 51001`).join('\n')
+    const codexHome = codexHomeWithLogs([init(1_420, 'pid:51002:daemon', 'https://partial.example.com')])
+    expect(resolveProcessEndpoint(51001, new Date(1_000_000), { CODEX_HOME: codexHome })).toBeNull()
   })
 
   it('ignores a process launched before this HUD pane', () => {

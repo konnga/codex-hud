@@ -319,19 +319,42 @@ function processRange(pid: number): string {
 }
 
 /**
- * Codex runs behind an npm wrapper script, so the process that logs is a child
- * of the one the launcher spawned.
+ * npm wrappers and managed app-server daemons can put the log writer several
+ * generations below the launcher. Read one bounded snapshot and follow only
+ * descendants; cwd alone cannot distinguish concurrent Codex sessions.
  */
 function processFamily(pid: number): number[] {
-  const result = spawnSync('pgrep', ['-P', String(pid)], {
+  const result = spawnSync('ps', ['-axo', 'pid=,ppid='], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'ignore'],
     timeout: QUERY_TIMEOUT_MS,
   })
-  const children = typeof result.stdout === 'string'
-    ? result.stdout.split('\n').map(line => Number.parseInt(line.trim(), 10)).filter(Number.isInteger)
-    : []
-  return [pid, ...children]
+  if (result.status !== 0 || typeof result.stdout !== 'string') {
+    return [pid]
+  }
+  const children = new Map<number, number[]>()
+  for (const line of result.stdout.split('\n')) {
+    const match = /^\s*(\d+)\s+(\d+)\s*$/.exec(line)
+    if (!match)
+      continue
+    const child = Number(match[1])
+    const parent = Number(match[2])
+    if (!Number.isSafeInteger(child) || child <= 0 || !Number.isSafeInteger(parent))
+      continue
+    const siblings = children.get(parent) ?? []
+    siblings.push(child)
+    children.set(parent, siblings)
+  }
+  const family = new Set([pid])
+  for (const parent of family) {
+    for (const child of children.get(parent) ?? []) {
+      family.add(child)
+      // Avoid an oversized SQL predicate on an unexpectedly large process tree.
+      if (family.size > 256)
+        return [pid]
+    }
+  }
+  return [...family]
 }
 
 function shellSql(value: string): string {
@@ -374,14 +397,18 @@ export function resolveProcessSession(
     '   AND (thread_source = \'user\' OR thread_source IS NULL)',
     '   AND (agent_path IS NULL OR agent_path = \'\')',
   ]
-  const selectThread = (conditions: string[], order: string): ProcessSession | null => {
-    for (const row of query(stateDatabase, [
+  const selectThread = (conditions: string[], order: string, unique = false): ProcessSession | null => {
+    const rows = query(stateDatabase, [
       'SELECT id || \'|\' || rollout_path',
       '  FROM threads',
       ...conditions,
       ` ORDER BY ${order}`,
-      ' LIMIT 1;',
-    ].join('\n'), PROCESS_SESSION_QUERY_TIMEOUT_MS)) {
+      unique ? ' LIMIT 2;' : ' LIMIT 1;',
+    ].join('\n'), PROCESS_SESSION_QUERY_TIMEOUT_MS)
+    if (unique && rows.filter(row => row.includes('|')).length !== 1) {
+      return null
+    }
+    for (const row of rows) {
       const separator = row.indexOf('|')
       if (separator < 0)
         continue
@@ -410,10 +437,9 @@ export function resolveProcessSession(
     const owned = selectThread([
       ` WHERE id IN (${candidates})`,
       ...rootThreadFilters,
-    ], 'created_at_ms ASC, id ASC')
-    if (owned) {
-      return remember(owned)
-    }
+    ], 'created_at_ms ASC, id ASC', true)
+    // Process-owned candidates must be unambiguous; do not guess via the daemon fallback.
+    return remember(owned)
   }
   // A managed app-server daemon hosts every session in one long-lived process,
   // so TUI logs never carry the thread id and the rollout is daemon-owned too.
