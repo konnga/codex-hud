@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## 0.9.9 - 2026-10-12
+
+### Fixed
+
+- Discover app-server sessions through descendant processes and refuse ambiguous bindings, so the HUD cannot attach to the wrong Codex session.
+
+---
+
+### 修复
+
+- 沿后代进程发现 app-server 会话，并拒绝有歧义的绑定，避免 HUD 错误连接到其他 Codex 会话。
+
 ## 0.9.8 - 2026-10-01
 
 ### Fixed
